@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  Contextual feedback template (Google-Docs two-pane style).
+  Contextual discussion template (Google-Docs two-pane style).
 
   Purpose
     A single-file HTML document that lets a human reviewer click any text
@@ -39,13 +39,13 @@
     - Copy All exports anchor + snippet + follow-ups per thread.
 
   Storage key
-    contextual-feedback-v2 — change this if you embed the template in a
+    contextual-discuss-v2 — change this if you embed the template in a
     site with multiple pages so each page has its own localStorage slice.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Contextual Feedback Template</title>
+<title>Contextual Discussion Template</title>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -575,6 +575,34 @@
   }
   .thread-marker.is-resolved { background: #2e7d32 !important; color: white !important; }
 
+  /* Draft marker (new-thread draft — user started typing a new comment
+     but hasn't saved). Teal + dashed to read as "in progress". */
+  .thread-marker.kind-draft {
+    background: #0d9488;
+    color: white;
+    border-style: dashed;
+    border-color: white;
+    box-shadow: 0 0 0 1.5px #0d9488, 0 1px 2px rgba(0,0,0,0.08);
+    font-size: 13px;
+    font-weight: 700;
+    padding-bottom: 2px;
+  }
+  /* Corner dot: appears on an existing thread marker when a follow-up
+     draft exists for that thread. */
+  .thread-marker.has-draft::before {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 8px;
+    height: 8px;
+    background: #0d9488;
+    border: 1.5px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #0d9488;
+    pointer-events: none;
+  }
+
   .new-thread-editor {
     position: absolute;
     left: 24px;
@@ -625,7 +653,7 @@
 <body>
 
 <header>
-  <h1>Contextual Feedback</h1>
+  <h1>Contextual Discussion</h1>
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
@@ -637,7 +665,7 @@
     <div class="pane-left" id="pane-left">
       <!-- ==================== REPLACE THIS BLOCK WITH YOUR CONTENT ==================== -->
       <section id="doc-content">
-        <h1>Sample feedback document</h1>
+        <h1>Sample discussion document</h1>
         <p>This template renders any HTML you place in <code>#doc-content</code> as a commentable document. Every heading, paragraph, list item, blockquote, code block, or stylized box (<code>.quote</code>, <code>.decision</code>, <code>.callout</code>, <code>.context</code>) becomes clickable on load — it gets a stable <code>data-anchor-idx</code> assigned so comments bind to a position that survives page reloads.</p>
 
         <h2>Markup conventions understood out of the box</h2>
@@ -721,21 +749,72 @@
 
 <script>
 (function() {
-  const STORAGE_KEY = 'contextual-feedback-v2';
+  const STORAGE_KEY = 'contextual-discuss-v2';
 
   function loadState() {
     try {
       const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      const drafts = raw.drafts || {};
       return {
         userThreads: raw.userThreads || [],
         followups: raw.followups || {},
         resolutions: raw.resolutions || {},
+        drafts: {
+          newThread: drafts.newThread || {},
+          followup: drafts.followup || {},
+        },
       };
     } catch {
-      return { userThreads: [], followups: {}, resolutions: {} };
+      return {
+        userThreads: [], followups: {}, resolutions: {},
+        drafts: { newThread: {}, followup: {} },
+      };
     }
   }
   function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+
+  // Drafts persist in-progress text so a user who starts typing but clicks
+  // off doesn't lose their work. A teal dashed marker appears on the anchor
+  // until the draft is saved, resolved, or explicitly cleared.
+  function newThreadDraftKey(startIdx, endIdx) { return `${startIdx}-${endIdx}`; }
+  function setNewThreadDraft(startIdx, endIdx, text) {
+    const s = loadState();
+    const key = newThreadDraftKey(startIdx, endIdx);
+    if (text && text.trim()) {
+      s.drafts.newThread[key] = {
+        text,
+        anchorStart: parseInt(startIdx),
+        anchorEnd: parseInt(endIdx),
+        savedAt: new Date().toISOString(),
+      };
+    } else {
+      delete s.drafts.newThread[key];
+    }
+    saveState(s);
+  }
+  function getNewThreadDraft(state, startIdx, endIdx) {
+    return state.drafts.newThread[newThreadDraftKey(startIdx, endIdx)];
+  }
+  function setFollowupDraft(threadId, text) {
+    const s = loadState();
+    if (text && text.trim()) {
+      s.drafts.followup[threadId] = { text, savedAt: new Date().toISOString() };
+    } else {
+      delete s.drafts.followup[threadId];
+    }
+    saveState(s);
+  }
+  function getFollowupDraft(state, threadId) {
+    return state.drafts.followup[threadId];
+  }
+  function clearFollowupDraft(state, threadId) {
+    if (state.drafts && state.drafts.followup) delete state.drafts.followup[threadId];
+  }
+  function clearNewThreadDraft(state, startIdx, endIdx) {
+    if (state.drafts && state.drafts.newThread) {
+      delete state.drafts.newThread[newThreadDraftKey(startIdx, endIdx)];
+    }
+  }
   function escapeHtml(s) {
     return (s || '').replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -942,15 +1021,23 @@
     const saveBtn = threadEl.querySelector('.followup .save');
     const clearBtn = threadEl.querySelector('.followup .clear');
     const resolveBtn = threadEl.querySelector('.followup .resolve');
+
+    // Pre-fill from any existing follow-up draft so the user can resume
+    // where they left off last time they opened this thread.
+    const existingDraft = getFollowupDraft(loadState(), threadId);
+    if (existingDraft && existingDraft.text) ta.value = existingDraft.text;
+
     function save() {
       const text = ta.value.trim();
       if (!text) return;
       const s = loadState();
       if (!s.followups[threadId]) s.followups[threadId] = [];
       s.followups[threadId].push({ text, addedAt: new Date().toISOString() });
+      clearFollowupDraft(s, threadId);
       saveState(s);
       ta.value = '';
       renderFollowups(threadEl, threadId);
+      renderMarkers();
       reposition();
     }
     function resolve() {
@@ -960,6 +1047,7 @@
         resolvedAt: new Date().toISOString(),
         decision,
       };
+      clearFollowupDraft(s, threadId);
       saveState(s);
       ta.value = '';
       renderResolution(threadEl, threadId);
@@ -968,8 +1056,14 @@
       reposition();
     }
     saveBtn.addEventListener('click', save);
-    clearBtn.addEventListener('click', () => { ta.value = ''; });
+    clearBtn.addEventListener('click', () => {
+      ta.value = '';
+      setFollowupDraft(threadId, '');
+      renderMarkers();
+    });
     if (resolveBtn) resolveBtn.addEventListener('click', resolve);
+    ta.addEventListener('input', () => setFollowupDraft(threadId, ta.value));
+    ta.addEventListener('blur', () => renderMarkers());
     ta.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
     });
@@ -1051,16 +1145,29 @@
     const openPrep = prepopulated.filter(t => !resolvedIds.has(t.id));
     const openPending = openPrep.filter(t => !!t.pending).length;
     const openWalkedThrough = openPrep.filter(t => !t.pending).length;
+    const draftCount = countLiveDrafts(state);
+    const draftSeg = draftCount
+      ? `<span style="color:#0d9488;">${draftCount} draft${draftCount > 1 ? 's' : ''}</span>`
+      : null;
     const segments = [];
     if (totalThreads === 0) {
       segments.push('Click any element · drag-select for multi-element');
+      if (draftSeg) segments.push(draftSeg);
     } else {
       segments.push(`<b>${resolvedCount} of ${totalThreads}</b> resolved`);
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
       if (openPending) segments.push(`<span style="color:var(--pending-dark);">${openPending} pending discussion</span>`);
+      if (draftSeg) segments.push(draftSeg);
       segments.push('click a marker to open');
     }
     el.innerHTML = segments.join(' · ');
+  }
+  function countLiveDrafts(state) {
+    const nt = Object.values(state.drafts.newThread || {})
+      .filter(d => d && (d.text || '').trim()).length;
+    const fu = Object.values(state.drafts.followup || {})
+      .filter(d => d && (d.text || '').trim()).length;
+    return nt + fu;
   }
   function closeAllThreads() {
     document.querySelectorAll('.thread.open').forEach(t => closeThread(t));
@@ -1143,6 +1250,7 @@
     });
 
     const state = loadState();
+    const followupDrafts = state.drafts.followup || {};
     byIdx.forEach((list, idx) => {
       const anchor = getAnchorElByIdx(idx);
       if (!anchor) return;
@@ -1154,18 +1262,60 @@
         const isUser = tid.startsWith('u');
         const kind = isUser ? 'user' : (data && data.pending ? 'pending' : 'prepopulated');
         const resolved = !!state.resolutions[tid];
+        const hasDraftFollowup = !!(followupDrafts[tid] && (followupDrafts[tid].text || '').trim());
         const marker = document.createElement('button');
-        marker.className = 'thread-marker kind-' + kind + (resolved ? ' is-resolved' : '');
+        marker.className = 'thread-marker kind-' + kind
+          + (resolved ? ' is-resolved' : '')
+          + (hasDraftFollowup ? ' has-draft' : '');
         marker.setAttribute('data-thread-id', tid);
         marker.textContent = resolved ? '✓' : (data && data.index != null ? data.index : '•');
         stack.appendChild(marker);
       });
       anchor.appendChild(stack);
     });
+
+    // Render new-thread draft markers (teal, dashed, "…"). These live
+    // alongside thread markers on the same anchor if both exist.
+    const newThreadDrafts = state.drafts.newThread || {};
+    Object.entries(newThreadDrafts).forEach(([key, draft]) => {
+      if (!draft || !draft.text || !draft.text.trim()) return;
+      const anchor = getAnchorElByIdx(draft.anchorStart);
+      if (!anchor) return;
+      anchor.classList.add('has-thread');
+      let stack = anchor.querySelector('.thread-marker-stack');
+      if (!stack) {
+        stack = document.createElement('div');
+        stack.className = 'thread-marker-stack';
+        anchor.appendChild(stack);
+      }
+      const marker = document.createElement('button');
+      marker.className = 'thread-marker kind-draft';
+      marker.setAttribute('data-draft-key', key);
+      marker.setAttribute('data-anchor-start', draft.anchorStart);
+      marker.setAttribute('data-anchor-end', draft.anchorEnd);
+      marker.textContent = '…';
+      stack.appendChild(marker);
+    });
+
+    // Keep the header in sync — it surfaces draft count too.
+    renderMetaStatus();
   }
 
   // ---------- Tooltip ----------
   function showTooltip(marker) {
+    if (marker.classList.contains('kind-draft')) {
+      const key = marker.getAttribute('data-draft-key');
+      const draft = loadState().drafts.newThread[key];
+      if (!draft) return;
+      const text = (draft.text || '').trim();
+      const preview = text.slice(0, 200);
+      tooltip.innerHTML = `<div class="tt-kind">Draft · in progress</div>`
+        + `<div class="tt-quote">"${escapeHtml(preview)}${text.length > 200 ? '…' : ''}"</div>`
+        + `<div style="margin-top:4px; font-size:10.5px; opacity:0.7;">Click to resume</div>`;
+      tooltip.style.display = 'block';
+      positionTooltip(marker);
+      return;
+    }
     const tid = marker.getAttribute('data-thread-id');
     const thread = document.querySelector(`.thread[data-thread-id="${tid}"]`);
     if (!thread) return;
@@ -1211,12 +1361,19 @@
     if (e.target.closest('.thread-marker')) hideTooltip();
   });
 
-  // Marker click
+  // Marker click (thread markers open their thread; draft markers resume editing)
   document.addEventListener('click', (e) => {
     const marker = e.target.closest('.thread-marker');
     if (marker) {
       e.preventDefault(); e.stopPropagation();
       hideTooltip();
+      if (marker.classList.contains('kind-draft')) {
+        const startIdx = parseInt(marker.getAttribute('data-anchor-start'));
+        const endIdx = parseInt(marker.getAttribute('data-anchor-end'));
+        if (!showAllBtn.classList.contains('on')) closeAllThreads();
+        openNewThreadEditor(startIdx, endIdx);
+        return;
+      }
       const tid = marker.getAttribute('data-thread-id');
       const thread = document.querySelector(`.thread[data-thread-id="${tid}"]`);
       if (thread) {
@@ -1258,9 +1415,13 @@
   // ---------- New-thread editor ----------
   let newThreadEditor = null;
   function closeNewThreadEditor() {
+    const hadEditor = !!newThreadEditor;
     if (newThreadEditor) { newThreadEditor.remove(); newThreadEditor = null; }
     document.querySelectorAll('#doc-content [data-anchor-idx].focused').forEach(el => el.classList.remove('focused'));
     document.querySelectorAll('#doc-content [data-anchor-idx].in-range').forEach(el => el.classList.remove('in-range'));
+    // Re-render markers so a newly-stashed draft shows a teal marker in
+    // the gutter, or a just-cleared draft disappears.
+    if (hadEditor) renderMarkers();
   }
 
   function openNewThreadEditor(startIdx, endIdx) {
@@ -1298,7 +1459,21 @@
     editor.style.top = top + 'px';
 
     const ta = editor.querySelector('textarea');
+    // Pre-fill from an existing draft so click-off-then-click-back picks up
+    // exactly where the user left off.
+    const existingDraft = getNewThreadDraft(loadState(), startIdx, endIdx);
+    if (existingDraft && existingDraft.text) {
+      ta.value = existingDraft.text;
+    }
     ta.focus();
+    // Put cursor at end of the draft so the user continues instead of
+    // stomping their previous text.
+    if (ta.value.length) ta.setSelectionRange(ta.value.length, ta.value.length);
+
+    // Persist draft as user types. localStorage writes are cheap enough
+    // that debouncing isn't worth the code.
+    ta.addEventListener('input', () => setNewThreadDraft(startIdx, endIdx, ta.value));
+
     function save() {
       const text = ta.value.trim();
       if (!text) { closeNewThreadEditor(); return; }
@@ -1313,6 +1488,7 @@
       });
       if (!s.followups[id]) s.followups[id] = [];
       s.followups[id].push({ text, addedAt: new Date().toISOString() });
+      clearNewThreadDraft(s, startIdx, endIdx);
       saveState(s);
       closeNewThreadEditor();
       renderAllThreads();
@@ -1321,7 +1497,13 @@
       scheduleReposition();
     }
     editor.querySelector('.save').addEventListener('click', save);
-    editor.querySelector('.cancel').addEventListener('click', closeNewThreadEditor);
+    editor.querySelector('.cancel').addEventListener('click', () => {
+      // Cancel drops the draft entirely — the teal marker won't appear.
+      const s = loadState();
+      clearNewThreadDraft(s, startIdx, endIdx);
+      saveState(s);
+      closeNewThreadEditor();
+    });
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeNewThreadEditor(); }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
@@ -1484,7 +1666,7 @@
   function buildCopyText() {
     const s = loadState();
     const out = [];
-    out.push('=== CONTEXTUAL FEEDBACK EXPORT ===');
+    out.push('=== CONTEXTUAL DISCUSSION EXPORT ===');
     out.push(`Exported: ${new Date().toISOString()}`);
     out.push('');
 

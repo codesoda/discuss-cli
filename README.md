@@ -1,1 +1,1 @@
-# feedback-cli
+# discuss-cli
