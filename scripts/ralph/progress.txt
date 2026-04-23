@@ -11,6 +11,7 @@
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
 - Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
+- State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -85,4 +86,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: bundled browser assets should be added under `assets/`, exposed via `src/assets.rs`, and wired into the page through `src/template.rs` rather than scattering `include_str!` calls.
   - Gotchas encountered: the current template wraps `<pre>` blocks in `.pre-wrap` before assigning anchors, so Mermaid hydration must replace only the `<pre>` contents and leave the element in place.
   - Useful context: the `cargo-agent` helper script is not present in this repo; use the exact strict Cargo commands from `AGENTS.md`. No browser testing tool was available, so browser verification is still needed once HTTP asset routes exist.
+---
+## 2026-04-23 12:57:18 AEST - US-010
+- Implemented the serializable state protocol structs for threads, replies, takes, resolutions, and drafts, including transparent `ThreadId` JSON and ISO 8601 UTC timestamps.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/state/mod.rs`, `src/state/types.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: state protocol types live in `src/state/types.rs` and should derive serde with camelCase field names for browser/API compatibility.
+  - Gotchas encountered: `HashMap<(usize, usize), Draft>` cannot serialize directly as a JSON object, so new-thread drafts use custom `"start-end"` keys at the serde boundary.
+  - Useful context: `chrono::DateTime<Utc>` with the serde feature gives the required ISO 8601 timestamp shape for state, events, and future transcript work.
 ---

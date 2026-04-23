@@ -5,6 +5,7 @@ pub mod error;
 pub mod exit;
 pub mod logging;
 pub mod render;
+pub mod state;
 pub mod template;
 
 pub use config::{Config, ConfigOverrides};
