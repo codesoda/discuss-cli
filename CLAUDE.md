@@ -19,6 +19,8 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - `discuss.html` hydrates state seed-first from `window.__DISCUSS_INITIAL_STATE__`, falling back to `GET /api/state`; keep `normalizeState` adapting server `StateSnapshot` fields into the legacy `userThreads`/`followups` renderer shape until the REST/SSE frontend migration is complete.
+- Server-backed thread mutations in `discuss.html` should use `apiJson` and `threadApiPath` with optimistic state snapshots and rollback on HTTP failure; do not reintroduce `saveState` for threads/replies/resolutions/deletes.
+- There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and break the stream when `AppState::subscribe_shutdown()` fires.
 - HTTP mutation handlers live in `src/server.rs`; on a successful state write they should publish a `BroadcastEvent` and emit the matching stdout `Event`, with tests injecting `EventEmitter::boxed(...)` through `AppState::new` to capture stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.

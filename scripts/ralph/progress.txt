@@ -21,6 +21,8 @@
 - Attach the already-read markdown source to server state with `AppState::with_markdown_source(...)`; `GET /` renders that source and seeds the page from `State::snapshot()` on each request.
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - `discuss.html` hydrates state seed-first from `window.__DISCUSS_INITIAL_STATE__`, falling back to `GET /api/state`; keep `normalizeState` adapting server `StateSnapshot` fields into the legacy `userThreads`/`followups` renderer shape until the REST/SSE frontend migration is complete.
+- Server-backed thread mutations in `discuss.html` should use `apiJson` and `threadApiPath` with optimistic state snapshots and rollback on HTTP failure; do not reintroduce `saveState` for threads/replies/resolutions/deletes.
+- There is no v1 delete-reply endpoint, so the browser should not offer local-only follow-up deletion unless a matching REST API is added.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
@@ -247,4 +249,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: `discuss.html` now keeps a process-local `currentState`; `normalizeState` adapts server `StateSnapshot` JSON into the legacy `userThreads`/`followups` shape while later frontend stories migrate mutations to REST/SSE.
   - Gotchas encountered: helper names in the main script share one IIFE scope with DOM references; avoid names that collide with existing constants like `emptyState`.
   - Useful context: no dev-browser/browser MCP tool was available, and `cargo run -- README.md` is not yet wired to launch the server in this story sequence; coverage is via template regression tests, server API tests, and JavaScript syntax parsing.
+---
+## 2026-04-23 14:41:42 AEST - US-027
+- Implemented frontend REST-backed thread mutations for creating threads, adding replies, resolving, unresolving, and deleting user threads, with optimistic state updates and rollback on HTTP failure.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: server-backed browser thread mutations should go through `apiJson` and `threadApiPath`, then update `currentState` via `setCurrentState` rather than `saveState`.
+  - Gotchas encountered: v1 has no delete-reply REST endpoint, so the local-only follow-up delete button was removed instead of persisting unsupported client-only state.
+  - Useful context: no browser MCP/dev-browser tool is available in this session; verification was strict Cargo checks, main inline script parsing with Node, and the installer smoke test.
 ---

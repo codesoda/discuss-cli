@@ -208,4 +208,17 @@ mod tests {
         assert!(page.contains("draft.updatedAt"));
         assert!(!page.contains("localStorage.getItem"));
     }
+
+    #[test]
+    fn bundled_template_sends_thread_mutations_to_rest_api() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("await apiJson('/api/threads'"));
+        assert!(page.contains("await apiJson(threadApiPath(threadId, '/replies')"));
+        assert!(page.contains("await apiJson(threadApiPath(threadId, '/resolve')"));
+        assert!(page.contains("await apiJson(threadApiPath(threadId, '/unresolve')"));
+        assert!(page.contains("await apiJson(threadApiPath(threadId), { method: 'DELETE' })"));
+        assert!(!page.contains("delete-comment"));
+        assert!(!page.contains("s.followups[tid].splice"));
+    }
 }

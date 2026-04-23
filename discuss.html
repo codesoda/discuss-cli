@@ -427,17 +427,24 @@
     font-size: 11px;
     color: var(--muted);
   }
-  .thread-close {
+  .thread-close,
+  .thread-delete {
     background: none;
     border: none;
     color: var(--muted);
-    font-size: 16px;
     cursor: pointer;
     padding: 0 2px;
     line-height: 1;
     margin-left: 6px;
   }
-  .thread-close:hover { color: #c62828; }
+  .thread-close { font-size: 16px; }
+  .thread-delete {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .thread-close:hover,
+  .thread-delete:hover { color: #c62828; }
   .thread-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
 
   .thread-body > * + * { margin-top: 8px; }
@@ -463,26 +470,13 @@
   .user-comment {
     background: var(--user-note);
     border-left: 3px solid var(--user-note-border);
-    padding: 7px 26px 7px 10px;
+    padding: 7px 10px;
     margin-top: 6px;
     border-radius: 0 4px 4px 0;
     white-space: pre-wrap;
     font-size: 13px;
     position: relative;
   }
-  .user-comment .delete-comment {
-    position: absolute;
-    top: 4px;
-    right: 5px;
-    background: none;
-    border: none;
-    color: #999;
-    font-size: 10px;
-    cursor: pointer;
-    padding: 2px 5px;
-    border-radius: 3px;
-  }
-  .user-comment .delete-comment:hover { color: #c62828; background: rgba(198, 40, 40, 0.08); }
   .user-comment .meta { font-size: 10.5px; color: var(--muted); font-style: italic; margin-top: 3px; }
 
   .followup { margin-top: 10px; }
@@ -885,9 +879,39 @@
   function loadState() {
     return currentState;
   }
-  function saveState(s) {
+  function setCurrentState(s) {
     currentState = normalizeState(s);
+    return currentState;
+  }
+  function cloneState(s) {
+    return normalizeState(JSON.parse(JSON.stringify(s)));
+  }
+  function saveState(s) {
+    currentState = setCurrentState(s);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(currentState));
+  }
+  async function apiJson(path, { method = 'POST', body } = {}) {
+    const options = { method, headers: { Accept: 'application/json' } };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, options);
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { data = text; }
+    }
+    if (!response.ok) {
+      const message = data && data.error && data.error.message
+        ? data.error.message
+        : `${method} ${path} returned ${response.status}`;
+      throw new Error(message);
+    }
+    return data;
+  }
+  function threadApiPath(threadId, suffix = '') {
+    return `/api/threads/${encodeURIComponent(threadId)}${suffix}`;
   }
 
   // Drafts persist in-progress text so a user who starts typing but clicks
@@ -1097,6 +1121,7 @@
         <span>Your thread</span>
         <span>
           <span class="thread-anchor">${rangeLabel}</span>
+          <button class="thread-delete" title="Delete this thread">Delete</button>
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
@@ -1117,6 +1142,10 @@
       </div>
     `;
     wireFollowup(el, t.id);
+    el.querySelector('.thread-delete').addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteUserThread(el, t.id);
+    });
     el.querySelector('.thread-close').addEventListener('click', (e) => { e.stopPropagation(); closeThread(el); });
     renderFollowups(el, t.id);
     renderResolution(el, t.id);
@@ -1128,8 +1157,8 @@
     if (!list) return;
     const s = loadState();
     const items = s.followups[threadId] || [];
-    list.innerHTML = items.map((it, idx) =>
-      `<div class="user-comment">${escapeHtml(it.text)}<button class="delete-comment" data-thread="${threadId}" data-idx="${idx}" title="Delete">×</button><div class="meta">${new Date(it.addedAt).toLocaleString()}</div></div>`
+    list.innerHTML = items.map(it =>
+      `<div class="user-comment">${escapeHtml(it.text)}<div class="meta">${new Date(it.addedAt).toLocaleString()}</div></div>`
     ).join('');
   }
 
@@ -1144,33 +1173,77 @@
     const existingDraft = getFollowupDraft(loadState(), threadId);
     if (existingDraft && existingDraft.text) ta.value = existingDraft.text;
 
-    function save() {
+    async function save() {
       const text = ta.value.trim();
       if (!text) return;
-      const s = loadState();
+      const previousState = cloneState(loadState());
+      const s = cloneState(previousState);
+      const addedAt = new Date().toISOString();
       if (!s.followups[threadId]) s.followups[threadId] = [];
-      s.followups[threadId].push({ text, addedAt: new Date().toISOString() });
+      s.followups[threadId].push({ text, addedAt });
       clearFollowupDraft(s, threadId);
-      saveState(s);
+      setCurrentState(s);
       ta.value = '';
       renderFollowups(threadEl, threadId);
       renderMarkers();
       reposition();
+      try {
+        const reply = await apiJson(threadApiPath(threadId, '/replies'), { body: { text } });
+        const syncedState = cloneState(loadState());
+        const items = syncedState.followups[threadId] || [];
+        const optimistic = items.find(item => item.text === text && item.addedAt === addedAt);
+        if (optimistic && reply) {
+          optimistic.text = reply.text || optimistic.text;
+          optimistic.addedAt = reply.createdAt || optimistic.addedAt;
+        }
+        setCurrentState(syncedState);
+        renderFollowups(threadEl, threadId);
+        renderMarkers();
+        reposition();
+      } catch (error) {
+        console.error('Failed to save reply:', error);
+        setCurrentState(previousState);
+        ta.value = text;
+        renderFollowups(threadEl, threadId);
+        renderMarkers();
+        reposition();
+      }
     }
-    function resolve() {
+    async function resolve() {
       const decision = ta.value.trim(); // optional; blank = resolved without reason
-      const s = loadState();
+      const previousState = cloneState(loadState());
+      const s = cloneState(previousState);
       s.resolutions[threadId] = {
         resolvedAt: new Date().toISOString(),
         decision,
       };
       clearFollowupDraft(s, threadId);
-      saveState(s);
+      setCurrentState(s);
       ta.value = '';
       renderResolution(threadEl, threadId);
       renderMarkers();
       renderMetaStatus();
       reposition();
+      try {
+        const resolution = await apiJson(threadApiPath(threadId, '/resolve'), {
+          body: { decision: decision || null },
+        });
+        const syncedState = cloneState(loadState());
+        syncedState.resolutions[threadId] = resolution;
+        setCurrentState(syncedState);
+        renderResolution(threadEl, threadId);
+        renderMarkers();
+        renderMetaStatus();
+        reposition();
+      } catch (error) {
+        console.error('Failed to resolve thread:', error);
+        setCurrentState(previousState);
+        ta.value = decision;
+        renderResolution(threadEl, threadId);
+        renderMarkers();
+        renderMetaStatus();
+        reposition();
+      }
     }
     saveBtn.addEventListener('click', save);
     clearBtn.addEventListener('click', () => {
@@ -1209,15 +1282,26 @@
       banner.classList.add('shown');
       followup.style.display = 'none';
       threadEl.classList.add('resolved');
-      banner.querySelector('.unresolve').addEventListener('click', (e) => {
+      banner.querySelector('.unresolve').addEventListener('click', async (e) => {
         e.stopPropagation();
-        const st = loadState();
+        const previousState = cloneState(loadState());
+        const st = cloneState(previousState);
         delete st.resolutions[threadId];
-        saveState(st);
+        setCurrentState(st);
         renderResolution(threadEl, threadId);
         renderMarkers();
         renderMetaStatus();
         reposition();
+        try {
+          await apiJson(threadApiPath(threadId, '/unresolve'));
+        } catch (error) {
+          console.error('Failed to unresolve thread:', error);
+          setCurrentState(previousState);
+          renderResolution(threadEl, threadId);
+          renderMarkers();
+          renderMetaStatus();
+          reposition();
+        }
       });
     } else {
       banner.innerHTML = '';
@@ -1234,6 +1318,32 @@
     document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.remove('active'));
     syncThreadActiveAnchors();
     updateEmptyState();
+  }
+  async function deleteUserThread(threadEl, threadId) {
+    const previousState = cloneState(loadState());
+    const nextState = cloneState(previousState);
+    nextState.userThreads = nextState.userThreads.filter(t => t.id !== threadId);
+    nextState.threads = nextState.threads.filter(t => String(t.id) !== threadId);
+    delete nextState.followups[threadId];
+    delete nextState.replies[threadId];
+    delete nextState.takes[threadId];
+    delete nextState.resolutions[threadId];
+    clearFollowupDraft(nextState, threadId);
+    setCurrentState(nextState);
+    closeThread(threadEl);
+    renderAllThreads();
+    scheduleReposition();
+
+    try {
+      await apiJson(threadApiPath(threadId), { method: 'DELETE' });
+    } catch (error) {
+      console.error('Failed to delete thread:', error);
+      setCurrentState(previousState);
+      renderAllThreads();
+      const restored = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+      if (restored) openThread(restored, { scroll: false });
+      scheduleReposition();
+    }
   }
 
   function syncThreadActiveAnchors() {
@@ -1591,27 +1701,82 @@
     // that debouncing isn't worth the code.
     ta.addEventListener('input', () => setNewThreadDraft(startIdx, endIdx, ta.value));
 
-    function save() {
+    async function save() {
       const text = ta.value.trim();
       if (!text) { closeNewThreadEditor(); return; }
-      const s = loadState();
-      const id = 'u' + Date.now() + Math.random().toString(36).slice(2, 6);
+      const previousState = cloneState(loadState());
+      const s = cloneState(previousState);
+      const id = 'pending-' + Date.now() + Math.random().toString(36).slice(2, 6);
+      const createdAt = new Date().toISOString();
       s.userThreads.push({
         id,
         anchorStart: parseInt(startIdx),
         anchorEnd: parseInt(endIdx),
         snippet,
-        createdAt: new Date().toISOString()
+        text,
+        createdAt,
+      });
+      s.threads.push({
+        id,
+        anchorStart: parseInt(startIdx),
+        anchorEnd: parseInt(endIdx),
+        snippet,
+        text,
+        breadcrumb: '',
+        createdAt,
+        kind: 'user',
       });
       if (!s.followups[id]) s.followups[id] = [];
-      s.followups[id].push({ text, addedAt: new Date().toISOString() });
+      s.followups[id].push({ text, addedAt: createdAt });
       clearNewThreadDraft(s, startIdx, endIdx);
-      saveState(s);
+      setCurrentState(s);
       closeNewThreadEditor();
       renderAllThreads();
-      const newEl = document.querySelector(`.thread[data-thread-id="${id}"]`);
-      if (newEl) openThread(newEl, { scroll: false });
+      const optimisticEl = document.querySelector(`.thread[data-thread-id="${id}"]`);
+      if (optimisticEl) openThread(optimisticEl, { scroll: false });
       scheduleReposition();
+
+      try {
+        const created = await apiJson('/api/threads', {
+          body: {
+            anchorStart: parseInt(startIdx),
+            anchorEnd: parseInt(endIdx),
+            snippet,
+            text,
+          },
+        });
+        const serverId = String(created.id);
+        const serverCreatedAt = created.createdAt || createdAt;
+        const syncedState = cloneState(loadState());
+        const thread = syncedState.userThreads.find(t => t.id === id);
+        if (thread) {
+          thread.id = serverId;
+          thread.createdAt = serverCreatedAt;
+        }
+        const protocolThread = syncedState.threads.find(t => String(t.id) === id);
+        if (protocolThread) {
+          protocolThread.id = serverId;
+          protocolThread.createdAt = serverCreatedAt;
+        }
+        syncedState.followups[serverId] = (syncedState.followups[id] || [{ text, addedAt: serverCreatedAt }])
+          .map(item => item.text === text && item.addedAt === createdAt
+            ? { ...item, addedAt: serverCreatedAt }
+            : item);
+        delete syncedState.followups[id];
+        setCurrentState(syncedState);
+        renderAllThreads();
+        const newEl = document.querySelector(`.thread[data-thread-id="${serverId}"]`);
+        if (newEl) openThread(newEl, { scroll: false });
+        scheduleReposition();
+      } catch (error) {
+        console.error('Failed to create thread:', error);
+        setCurrentState(previousState);
+        renderAllThreads();
+        openNewThreadEditor(startIdx, endIdx);
+        const restoredTextarea = newThreadEditor?.querySelector('textarea');
+        if (restoredTextarea) restoredTextarea.value = text;
+        scheduleReposition();
+      }
     }
     editor.querySelector('.save').addEventListener('click', save);
     editor.querySelector('.cancel').addEventListener('click', () => {
@@ -1683,19 +1848,6 @@
 
   // ---------- Click dispatch ----------
   document.addEventListener('click', (e) => {
-    if (e.target.matches('.delete-comment')) {
-      e.preventDefault();
-      const tid = e.target.getAttribute('data-thread');
-      const idx = parseInt(e.target.getAttribute('data-idx'), 10);
-      const s = loadState();
-      if (s.followups[tid]) {
-        s.followups[tid].splice(idx, 1);
-        saveState(s);
-        const threadEl = document.querySelector(`.thread[data-thread-id="${tid}"]`);
-        if (threadEl) { renderFollowups(threadEl, tid); reposition(); }
-      }
-      return;
-    }
     if (e.target.closest('#copy-all')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('.thread-marker')) return;
