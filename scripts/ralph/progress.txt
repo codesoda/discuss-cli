@@ -3,6 +3,7 @@
 ## Codebase Patterns
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
+- Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -13,4 +14,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: root crate is intentionally minimal for US-001; clap and error handling are separate follow-up stories.
   - Gotchas encountered: the cargo-agent helper is useful as a preflight but does not replace the exact strict validation commands required by `AGENTS.md`.
   - Useful context: `scripts/ralph/prd.json` is the active Ralph tracker for this project, while `tasks/prd-discuss-cli.md` contains the full product scope.
+---
+## 2026-04-23 11:44:41 AEST - US-002
+- Implemented the top-level `DiscussError` enum via `thiserror`, including all documented variants and crate-level `Result<T>` alias.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/error.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: shared fallible APIs now live behind `discuss::DiscussError` and `discuss::Result`, with `src/lib.rs` re-exporting library-facing types.
+  - Gotchas encountered: display messages are part of the acceptance contract; tests should assert the path/port/source and suggested next step, not just variant construction.
+  - Useful context: `RenderError` stores a boxed error source so later render implementations can preserve underlying failures without tying the enum to a specific renderer crate.
 ---

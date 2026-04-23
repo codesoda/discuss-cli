@@ -9,3 +9,6 @@ license = "MIT"
 [profile.release]
 strip = true
 lto = true
+
+[dependencies]
+thiserror = "2.0.18"
