@@ -12,6 +12,10 @@ lto = true
 
 [dependencies]
 clap = { version = "4.5.50", features = ["derive"] }
+directories = "6"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 toml = "0.8.23"
+
+[dev-dependencies]
+tempfile = "3"

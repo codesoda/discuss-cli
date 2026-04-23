@@ -112,7 +112,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       ;;
     codex)
       # Codex CLI: run non-interactively with full autonomy using the same Ralph instructions.
-      OUTPUT=$(codex exec --dangerously-bypass-approvals-and-sandbox --color never - < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
+      OUTPUT=$(codex exec -c service_tier=fast --dangerously-bypass-approvals-and-sandbox --color never - < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
       ;;
   esac
   

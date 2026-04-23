@@ -3,7 +3,7 @@ pub mod config;
 pub mod error;
 pub mod exit;
 
-pub use config::Config;
+pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use exit::exit_code_for_error;
 
