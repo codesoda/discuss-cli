@@ -12,6 +12,7 @@ lto = true
 
 [dependencies]
 clap = { version = "4.5.50", features = ["derive"] }
+comrak = { version = "0.52.0", default-features = false }
 directories = "6"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"

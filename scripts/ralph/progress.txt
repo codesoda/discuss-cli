@@ -8,6 +8,7 @@
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution; file/env layers are partial so omitted keys do not reset lower-priority values.
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
+- Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -58,4 +59,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: `run` now resolves `Config` and calls `init_tracing(&config)` before command handling so future runtime code can use tracing immediately.
   - Gotchas encountered: `tracing-appender` daily rotation names files as `discuss.YYYY-MM-DD.log` when using prefix `discuss` and suffix `log`; do not hand-roll rotation just to change the separator.
   - Useful context: stdout/stderr silence is verified by an integration test that runs the compiled `discuss` binary with a temp `HOME`.
+---
+## 2026-04-23 12:44:33 AEST - US-007
+- Implemented the pure Comrak markdown renderer with GFM tables, strikethrough, autolinks, task lists, footnotes, semantic element output, mermaid passthrough, and deterministic rendering tests.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/render.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep markdown rendering in `src/render.rs` behind `discuss::render`, with Comrak options built in one helper.
+  - Gotchas encountered: Comrak's default feature set pulls in CLI/syntax-highlighting dependencies; use `default-features = false` for the library renderer.
+  - Useful context: mermaid stays as a plain fenced code block with `language-mermaid`; client-side hydration is a later story.
 ---
