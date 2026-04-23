@@ -10,8 +10,8 @@ Exit codes:
   3  Port already in use (or other server bind failure)
   5  Interrupted (Ctrl+C)
 
-Docs: https://github.com/chrisraethke/discuss-cli
-LLM ref: https://github.com/chrisraethke/discuss-cli/blob/main/llms.txt";
+Docs: https://github.com/codesoda/discuss-cli
+LLM ref: https://github.com/codesoda/discuss-cli/blob/main/llms.txt";
 
 #[derive(Debug, Parser)]
 #[command(

@@ -18,7 +18,7 @@ Run `command -v discuss` (via Bash). If it resolves to a path, skip ahead to Ste
 
 If it doesn't resolve, the binary isn't on PATH. Ask the user:
 
-> `discuss` isn't on your PATH. Install it now? (runs `curl -sSL https://raw.githubusercontent.com/chrisraethke/discuss-cli/main/install.sh | sh`)
+> `discuss` isn't on your PATH. Install it now? (runs `curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh`)
 
 On yes, run the install command via Bash. On completion, retry `command -v discuss`.
 

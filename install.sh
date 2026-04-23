@@ -2,7 +2,7 @@
 set -eu
 
 BINARY_NAME="discuss"
-REPO_URL="https://github.com/chrisraethke/discuss-cli"
+REPO_URL="https://github.com/codesoda/discuss-cli"
 INSTALL_DIR="${HOME}/.discuss/bin"
 LINK_DIR="${HOME}/.local/bin"
 INSTALLED_BINARY="${INSTALL_DIR}/${BINARY_NAME}"
