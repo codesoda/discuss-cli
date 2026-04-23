@@ -15,6 +15,7 @@
 - Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
 - Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
 - Browser SSE broadcasts live in `src/sse.rs`; use `EventBus` as an `Arc`-friendly Tokio broadcast wrapper alongside `SharedState`, and keep `BroadcastEvent` distinct from stdout `Event`.
+- Axum server bootstrap lives in `src/server.rs`; use `AppState::for_process()` for production shared state and `serve(addr, app_state, shutdown)` for the 127.0.0.1-only graceful server wrapper.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -121,4 +122,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: browser SSE broadcasts should use `EventBus` from `src/sse.rs`, held alongside `SharedState` by future server state.
   - Gotchas encountered: `tokio::sync::broadcast::Sender::send` returns an error when there are no active receivers; `EventBus::publish` intentionally ignores that because disconnected browsers should not fail mutations.
   - Useful context: `BroadcastEvent` is intentionally separate from stdout `Event`, so future `/api/events` serialization can evolve independently from the newline-delimited agent stream.
+---
+## 2026-04-23 13:13:09 AEST - US-014
+- Implemented the Axum server bootstrap with shared `AppState`, 127.0.0.1-only binding, `AddrInUse` to `DiscussError::PortInUse` mapping, graceful shutdown, and a shutdown notifier for future SSE streams.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: server setup belongs in `src/server.rs`; `AppState::for_process()` wires `SharedState`, `Arc<EventBus>`, `Arc<EventEmitter>`, and the shutdown notifier for future handlers.
+  - Gotchas encountered: axum graceful shutdown closes idle partial HTTP requests, so tests should assert completed request handling rather than treating incomplete headers as in-flight work.
+  - Useful context: `serve` currently returns a placeholder 404 for all routes; US-015 and later stories should replace routes without changing bind/error/shutdown behavior.
 ---
