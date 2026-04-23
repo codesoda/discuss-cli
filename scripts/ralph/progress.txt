@@ -9,6 +9,7 @@
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution; file/env layers are partial so omitted keys do not reset lower-priority values.
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
+- Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -67,4 +68,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: keep markdown rendering in `src/render.rs` behind `discuss::render`, with Comrak options built in one helper.
   - Gotchas encountered: Comrak's default feature set pulls in CLI/syntax-highlighting dependencies; use `default-features = false` for the library renderer.
   - Useful context: mermaid stays as a plain fenced code block with `language-mermaid`; client-side hydration is a later story.
+---
+## 2026-04-23 12:48:23 AEST - US-008
+- Implemented the bundled `discuss.html` page renderer with server-side `#doc-content` replacement and `window.__DISCUSS_INITIAL_STATE__` seeding.
+- Files changed: `src/lib.rs`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: page-shell injection is centralized in `src/template.rs`; callers should pass already-rendered markdown plus serialized initial state JSON to `render_page`.
+  - Gotchas encountered: initial state JSON must be safe inside a script tag, so the helper escapes `<`, U+2028, and U+2029 before assignment.
+  - Useful context: this story only seeds the global; later frontend/API stories still need to consume `window.__DISCUSS_INITIAL_STATE__`.
 ---
