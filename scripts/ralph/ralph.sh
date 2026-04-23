@@ -43,6 +43,16 @@ PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
 LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
 
+all_stories_complete() {
+  if [ ! -f "$PRD_FILE" ]; then
+    return 1
+  fi
+
+  local remaining
+  remaining=$(jq '[.userStories[]? | select(.passes != true)] | length' "$PRD_FILE" 2>/dev/null) || return 1
+  [[ "$remaining" == "0" ]]
+}
+
 # Archive previous run if branch changed
 if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
   CURRENT_BRANCH=$(jq -r '.branchName // empty' "$PRD_FILE" 2>/dev/null || echo "")
@@ -106,12 +116,16 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       ;;
   esac
   
-  # Check for completion signal
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+  # Check actual PRD state instead of trusting provider text, which may quote the marker.
+  if all_stories_complete; then
     echo ""
     echo "Ralph completed all tasks!"
     echo "Completed at iteration $i of $MAX_ITERATIONS"
     exit 0
+  fi
+
+  if echo "$OUTPUT" | grep -Eq "^[[:space:]]*<promise>COMPLETE</promise>[[:space:]]*$"; then
+    echo "Completion marker emitted, but PRD still has incomplete stories. Continuing..."
   fi
   
   echo "Iteration $i complete. Continuing..."

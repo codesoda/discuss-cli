@@ -5,6 +5,7 @@
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
+- Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -31,4 +32,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: clap parsing lives in `src/cli.rs`; `main.rs` should only parse args, call `discuss::run`, print errors to stderr, and return mapped exit codes.
   - Gotchas encountered: clap reports a bare command with `arg_required_else_help` as `DisplayHelpOnMissingArgumentOrSubcommand`, not plain `DisplayHelp`.
   - Useful context: `discuss update` is intentionally a no-op placeholder until the later update stories add network/download behavior.
+---
+## 2026-04-23 12:26:10 AEST - US-004
+- Implemented the typed `Config` struct with serde defaults, `deny_unknown_fields`, TOML parsing, and parse-error conversion to `DiscussError::ConfigParseError`.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/config.rs`, `src/lib.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`; the commit also includes existing modified `AGENTS.md` and `scripts/ralph/ralph.sh` from the pre-existing worktree.
+- **Learnings for future iterations:**
+  - Patterns discovered: config parsing should flow through `Config::from_toml_str` so unknown fields and malformed TOML use the shared config parse error shape with path and location.
+  - Gotchas encountered: serde container-level defaults (`#[serde(default)]`) use `Config::default()`, which preserves non-boolean-zero defaults like `auto_open = true` and `idle_timeout_secs = 600` for partial TOML files.
+  - Useful context: US-005 can build layered file/env/CLI resolution on top of this struct without redefining config defaults.
 ---
