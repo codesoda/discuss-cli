@@ -3,7 +3,7 @@
 ## Codebase Patterns
 - Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
-- Root `install.sh` is clone-build only until the later full installer story; it builds with warnings denied, installs to `~/.discuss/bin/discuss`, symlinks `~/.local/bin/discuss`, and verifies the linked binary with `--version`.
+- Root `install.sh` is dual-mode and POSIX `sh` compatible: source checkout mode builds with warnings denied from a colocated `Cargo.toml`, while curl/download mode resolves the latest GitHub Release asset for the detected target triple before installing to `~/.discuss/bin/discuss` and symlinking `~/.local/bin/discuss`.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
@@ -393,4 +393,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: one-shot launch flags should flow through `ConfigOverrides` in `src/lib.rs`; server tests can use `AppState::with_no_save(true)` to verify archive suppression without changing transcript emission.
   - Gotchas encountered: `session.done` must still emit before the optional archive branch, so `--no-save` affects disk only and not the agent stdout contract.
   - Useful context: verification passed with strict Cargo checks, CLI integration tests for archive override/suppression, `./install.sh`, and `discuss --version` from PATH.
+---
+## 2026-04-23 17:45:29 AEST - US-043
+- Implemented a dual-mode `install.sh`: source-checkout installs still build with warnings denied, while curl/download installs now resolve the latest GitHub Release asset for the detected target triple, extract the packaged binary, handle macOS quarantine best-effort, and print shell-specific PATH guidance.
+- Files changed: `install.sh`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: keep `install.sh` POSIX `sh` compatible because the release-install path is intended to work with `curl | sh`, not just `./install.sh`.
+  - Gotchas encountered: curl/download mode needs clear non-zero failures for both “latest release tag could not be resolved” and “asset download returned non-2xx”, otherwise GitHub redirect/download problems become opaque.
+  - Useful context: verification covered `bash-agent`, `shellcheck`, the exact strict Cargo gates, a real `PATH="$HOME/.local/bin:$PATH" ./install.sh` smoke test, `which discuss`, `discuss --version`, and a temporary fake-release smoke test for the download branch without touching the real install.
 ---
