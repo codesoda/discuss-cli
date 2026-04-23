@@ -750,28 +750,145 @@
 <script>
 (function() {
   const STORAGE_KEY = 'contextual-discuss-v2';
+  const stateSeed = Object.prototype.hasOwnProperty.call(window, '__DISCUSS_INITIAL_STATE__')
+    ? window.__DISCUSS_INITIAL_STATE__
+    : null;
+  let currentState = emptyDiscussionState();
 
-  function loadState() {
+  function emptyDiscussionState() {
+    return {
+      threads: [],
+      userThreads: [],
+      replies: {},
+      takes: {},
+      followups: {},
+      resolutions: {},
+      drafts: { newThread: {}, followup: {} },
+    };
+  }
+  function normalizeState(raw) {
+    if (!raw || typeof raw !== 'object') return emptyDiscussionState();
+    const state = emptyDiscussionState();
+    const sourceThreads = Array.isArray(raw.userThreads) ? raw.userThreads : raw.threads;
+    state.threads = Array.isArray(raw.threads) ? raw.threads : [];
+    state.replies = raw.replies && typeof raw.replies === 'object' ? raw.replies : {};
+    state.takes = raw.takes && typeof raw.takes === 'object' ? raw.takes : {};
+    state.userThreads = normalizeUserThreads(sourceThreads);
+    state.followups = normalizeFollowups(raw.followups, state.replies, state.userThreads);
+    state.resolutions = raw.resolutions && typeof raw.resolutions === 'object' ? raw.resolutions : {};
+    state.drafts = normalizeDrafts(raw.drafts);
+    return state;
+  }
+  function normalizeUserThreads(sourceThreads) {
+    if (!Array.isArray(sourceThreads)) return [];
+    return sourceThreads
+      .filter(t => t && (!t.kind || t.kind === 'user'))
+      .map(t => ({
+        id: String(t.id || ''),
+        anchorStart: parseInt(t.anchorStart, 10),
+        anchorEnd: parseInt(t.anchorEnd, 10),
+        snippet: t.snippet || t.text || '',
+        text: t.text || '',
+        breadcrumb: t.breadcrumb || '',
+        createdAt: t.createdAt || new Date().toISOString(),
+      }))
+      .filter(t => t.id && Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd));
+  }
+  function normalizeFollowups(rawFollowups, rawReplies, userThreads) {
+    const followups = {};
+    const hasLegacyFollowups = rawFollowups && typeof rawFollowups === 'object';
+    if (hasLegacyFollowups) {
+      Object.entries(rawFollowups).forEach(([threadId, items]) => {
+        followups[threadId] = normalizeCommentList(items);
+      });
+    }
+    if (rawReplies && typeof rawReplies === 'object') {
+      Object.entries(rawReplies).forEach(([threadId, replies]) => {
+        if (!followups[threadId]) followups[threadId] = [];
+        followups[threadId].push(...normalizeCommentList(replies));
+      });
+    }
+    userThreads.forEach(thread => {
+      if (!followups[thread.id]) followups[thread.id] = [];
+      if (
+        (!hasLegacyFollowups || !Object.prototype.hasOwnProperty.call(rawFollowups, thread.id))
+        && thread.text
+        && thread.text.trim()
+      ) {
+        followups[thread.id].unshift({
+          text: thread.text,
+          addedAt: thread.createdAt,
+        });
+      }
+    });
+    return followups;
+  }
+  function normalizeCommentList(items) {
+    if (!Array.isArray(items)) return [];
+    return items
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({
+        text: item.text || '',
+        addedAt: item.addedAt || item.createdAt || new Date().toISOString(),
+      }));
+  }
+  function normalizeDrafts(rawDrafts) {
+    const drafts = rawDrafts && typeof rawDrafts === 'object' ? rawDrafts : {};
+    return {
+      newThread: normalizeNewThreadDrafts(drafts.newThread),
+      followup: normalizeFollowupDrafts(drafts.followup),
+    };
+  }
+  function normalizeNewThreadDrafts(rawDrafts) {
+    const drafts = {};
+    if (!rawDrafts || typeof rawDrafts !== 'object') return drafts;
+    Object.entries(rawDrafts).forEach(([key, draft]) => {
+      if (!draft || typeof draft !== 'object') return;
+      const [start, end] = key.split('-').map(n => parseInt(n, 10));
+      const anchorStart = parseInt(draft.anchorStart, 10);
+      const anchorEnd = parseInt(draft.anchorEnd, 10);
+      drafts[key] = {
+        text: draft.text || '',
+        anchorStart: Number.isFinite(anchorStart) ? anchorStart : start,
+        anchorEnd: Number.isFinite(anchorEnd) ? anchorEnd : end,
+        savedAt: draft.savedAt || draft.updatedAt || new Date().toISOString(),
+      };
+    });
+    return drafts;
+  }
+  function normalizeFollowupDrafts(rawDrafts) {
+    const drafts = {};
+    if (!rawDrafts || typeof rawDrafts !== 'object') return drafts;
+    Object.entries(rawDrafts).forEach(([threadId, draft]) => {
+      if (!draft || typeof draft !== 'object') return;
+      drafts[threadId] = {
+        text: draft.text || '',
+        savedAt: draft.savedAt || draft.updatedAt || new Date().toISOString(),
+      };
+    });
+    return drafts;
+  }
+  async function hydrateState() {
+    if (stateSeed) {
+      currentState = normalizeState(stateSeed);
+      return;
+    }
     try {
-      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      const drafts = raw.drafts || {};
-      return {
-        userThreads: raw.userThreads || [],
-        followups: raw.followups || {},
-        resolutions: raw.resolutions || {},
-        drafts: {
-          newThread: drafts.newThread || {},
-          followup: drafts.followup || {},
-        },
-      };
-    } catch {
-      return {
-        userThreads: [], followups: {}, resolutions: {},
-        drafts: { newThread: {}, followup: {} },
-      };
+      const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`GET /api/state returned ${response.status}`);
+      currentState = normalizeState(await response.json());
+    } catch (error) {
+      console.error('Failed to hydrate discussion state:', error);
+      currentState = emptyDiscussionState();
     }
   }
-  function saveState(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+  function loadState() {
+    return currentState;
+  }
+  function saveState(s) {
+    currentState = normalizeState(s);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(currentState));
+  }
 
   // Drafts persist in-progress text so a user who starts typing but clicks
   // off doesn't lose their work. A teal dashed marker appears on the anchor
@@ -1747,8 +1864,10 @@
   });
 
   // ---------- Init ----------
-  renderAllThreads();
-  scheduleReposition();
+  hydrateState().then(() => {
+    renderAllThreads();
+    scheduleReposition();
+  });
   window.addEventListener('load', scheduleReposition);
   window.addEventListener('resize', reposition);
 })();

@@ -189,4 +189,23 @@ mod tests {
         assert!(page.contains("pre > code.language-mermaid"));
         assert!(page.contains("/assets/mermaid.min.js"));
     }
+
+    #[test]
+    fn bundled_template_hydrates_state_from_seed_or_api() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        let seed_check = page
+            .find("if (stateSeed)")
+            .expect("template should prefer server-rendered state seed");
+        let api_fetch = page
+            .find("fetch('/api/state'")
+            .expect("template should fall back to GET /api/state");
+
+        assert!(seed_check < api_fetch);
+        assert!(page.contains("function normalizeState(raw)"));
+        assert!(page.contains("raw.threads"));
+        assert!(page.contains("raw.replies"));
+        assert!(page.contains("draft.updatedAt"));
+        assert!(!page.contains("localStorage.getItem"));
+    }
 }
