@@ -53,8 +53,21 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    #[command(about = "Check for and install discuss updates.")]
-    Update,
+    #[command(
+        about = "Explicitly check for and install discuss updates.",
+        long_about = "Explicitly check for and install discuss updates.\n\n\
+Updates are explicit-only: discuss never checks for updates automatically, so no env opt-out is needed."
+    )]
+    Update(UpdateArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UpdateArgs {
+    #[arg(
+        long,
+        help = "Check GitHub Releases for a newer version. This is explicit-only; discuss never checks automatically."
+    )]
+    pub check: bool,
 }
 
 #[cfg(test)]
@@ -144,7 +157,21 @@ mod tests {
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
         assert!(args.file.is_none());
-        assert!(matches!(args.command, Some(Commands::Update)));
+        assert!(matches!(
+            args.command,
+            Some(Commands::Update(UpdateArgs { check: false }))
+        ));
+    }
+
+    #[test]
+    fn parses_update_check_flag() {
+        let args =
+            Args::try_parse_from(["discuss", "update", "--check"]).expect("update check parses");
+
+        assert!(matches!(
+            args.command,
+            Some(Commands::Update(UpdateArgs { check: true }))
+        ));
     }
 
     #[test]
@@ -177,5 +204,26 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::DisplayVersion);
         assert!(error.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn update_help_mentions_explicit_only_checks() {
+        let mut command = Args::command();
+        let update = command
+            .find_subcommand_mut("update")
+            .expect("update subcommand should exist");
+        let help = update.render_long_help().to_string();
+
+        for expected in [
+            "Explicitly check for and install discuss updates.",
+            "Updates are explicit-only",
+            "no env opt-out is needed",
+            "--check",
+        ] {
+            assert!(
+                help.contains(expected),
+                "expected update help to contain {expected:?}\n{help}"
+            );
+        }
     }
 }

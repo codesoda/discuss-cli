@@ -13,7 +13,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
         | DiscussError::RenderError { .. }
-        | DiscussError::LoggingInitError { .. } => EXIT_GENERIC_FAILURE,
+        | DiscussError::LoggingInitError { .. }
+        | DiscussError::UpdateCheckError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
 
@@ -76,6 +77,12 @@ mod tests {
                 DiscussError::LoggingInitError {
                     path: PathBuf::from("/tmp/discuss/logs"),
                     source: Box::new(io::Error::other("permission denied")),
+                },
+                EXIT_GENERIC_FAILURE,
+            ),
+            (
+                DiscussError::UpdateCheckError {
+                    message: "GitHub did not return a Location header".to_string(),
                 },
                 EXIT_GENERIC_FAILURE,
             ),

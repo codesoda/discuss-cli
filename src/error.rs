@@ -57,6 +57,11 @@ pub enum DiscussError {
         #[source]
         source: BoxedError,
     },
+
+    #[error(
+        "update check failed: {message} - check your network connection or GitHub release metadata, then run `discuss update --check` again"
+    )]
+    UpdateCheckError { message: String },
 }
 
 #[cfg(test)]
@@ -170,6 +175,21 @@ mod tests {
                 "/tmp/discuss/logs",
                 "permission denied",
                 "check directory permissions",
+            ],
+        );
+    }
+
+    #[test]
+    fn update_check_error_message_names_problem_and_suggestion() {
+        assert_display_contains(
+            DiscussError::UpdateCheckError {
+                message: "GitHub did not return a Location header".to_string(),
+            },
+            &[
+                "update check failed",
+                "Location header",
+                "network connection",
+                "discuss update --check",
             ],
         );
     }

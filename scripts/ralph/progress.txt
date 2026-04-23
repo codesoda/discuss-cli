@@ -50,6 +50,7 @@
 - Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
 - Resolution mutation events must include `threadId`; `thread.resolved` payloads also include the stored `resolution` object for browser state updates.
 - Thread deletion is a soft delete for active user threads only; prepopulated threads return structured 403 code `prepopulated_thread`, and `thread.deleted` payloads use `threadId`.
+- Update checks live in `src/update.rs`; keep them explicit-only, use the GitHub `/releases/latest` redirect with redirects disabled, and parse the `Location` header instead of calling the GitHub Releases API.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -428,4 +429,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: release notes extraction should tolerate changelog headings with and without a leading `v` so Keep a Changelog version sections stay compatible with `v`-prefixed Git tags.
   - Gotchas encountered: local validation for this workflow is limited to `actionlint`; the artifact upload and `softprops/action-gh-release` path still requires a real `v*` tag push on GitHub to execute end-to-end.
   - Useful context: verification passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo test`, `actionlint .github/workflows/release.yml .github/workflows/ci.yml`, `./install.sh`, and `discuss --version` from PATH.
+---
+## 2026-04-23 18:10:13 AEST - US-047
+- Implemented `discuss update --check` with explicit-only clap help, GitHub `releases/latest` redirect parsing, semver comparison, and actionable stderr errors.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/cli.rs`, `src/error.rs`, `src/exit.rs`, `src/lib.rs`, `src/update.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: update logic is isolated in `src/update.rs`, and `update::check` should stay referenced only from the `discuss update` subcommand so the binary never performs passive update checks.
+  - Gotchas encountered: installer smoke tests that override `HOME` need the real `RUSTUP_HOME` and `CARGO_HOME` preserved, otherwise source builds fail because rustup cannot find the configured toolchain.
+  - Useful context: the update check uses the GitHub redirect trick (`/releases/latest` with redirects disabled) plus the `Location` header, so later download/install work can reuse the same latest-tag resolution path without an API token.
 ---

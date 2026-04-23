@@ -21,6 +21,7 @@ pub mod sse;
 pub mod state;
 pub mod template;
 pub mod transcript;
+pub mod update;
 
 pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
@@ -63,7 +64,13 @@ where
     tracing::debug!("tracing initialized");
 
     match command {
-        Some(cli::Commands::Update) => Ok(()),
+        Some(cli::Commands::Update(update_args)) => {
+            if update_args.check {
+                eprintln!("{}", update::check()?);
+            }
+
+            Ok(())
+        }
         None => {
             let Some(file) = file else {
                 return Ok(());
