@@ -1,0 +1,16 @@
+# Ralph Progress Log
+
+## Codebase Patterns
+- Root Rust project is a single binary Cargo crate named `discuss`; keep `/target/` ignored and commit `Cargo.lock`.
+- Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
+
+Started: Thu 23 Apr 2026 11:20:03 AEST
+---
+## 2026-04-23 11:21:38 AEST - US-001
+- Implemented the initial Cargo binary crate skeleton for `discuss`.
+- Files changed: `.gitignore`, `Cargo.toml`, `Cargo.lock`, `src/main.rs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`; the commit also includes existing untracked Ralph/PRD setup files so future iterations have the same project context.
+- **Learnings for future iterations:**
+  - Patterns discovered: root crate is intentionally minimal for US-001; clap and error handling are separate follow-up stories.
+  - Gotchas encountered: the cargo-agent helper is useful as a preflight but does not replace the exact strict validation commands required by `AGENTS.md`.
+  - Useful context: `scripts/ralph/prd.json` is the active Ralph tracker for this project, while `tasks/prd-discuss-cli.md` contains the full product scope.
+---

@@ -1,0 +1,953 @@
+{
+  "project": "discuss-cli",
+  "branchName": "ralph/discuss-cli-v1",
+  "description": "discuss-cli v1: a Rust CLI that turns any markdown file into a live, bidirectional review session between a human (in a browser) and the AI agent that launched it. `discuss <file.md>` renders markdown through the bundled discuss.html two-pane template, serves it on 127.0.0.1, auto-opens the browser, streams every user action (comment/draft/reply/resolve) as newline-delimited JSON events on stdout, and accepts agent 'takes' via HTTP that are pushed to the browser over SSE. On Done, emits a structured transcript to stdout and archives a JSON copy to ~/.discuss/history/. Single self-contained binary with mermaid.js bundled. Full PRD lives at tasks/prd-discuss-cli.md; this prd.json decomposes it into 48 right-sized Ralph iterations.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Initialize Cargo project skeleton",
+      "description": "Source: PRD US-001 acceptance criterion 1. As a developer, I want a Cargo binary crate with appropriate metadata and release-profile settings so the workspace is ready for clap, axum, and the rest of the v1 stack.",
+      "acceptanceCriteria": [
+        "Cargo.toml exists at repo root with `[package]` block: name = \"discuss\", version = \"0.1.0\", edition = \"2021\", description, repository, and license fields populated",
+        "Cargo.toml has `[profile.release]` with `strip = true` and `lto = true` (per PRD §8 binary size budget)",
+        "src/main.rs exists, defines `fn main()`, compiles to a runnable binary that exits 0",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "DiscussError enum via thiserror",
+      "description": "Source: PRD US-001 acceptance criteria 6 and 7. As a developer, I want a single top-level error type covering every documented failure mode so handlers and main() can map cleanly to exit codes.",
+      "acceptanceCriteria": [
+        "Add `thiserror` to Cargo.toml dependencies",
+        "Define `DiscussError` enum in src/error.rs with at minimum: FileNotFound { path }, FileNotReadable { path, source }, PortInUse { port }, ConfigParseError { path, line, col, message }, RenderError { source }, ServerBindError { addr, source }",
+        "Define `pub type Result<T> = std::result::Result<T, DiscussError>` in src/error.rs and re-export from lib root",
+        "Each variant's `Display` message names what went wrong + the affected path/port + a suggested next step (e.g. PortInUse: \"port 7777 is already in use — pass --port <N> or stop the other instance\")",
+        "Unit tests assert each variant's Display contains the expected substrings (path, port, suggestion)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Clap CLI scaffold with update subcommand and exit-code mapping",
+      "description": "Source: PRD US-001 acceptance criteria 2-5 and 8. As a user, I want a clap-based CLI that accepts `discuss <file>`, exposes a placeholder `update` subcommand, prints helpful --help, and maps every error to the documented exit code (FR-23).",
+      "acceptanceCriteria": [
+        "Add `clap` (with `derive` feature) to Cargo.toml",
+        "Top-level Args struct uses `#[command(arg_required_else_help = true)]` so a bare `discuss` shows help instead of erroring",
+        "Top-level Args defines a positional `<FILE>` argument and a `Subcommand` enum with at least an `Update` variant (placeholder body is fine; populated in later specs)",
+        "`--help` output includes the documented exit codes (0, 1, 2, 3, 5 — per FR-23) and a `Docs:` / `LLM ref:` block (per bugatti pattern)",
+        "`--version` works and reports the crate version from Cargo.toml",
+        "main() pattern-matches every DiscussError variant to the FR-23 exit code: 0 clean, 1 generic, 2 ConfigParseError, 3 PortInUse / ServerBindError, 5 SIGINT",
+        "main() writes a single human-readable line to STDERR (never stdout) on every error before exiting",
+        "Unit tests assert at least one error → exit-code mapping (e.g. PortInUse → 3) using a helper that returns the code instead of calling process::exit",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Config struct with serde + deny_unknown_fields",
+      "description": "Source: PRD US-002 acceptance criterion 1. As a user, I want a typed Config struct with sensible defaults so layered resolution (later spec) has something to merge into.",
+      "acceptanceCriteria": [
+        "Add `serde` (with `derive`) and `toml` to Cargo.toml dependencies",
+        "Define `Config` struct in src/config.rs deriving `Deserialize` + `Serialize` with `#[serde(deny_unknown_fields)]`",
+        "Fields (with defaults): `port: Option<u16>` (default None → resolved to 7777 later), `auto_open: bool` (default true), `idle_timeout_secs: u64` (default 600), `history_dir: Option<PathBuf>` (default None), `no_save: bool` (default false), `log_level: Option<String>` (default None)",
+        "`Config::default()` returns the documented defaults",
+        "Parsing a TOML string with an unknown key returns a `ConfigError::ParseError`-shaped error (typo detection)",
+        "Unit tests cover: defaults, deserializing a valid TOML, rejecting an unknown field",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Layered config resolution (defaults → user toml → project toml → env → CLI)",
+      "description": "Source: PRD US-002 acceptance criteria 2 and 3 (FR-21, FR-22). As a user, I want config to cascade in a predictable order so I can pin behavior at whichever layer fits.",
+      "acceptanceCriteria": [
+        "Add `directories` crate to Cargo.toml for resolving `~/.discuss/`",
+        "Implement `Config::resolve(cli_overrides) -> Result<Config>` that merges in this order (lowest → highest): defaults → ~/.discuss/discuss.config.toml → ./discuss.config.toml → DISCUSS_* env vars → CLI flags",
+        "Missing config files at either path are silently ignored (defaults apply)",
+        "Malformed config files surface as DiscussError::ConfigParseError carrying the file path and (where toml provides them) line/col + message",
+        "DISCUSS_* env vars map at least: DISCUSS_PORT, DISCUSS_AUTO_OPEN, DISCUSS_IDLE_TIMEOUT_SECS, DISCUSS_HISTORY_DIR, DISCUSS_NO_SAVE, DISCUSS_LOG (log_level) — last-writer-wins per layer",
+        "Unit tests cover: missing files OK, project toml overrides user toml, env overrides toml, CLI overrides env, malformed toml → ConfigParseError with path",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Tracing initialization with daily-rotated file logs",
+      "description": "Source: PRD US-002 acceptance criteria 4-6. As an operator, I want logs to land in a daily-rotated file in ~/.discuss/logs/ — never on stdout, since stdout is reserved for the JSON event stream.",
+      "acceptanceCriteria": [
+        "Add `tracing`, `tracing-subscriber` (with `env-filter`), `tracing-appender` to Cargo.toml",
+        "`init_tracing(config: &Config)` writes to `~/.discuss/logs/discuss-YYYY-MM-DD.log` via tracing-appender daily rotation; ANSI codes disabled for file output",
+        "Filter resolution order: DISCUSS_LOG env > config.log_level > \"info\"",
+        "Subscriber writes ONLY to the file appender — no stdout writer, no stderr writer (verified by a test that asserts no stdout/stderr output during a test event)",
+        "Parent log directory is created on demand (`fs::create_dir_all`)",
+        "Init failure (e.g. cannot create logs dir) returns Result so main() can decide whether to proceed",
+        "Unit test exercises `init_tracing(&Config::default())` against a tempdir-overridden home and asserts the log file is created on first event",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Comrak markdown render with GFM extensions (pure function)",
+      "description": "Source: PRD US-003 acceptance criteria 1, 2, 7 (FR-1, FR-2). As the server, I want a pure `render(&str) -> String` that turns markdown into HTML with native semantic elements so the existing template's COMMENTABLE_SELECTOR matches it.",
+      "acceptanceCriteria": [
+        "Add `comrak` to Cargo.toml",
+        "Define `pub fn render(markdown: &str) -> String` in src/render.rs",
+        "Comrak options enable GFM extensions: tables, strikethrough, autolink, task lists, footnotes",
+        "Output uses native elements only (h1–h5, p, ul/ol/li, blockquote, pre/code) — no wrapper divs that would break COMMENTABLE_SELECTOR",
+        "Mermaid code blocks pass through as `<pre><code class=\"language-mermaid\">...</code></pre>` (raw, not interpreted)",
+        "Unit tests cover: heading levels h1-h5, ordered + unordered lists, blockquotes, fenced code blocks, tables, task lists, mermaid passthrough",
+        "Render is referentially transparent — same input twice produces byte-identical output (test asserts this)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Bundle discuss.html template + content injection helper",
+      "description": "Source: PRD US-003 acceptance criterion 3 (FR-5). As the server, I want the bundled discuss.html template plus a helper that injects rendered markdown into #doc-content server-side before serving the page.",
+      "acceptanceCriteria": [
+        "src/template.rs uses `include_str!(\"../discuss.html\")` to embed the existing 1757-line discuss.html template at compile time",
+        "Define `pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String` that returns the full HTML page with the rendered markdown injected into the `#doc-content` element body and the initial state seeded into a known global (e.g. `window.__DISCUSS_INITIAL_STATE__`)",
+        "Injection is robust: works whether `#doc-content` currently contains placeholder or empty content; preserves all surrounding template markup unchanged",
+        "Unit tests cover: helper returns a string containing the rendered markdown inside `#doc-content`, the initial state JSON appears in a script tag, no template markup outside the injection points was modified",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Bundle mermaid.min.js + hydration shim (conditional load)",
+      "description": "Source: PRD US-003 acceptance criteria 4-6 (FR-3, FR-4). As a user, I want mermaid diagrams rendered offline via a bundled mermaid.js, hydrated by a small client-side shim, with mermaid.js loaded only when the page actually contains a mermaid block.",
+      "acceptanceCriteria": [
+        "Vendor `mermaid.min.js` into `assets/mermaid.min.js` and embed via `include_str!`",
+        "Author a ~30-line `assets/mermaid-shim.js` that finds `<pre><code class=\"language-mermaid\">...</code></pre>` blocks and replaces their contents with the rendered SVG; mermaid.js is dynamically `<script>`-injected only if at least one such block exists in the rendered HTML",
+        "The mermaid `<pre>` element remains a single commentable anchor — `assignAnchorIndices()` still indexes it as one node regardless of mermaid's SVG insertion",
+        "render_page (from spec 8) injects only the shim into the page; the shim itself decides whether to load mermaid.min.js",
+        "Unit tests cover: shim string is non-empty and references the language-mermaid selector; binary is reproducible (asset bytes are bundled, not fetched at runtime)",
+        "Binary size growth from this spec stays under ~700 KB (mermaid.min.js is ~600 KB)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "State data structs (Thread, Reply, Take, Resolution, Drafts)",
+      "description": "Source: PRD US-004 acceptance criteria 4 and 5 (FR-11). As the server, I want typed data structs whose serde JSON shapes match what the existing template expects so the frontend can consume `/api/state` without changes to its parsing.",
+      "acceptanceCriteria": [
+        "Define in src/state/types.rs: `Thread` (id, anchorStart, anchorEnd, snippet, breadcrumb, text, createdAt, kind: 'user'|'prepopulated'), `Reply` (id, threadId, text, createdAt), `Take` (id, threadId, text, createdAt), `Resolution` (decision: Option<String>, resolvedAt), `Drafts` { newThread: HashMap<(usize, usize), Draft>, followup: HashMap<ThreadId, Draft> }, `Draft` { text, updatedAt }",
+        "All structs derive Serialize + Deserialize and use camelCase field names (`#[serde(rename_all = \"camelCase\")]`) so JSON matches the template's render functions",
+        "ThreadId is a newtype around String (e.g. `pub struct ThreadId(pub String)`) with serde-transparent serialization so JSON ids look like `\"u-abc\"`",
+        "Timestamps are chrono::DateTime<Utc> serialized in ISO 8601 form",
+        "Unit tests round-trip each struct through serde_json and assert the JSON keys are camelCase, ids serialize transparently, and timestamps render in ISO 8601",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "State container with Arc<RwLock<...>> and typed accessors",
+      "description": "Source: PRD US-004 acceptance criteria 4 and 6 (FR-11). As the server, I want a single shared State wrapped in Arc<RwLock<...>> with typed accessor methods so handlers can mutate under a write lock and read under a read lock without sprinkling lock plumbing everywhere.",
+      "acceptanceCriteria": [
+        "Define `State` in src/state/store.rs containing: threads: Vec<Thread>, replies: HashMap<ThreadId, Vec<Reply>>, takes: HashMap<ThreadId, Vec<Take>>, resolutions: HashMap<ThreadId, Resolution>, drafts: Drafts",
+        "Define `pub type SharedState = Arc<RwLock<State>>` and `State::new_shared() -> SharedState`",
+        "Provide typed accessor methods: get_threads (read), add_thread, soft_delete_thread, add_reply, add_take, set_resolution, clear_resolution, upsert_new_thread_draft, clear_new_thread_draft, upsert_followup_draft, clear_followup_draft, snapshot() (returns owned clone for /api/state)",
+        "All mutator methods return the resulting object (Thread/Reply/Take) or () so handlers can serialize the response without re-reading state",
+        "State is process-local only — no disk reads or writes from this module",
+        "Unit tests cover: add then get a thread, soft-delete removes from get_threads but preserves in some internal store, draft upsert+clear, snapshot returns an independent clone",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Stdout JSON event emitter (newline-delimited)",
+      "description": "Source: PRD US-008 acceptance criteria 1-5 (FR-14, FR-15, FR-16, FR-17). As the launching agent, I want every mutation to arrive as one newline-delimited JSON object on stdout so I can react to user input in real time. This spec only ships the emitter; later specs use it.",
+      "acceptanceCriteria": [
+        "Define `EventKind` enum in src/events.rs with variants: SessionStarted, ThreadCreated, ThreadDeleted, ThreadResolved, ThreadUnresolved, ReplyAdded, TakeAdded, DraftUpdated, DraftCleared, PromptSuggestDone, SessionDone — serializing as snake-cased dotted strings (e.g. \"thread.created\")",
+        "Define `Event` struct: { kind: EventKind, at: DateTime<Utc>, payload: serde_json::Value }",
+        "Define `EventEmitter` that holds a `BufWriter<Stdout>` (or equivalent); `EventEmitter::emit(&self, event: &Event)` serializes the event to JSON, writes a newline, and flushes immediately so the agent sees each event without buffering delay",
+        "EventEmitter uses no color, no decoration; output is identical whether stdout is a TTY or a pipe",
+        "EventEmitter is the ONLY module in the crate that writes to stdout — verified by a test that greps src/ (excluding events.rs) for `println!`/`print!`/`io::stdout` and asserts zero matches",
+        "Unit tests cover: each EventKind serializes to its dotted string, an emitted event ends with `\\n`, the JSON parses back to an equivalent Event",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "SSE broadcast channel (tokio::sync::broadcast wired into state)",
+      "description": "Source: PRD US-007 acceptance criteria 2 and 4 (FR-9). As the server, I want a single broadcast channel that mutation handlers publish to and SSE handlers subscribe to, so every state change reaches every connected browser tab without polling.",
+      "acceptanceCriteria": [
+        "Add `tokio` (with `full` feature) to Cargo.toml",
+        "Define `BroadcastEvent` struct in src/sse.rs (e.g. { kind: String, payload: serde_json::Value }) — distinct from the stdout Event so the SSE wire format can evolve independently",
+        "Define `pub struct EventBus { tx: broadcast::Sender<BroadcastEvent> }` with `EventBus::new(capacity: usize) -> Self`, `EventBus::subscribe() -> broadcast::Receiver<BroadcastEvent>`, `EventBus::publish(&self, event: BroadcastEvent)`",
+        "Slow / disconnected subscribers do not block publish — the broadcast channel's lagged-receiver behavior is acceptable (subscribers can drop missed events; reconnects re-hydrate via GET /api/state)",
+        "EventBus is intended to be held inside an `Arc` and stored alongside SharedState in the axum app's shared extension",
+        "Unit tests cover: publish + subscribe delivers an event, two subscribers each receive their own copy, dropping a subscriber does not panic the publisher",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Axum server bootstrap with 127.0.0.1 bind and graceful shutdown",
+      "description": "Source: PRD US-004 acceptance criteria 1, 2, 7 (FR-6, FR-10). As the server, I want axum bound to 127.0.0.1:port with a graceful-shutdown signal that closes SSE streams before exiting the bind.",
+      "acceptanceCriteria": [
+        "Add `axum` and `tower-http` to Cargo.toml",
+        "Define `pub struct AppState { state: SharedState, bus: Arc<EventBus>, emitter: Arc<EventEmitter>, ... }` carried as the axum Router state",
+        "`pub async fn serve(addr: SocketAddr, app_state: AppState, shutdown: impl Future<Output=()>) -> Result<()>` builds the Router (initially empty / placeholder routes), binds to the given addr, and runs `axum::serve(...).with_graceful_shutdown(shutdown)`",
+        "Listener binds to 127.0.0.1 only (never 0.0.0.0); attempting to bind a busy port returns a `DiscussError::PortInUse { port }` (or ServerBindError if the OS error doesn't match EADDRINUSE)",
+        "Graceful shutdown waits for in-flight HTTP requests to complete and signals SSE streams to end; integration test asserts a request initiated before shutdown completes successfully",
+        "Integration test exercises: bind to a tempfile-allocated free port, GET / returns 200/404 (whatever the placeholder handler returns), a triggered shutdown causes serve() to return Ok within 1s",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "GET / handler — bundled template + injected markdown + state seed",
+      "description": "Source: PRD US-004 acceptance criterion 2 (FR-8 GET /). As the browser, when I GET /, I want the bundled template with the rendered markdown injected into #doc-content and the current state seeded into the page so reloads pick up the latest threads/drafts.",
+      "acceptanceCriteria": [
+        "Wire `GET /` to a handler that calls `render::render(markdown_source)` then `template::render_page(html, initial_state_json)` where initial_state_json is `serde_json::to_string(&state.snapshot())?`",
+        "Source markdown is read once at server startup and held in AppState (re-reading the file on every GET is out of scope)",
+        "Response Content-Type is `text/html; charset=utf-8`",
+        "Reload preserves state: integration test seeds two threads via state mutators, GETs /, asserts both thread ids appear in the response body's initial-state JSON block",
+        "Integration test asserts a heading from the source markdown appears inside the rendered #doc-content area",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Static asset routes (mermaid.js + mermaid shim)",
+      "description": "Source: PRD US-004 acceptance criterion 3. As the browser, I want stable `/assets/...` URLs serving the bundled mermaid.min.js and the mermaid hydration shim so the template can reference them by path.",
+      "acceptanceCriteria": [
+        "Add `GET /assets/mermaid.min.js` returning the bundled mermaid.min.js bytes with Content-Type `application/javascript`",
+        "Add `GET /assets/mermaid-shim.js` returning the bundled shim bytes with Content-Type `application/javascript`",
+        "Both responses include a long-cache header (e.g. `Cache-Control: public, max-age=86400`) — the asset bytes are immutable for the binary's lifetime",
+        "Unknown `/assets/*` paths return 404 (no directory listing, no fallthrough)",
+        "Integration tests assert: GET /assets/mermaid.min.js returns 200 with the expected first bytes, GET /assets/mermaid-shim.js returns 200 referencing language-mermaid, GET /assets/nope.js returns 404",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "GET /api/state — initial hydration JSON",
+      "description": "Source: PRD US-004 acceptance criterion 5 (FR-8 GET /api/state). As the browser, I want to fetch the full state on load so a fresh tab starts in sync with the server.",
+      "acceptanceCriteria": [
+        "Add `GET /api/state` handler returning `state.snapshot()` serialized to JSON with Content-Type `application/json`",
+        "Response shape exactly matches the snapshot type defined in spec 11 — frontend can deserialize without transformation",
+        "No mutation; no SSE broadcast; no stdout event for this endpoint",
+        "Integration test asserts: empty state returns `{ threads: [], replies: {}, takes: {}, resolutions: {}, drafts: { newThread: {}, followup: {} } }`; after seeding a thread, the response includes that thread under `threads`",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "GET /api/events SSE handler with 15s heartbeat",
+      "description": "Source: PRD US-007 acceptance criteria 1, 4, 5 (FR-8 GET /api/events). As the browser, I want an SSE stream that delivers every server-side state change so the page reflects updates the agent makes (and updates from other tabs) without polling.",
+      "acceptanceCriteria": [
+        "Add `GET /api/events` handler returning a Server-Sent Events stream (axum::response::sse::Sse)",
+        "Handler subscribes to the EventBus from spec 13 and forwards every BroadcastEvent as an SSE `data:` line containing the JSON payload (with `event:` set to the event kind string)",
+        "Stream emits a comment heartbeat line (`: keep-alive\\n\\n`) every 15 seconds to keep proxies/connections alive",
+        "Client disconnects do not panic, do not leak the broadcast subscription (test: connect, disconnect, server still serves new connections)",
+        "On server graceful shutdown, the stream ends cleanly (no panic in the connected client)",
+        "Integration test: subscribe to /api/events, publish an event via EventBus, assert the subscriber receives a matching SSE message within 1 second",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "POST /api/threads — create user thread",
+      "description": "Source: PRD US-005 acceptance criterion 1 (FR-8, FR-9). As the browser (or agent), I want to POST a new thread and have it persisted, broadcast over SSE, and emitted as a stdout event in one shot.",
+      "acceptanceCriteria": [
+        "Add `POST /api/threads` accepting JSON body `{ anchorStart: usize, anchorEnd: usize, snippet: string, text: string }`",
+        "Handler generates a new ThreadId (e.g. `u-` + base36 of a counter or short uuid), builds a Thread with kind=\"user\" and createdAt=Utc::now(), inserts into state, and returns 200 with `{ id, createdAt }`",
+        "On success, publishes a `thread.created` BroadcastEvent and emits a stdout `thread.created` Event whose payload includes id, anchorStart, anchorEnd, snippet, text, createdAt",
+        "Malformed JSON or missing required fields → 400 with structured error body `{ error: { code, message } }` (no panic)",
+        "Integration test covers: valid POST returns 200 with id, malformed JSON returns 400, the same SSE subscriber + EventEmitter capture observe one event each per successful POST",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "POST /api/threads/:id/replies — append a user reply",
+      "description": "Source: PRD US-005 acceptance criterion 2. As the browser, I want to append a user reply to an existing thread; the server records it and broadcasts the change.",
+      "acceptanceCriteria": [
+        "Add `POST /api/threads/:id/replies` accepting JSON body `{ text: string }`",
+        "Handler appends a Reply (id, threadId, text, createdAt) to state, returns 200 with the new reply",
+        "Unknown thread id → 404 with structured error body",
+        "Empty/whitespace text → 400 with structured error body",
+        "Publishes a `reply.added` BroadcastEvent and emits a `reply.added` stdout Event with the full reply payload",
+        "Integration tests cover: valid append, 404 on unknown id, 400 on empty text, exactly one SSE + stdout event per successful append",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "POST /api/threads/:id/takes — append a model take",
+      "description": "Source: PRD US-005 acceptance criterion 3. As the launching agent, I want to POST a take on an existing thread; the server records it and broadcasts the change so the user sees it appear in the browser.",
+      "acceptanceCriteria": [
+        "Add `POST /api/threads/:id/takes` accepting JSON body `{ text: string }`",
+        "Handler appends a Take (id, threadId, text, createdAt) to state, returns 200 with the new take",
+        "Unknown thread id → 404 with structured error body",
+        "Empty/whitespace text → 400 with structured error body",
+        "Publishes a `take.added` BroadcastEvent and emits a `take.added` stdout Event with the full take payload",
+        "Integration tests cover: valid append, 404 on unknown id, 400 on empty text, exactly one SSE + stdout event per successful append",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "POST /api/threads/:id/resolve + /unresolve (idempotent)",
+      "description": "Source: PRD US-005 acceptance criteria 4, 5, 9. As the browser, I want to set or clear a resolution on a thread, and repeating the call should be a safe no-op.",
+      "acceptanceCriteria": [
+        "Add `POST /api/threads/:id/resolve` accepting JSON body `{ decision: Option<String> }`; sets state.resolutions[:id] = Resolution { decision, resolvedAt: now } and returns 200 with the resolution",
+        "Add `POST /api/threads/:id/unresolve` (no body required); removes state.resolutions[:id] and returns 200 with `{ ok: true }`",
+        "Both endpoints are idempotent: resolving an already-resolved thread (with the same or different decision) replaces the value without error; unresolving an already-unresolved thread returns 200",
+        "Unknown thread id → 404 with structured error body for both endpoints",
+        "Each successful call publishes one `thread.resolved` or `thread.unresolved` BroadcastEvent and emits one stdout Event of the matching kind",
+        "Integration tests cover: resolve sets it, resolve again replaces it (still 200, exactly one new event), unresolve clears it, unresolve again is OK, unknown id is 404",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "DELETE /api/threads/:id — soft delete with prepopulated guard",
+      "description": "Source: PRD US-005 acceptance criteria 6, 7, 8. As the browser, I want to soft-delete a user thread, but seeded/prepopulated threads must not be deletable.",
+      "acceptanceCriteria": [
+        "Add `DELETE /api/threads/:id` that soft-deletes the thread (e.g. sets a deleted flag or removes from active threads while retaining for transcript purposes — implementer's choice consistent with later transcript spec)",
+        "If the target thread has kind=\"prepopulated\", respond 403 with structured error `{ error: { code: \"prepopulated_thread\", message } }` and do NOT mutate state",
+        "Unknown thread id → 404 with structured error body",
+        "Successful delete publishes a `thread.deleted` BroadcastEvent and emits a `thread.deleted` stdout Event with the deleted id",
+        "Malformed JSON/path on this or any earlier mutation endpoint → 400 with structured error body (verify global error handler covers all of them)",
+        "Integration tests cover: delete a user thread → 200 + 1 SSE event + 1 stdout event, delete a prepopulated thread → 403 + 0 events, delete unknown id → 404",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Drafts: POST + DELETE /api/drafts/new-thread",
+      "description": "Source: PRD US-006 acceptance criteria 1, 2, 5, 6 (FR-12). As the browser, I want server-side persistence for new-thread drafts keyed by anchor range so a click-off or reload doesn't lose in-progress text.",
+      "acceptanceCriteria": [
+        "Add `POST /api/drafts/new-thread` accepting JSON body `{ anchorStart: usize, anchorEnd: usize, text: string }`; upserts the draft for that (start, end) key",
+        "Add `DELETE /api/drafts/new-thread` accepting JSON body `{ anchorStart: usize, anchorEnd: usize }`; clears the draft for that key (no-op + 200 if the draft did not exist)",
+        "Empty or whitespace-only `text` on POST is treated as a clear (delegates to the same code path as DELETE)",
+        "Successful upsert publishes `draft.updated` and emits a `draft.updated` stdout Event with `{ scope: \"newThread\", anchorStart, anchorEnd, text, updatedAt }`",
+        "Successful clear publishes `draft.cleared` and emits a `draft.cleared` stdout Event with `{ scope: \"newThread\", anchorStart, anchorEnd }`",
+        "Integration tests cover: upsert, idempotent re-upsert, whitespace text clears, explicit DELETE clears, no event on a no-op clear of a non-existent key (or one event — pick one and document; tests must match)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Drafts: POST + DELETE /api/drafts/followup",
+      "description": "Source: PRD US-006 acceptance criteria 3, 4, 5, 6. As the browser, I want server-side persistence for follow-up drafts keyed by threadId so reload doesn't lose mid-typed replies.",
+      "acceptanceCriteria": [
+        "Add `POST /api/drafts/followup` accepting JSON body `{ threadId: string, text: string }`; upserts the draft for that thread",
+        "Add `DELETE /api/drafts/followup` accepting JSON body `{ threadId: string }`; clears the draft (no-op + 200 if it did not exist)",
+        "Empty or whitespace-only `text` on POST is treated as a clear",
+        "Unknown threadId on POST or DELETE → 404 with structured error body (do not silently create)",
+        "Successful upsert / clear publish + emit `draft.updated` / `draft.cleared` events with `{ scope: \"followup\", threadId, ... }`",
+        "Integration tests cover: upsert against an existing thread, whitespace clears, DELETE clears, 404 on unknown threadId",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Frontend: hydrate from GET /api/state on page load (replace loadState)",
+      "description": "Source: PRD US-009 acceptance criterion 1. As the page, I want the initial state to come from the server instead of localStorage so the latest threads/drafts/takes are present on load.",
+      "acceptanceCriteria": [
+        "On page load, the script in discuss.html calls `fetch('/api/state')` and uses the returned JSON to populate the in-memory state used by render functions, replacing the existing `loadState()` localStorage read",
+        "If the page was server-rendered with `window.__DISCUSS_INITIAL_STATE__` (from spec 8), use that as the initial value to avoid an extra round-trip; the explicit GET is a fallback when the seed is missing",
+        "Existing call sites that previously called `loadState()` for read access continue to work against the new in-memory state without behavioural regressions (thread markers render, draft markers render, resolution banners render)",
+        "All previously-localStorage-driven UI behaviours (thread markers, draft markers, resolution banner, show-all toggle) work end-to-end against the server state on first load",
+        "Manual verification: launch `cargo run -- README.md` (or any sample md), load http://127.0.0.1:7777/, confirm the page renders with whatever threads/drafts the server holds",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Frontend: replace thread/reply/take/resolve/delete saveState calls with REST",
+      "description": "Source: PRD US-009 acceptance criterion 2. As the page, I want every thread/reply/take/resolution/delete write to flow through the corresponding /api/threads/* endpoint instead of localStorage.",
+      "acceptanceCriteria": [
+        "Replace every saveState() call site in discuss.html that touches threads, replies, takes, resolutions, or thread deletion with the corresponding /api/threads/* fetch (POST or DELETE)",
+        "Each replaced call site uses async/await + try/catch; the optimistic in-memory mutation is reverted on HTTP failure (state will also re-sync via the SSE subscriber once that ships in spec 30, but this spec must already not silently lose the user's input)",
+        "Manual smoke test: create a new thread, add a reply, resolve it, unresolve it, delete it — server state (visible via GET /api/state in another window) reflects each action immediately",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Frontend: replace draft saveState calls with /api/drafts/* REST",
+      "description": "Source: PRD US-009 acceptance criterion 2 (drafts portion). As the page, I want every draft write to flow through /api/drafts/new-thread or /api/drafts/followup so drafts survive reloads via the server.",
+      "acceptanceCriteria": [
+        "Replace every saveState() call site in discuss.html that touches drafts.newThread with `POST /api/drafts/new-thread` or `DELETE /api/drafts/new-thread`",
+        "Replace every saveState() call site that touches drafts.followup with `POST /api/drafts/followup` or `DELETE /api/drafts/followup`",
+        "Empty/whitespace text passed to the POST endpoints is OK (the server treats it as a clear, per spec 24/25)",
+        "Manual smoke test: type a new-thread draft, click away, reload — draft text reappears on the same anchor; type a followup draft on a thread, reload — draft text reappears on that thread",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Frontend: drop STORAGE_KEY + remove all remaining localStorage references",
+      "description": "Source: PRD US-009 acceptance criterion 3. As the page, I no longer touch localStorage; the constant and any residual reads/writes are gone.",
+      "acceptanceCriteria": [
+        "Remove the `STORAGE_KEY` constant from discuss.html",
+        "Remove all remaining `localStorage.getItem`, `localStorage.setItem`, and `localStorage.removeItem` references from discuss.html",
+        "`grep -n localStorage discuss.html` returns zero matches after this spec",
+        "Manual smoke test: clear browser localStorage, reload — page still works fully (state still served by the server)",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-030",
+      "title": "Frontend: SSE subscriber + apply incremental updates",
+      "description": "Source: PRD US-007 acceptance criterion 3. As the page, I want to subscribe to /api/events on load and apply each incoming event incrementally so updates from the agent (or another tab) appear without a reload.",
+      "acceptanceCriteria": [
+        "On page load, after initial state hydration, open an EventSource on `/api/events`",
+        "Implement handlers for each event kind: thread.created → add a new thread card and marker; thread.deleted → remove or hide the card; thread.resolved / thread.unresolved → update the resolution banner and marker color; reply.added → append a reply to the matching thread card; take.added → append a take to the matching thread card; draft.updated → render the draft marker for that anchor / threadId; draft.cleared → remove the draft marker",
+        "Reconnect on EventSource error after a short backoff; on reconnect, no event replay is needed because hydrate-on-load (spec 26) already covers state catch-up",
+        "Manual smoke test (two tabs): create a thread in tab A, observe it appear in tab B within ~1 second without a reload; do the same for replies, takes, resolve, unresolve, delete, and drafts",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-031",
+      "title": "Frontend: take vs reply chronological order, marker color precedence, tooltip",
+      "description": "Source: PRD US-010. As the user, I want to tell at a glance whether a comment came from me or from the agent, and the conversation in a thread reads naturally in chronological order.",
+      "acceptanceCriteria": [
+        "Inside each thread card, takes and replies are interleaved and rendered in ascending createdAt order",
+        "Model takes use the existing prepopulated/blue style; user replies keep the user/pink style — no new CSS primitives introduced",
+        "Thread marker color reflects precedence: resolved > mixed (has at least one take AND one reply) > user-only > pending (has at least one take, no replies)",
+        "Marker tooltip names the latest contributor (\"you\" or \"agent\") in addition to the existing snippet preview",
+        "Manual smoke test: create a thread (user), POST a take via curl, add a user reply, POST another take, resolve — the thread card displays takes/replies in time order; marker color changes per the precedence; tooltip names the latest contributor",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-032",
+      "title": "Frontend: non-blocking inline error on mutation failure",
+      "description": "Source: PRD US-009 acceptance criterion 5. As the user, when a mutation fails (server down, network blip), I want a non-blocking inline message offering retry — without losing my input.",
+      "acceptanceCriteria": [
+        "Each REST mutation site catches HTTP failures (non-2xx, network errors) and surfaces a non-blocking inline message near the affected control (e.g. \"couldn't save — retry?\" with a Retry action that re-fires the same request)",
+        "On failure, the in-memory state mutation is reverted (or the optimistic update is held until retry succeeds — implementer's choice, but the user's typed text is never silently dropped)",
+        "Errors do not show as alert() / blocking modals",
+        "Manual smoke test: stop the server with the page open, attempt to add a reply, observe the inline error + retry; restart the server, click retry, the reply succeeds",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-033",
+      "title": "Port bind + --port flag (no auto-find-free-port fallback)",
+      "description": "Source: PRD US-011 acceptance criteria 1, 5, 6 (FR-6, FR-7, FR-23 exit code 3). As a user, I want a predictable port (default 7777) and a `--port` override; if the chosen port is taken, the CLI exits cleanly with code 3 instead of silently picking another.",
+      "acceptanceCriteria": [
+        "Add `--port <N>` to the top-level CLI (clap), overriding both config and the 7777 default",
+        "On bind failure with EADDRINUSE → return DiscussError::PortInUse { port } from serve()",
+        "main() maps PortInUse to exit code 3, writes to stderr a message naming the port and suggesting `--port <N>` or stopping the other instance",
+        "No auto-find-free-port fallback anywhere in the bind path (predictable agent URLs)",
+        "Integration test: bind to a port held by a TcpListener fixture, assert the returned error is DiscussError::PortInUse and the run() helper exits with code 3",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-034",
+      "title": "--no-open flag + auto-open browser via `open` crate + URL log to stderr",
+      "description": "Source: PRD US-011 acceptance criteria 2, 3, 4. As a user, I want the browser to launch automatically with a clear URL printed to stderr, plus an opt-out for headless / CI / agent contexts.",
+      "acceptanceCriteria": [
+        "Add `open` crate to Cargo.toml",
+        "Add `--no-open` to the top-level CLI (clap); default behaviour (no flag) is to auto-open",
+        "After a successful bind, log to stderr exactly one line of the form `listening on http://127.0.0.1:<port>` (no color, no decoration if not a TTY)",
+        "If --no-open is NOT set and config.auto_open is true, call `open::that(url)` for the listening URL after the listener is ready",
+        "Browser-launch failures are logged at WARN via tracing but do NOT fail the session (the user can navigate manually using the stderr URL)",
+        "Integration test (or unit test using a flag) covers: --no-open suppresses the open call (e.g. via a dependency-injected launcher trait), bind logs the URL to stderr",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-035",
+      "title": "session.started stdout event after server is listening",
+      "description": "Source: PRD FR-15 + FR-18. As the launching agent, I want a `session.started` event on stdout the moment the server is ready, so I know it's safe to start posting takes.",
+      "acceptanceCriteria": [
+        "Immediately after `axum::serve(...)` is bound and ready (before/around the auto-open call from spec 34), call EventEmitter::emit with a `session.started` Event",
+        "Payload includes at minimum: `{ url: \"http://127.0.0.1:<port>\", source_file: <abs path or basename>, started_at: <ISO timestamp> }`",
+        "Exactly one session.started event per `discuss <file>` invocation — verified by an integration test that boots the server, captures stdout, asserts a single `session.started` line",
+        "Event is emitted via the same EventEmitter as every other event (no ad-hoc println!)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-036",
+      "title": "POST /api/heartbeat (silent) + frontend 30s ping",
+      "description": "Source: PRD US-012 acceptance criterion 1. As the server, I want a silent heartbeat the browser pings every 30s so an idle detector (next spec) has a signal to read.",
+      "acceptanceCriteria": [
+        "Add `POST /api/heartbeat` (no body required); handler updates `last_heartbeat_at` in AppState (Mutex<Instant> or similar) and returns 200 with empty/JSON-empty body",
+        "No SSE broadcast, no stdout event for this endpoint (silent)",
+        "Add a heartbeat ping in discuss.html that fires every 30s while the page is open (`setInterval`); pings stop when the tab is closed (relies on the timer being cleared on unload — best effort)",
+        "Integration test: POST /api/heartbeat → 200, repeated calls update the recorded timestamp, no SSE/stdout event observed",
+        "Manual smoke test: load the page, leave it open for ~70s, observe at least 2 heartbeat POSTs in the network panel (or via a tracing log)",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-037",
+      "title": "Idle timer + prompt.suggest_done event (idle_timeout_secs=0 disables)",
+      "description": "Source: PRD US-012 acceptance criteria 2-5 (FR-20). As the agent, I want a `prompt.suggest_done` stdout event after the browser has been quiet for `idle_timeout_secs` (default 600) so I can prompt the user to wrap up.",
+      "acceptanceCriteria": [
+        "Spawn a tokio task at server start that wakes periodically (e.g. every 10s); compute `idle_for = now - max(last_heartbeat_at, last_mutation_at)`; if `idle_for >= idle_timeout_secs` AND we have not already emitted in this idle window, emit one `prompt.suggest_done` Event with payload `{ idle_for_secs }`, then update an internal `last_emit_at` so the next idle window is another `idle_timeout_secs` away",
+        "`last_mutation_at` is updated by every state-mutation handler (threads/replies/takes/resolve/unresolve/delete + drafts)",
+        "If `config.idle_timeout_secs == 0`, the idle task is not spawned (idle detection disabled)",
+        "Integration test: with `idle_timeout_secs = 1`, do nothing for ~2s after start, assert exactly one `prompt.suggest_done` event lands on stdout; do nothing for another ~2s, assert exactly one more lands",
+        "Integration test: with `idle_timeout_secs = 1` and a heartbeat POSTed every 500ms, no `prompt.suggest_done` event lands within 3s",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-038",
+      "title": "Build transcript pure function (threads in document order)",
+      "description": "Source: PRD US-013 acceptance criterion 3. As the server, I want a pure `build_transcript(state: &State) -> Transcript` function that returns every thread in document order with its full payload — separately testable from the HTTP plumbing.",
+      "acceptanceCriteria": [
+        "Define `Transcript` and `TranscriptThread` structs in src/transcript.rs (serializable, camelCase JSON shapes); each TranscriptThread carries: id, anchorStart, anchorEnd, snippet, breadcrumb, replies: Vec<Reply>, takes: Vec<Take>, resolution: Option<Resolution>, createdAt, deletedAt: Option<DateTime>",
+        "Define `pub fn build_transcript(state: &State) -> Transcript`",
+        "Threads are returned in document order: ascending by (anchorStart, anchorEnd)",
+        "Soft-deleted threads are still included (with deletedAt set) so the transcript reflects the full session history",
+        "All timestamps preserved as the original ISO 8601 UTC values",
+        "Unit tests cover: doc-order sort, replies + takes attached to the right threads, resolution attached when present, deleted thread included with deletedAt, snapshot determinism (same input → same output)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-039",
+      "title": "POST /api/done — emit session.done + 200 + graceful shutdown",
+      "description": "Source: PRD US-013 acceptance criteria 2, 4, 5, 6, 7 (FR-19, FR-23 exit 0). As the user (or agent), I want one POST /api/done to seal the review, hand the transcript back to the agent on stdout, respond 200, and shut everything down cleanly.",
+      "acceptanceCriteria": [
+        "Add `POST /api/done` handler that calls `build_transcript(&state)`, emits a `session.done` stdout Event with the transcript as the payload, then returns 200 with a small JSON confirmation `{ ok: true, message: \"transcript emitted\" }`",
+        "After the response is fully written, trigger graceful shutdown of the axum server (e.g. via a `tokio::sync::Notify` or oneshot)",
+        "After graceful shutdown completes, the process exits with status 0 (FR-19, FR-23)",
+        "Subsequent API calls during the shutdown window return HTTP 503 cleanly — no panic; verified by an integration test that POSTs to /api/done and immediately POSTs to /api/threads, asserting either 503 or connection-refused (both are acceptable shutdown semantics)",
+        "Integration test: boot server, POST /api/done, assert stdout received exactly one `session.done` event whose payload deserializes as a Transcript with the seeded thread, assert serve() returns Ok within 1s",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-040",
+      "title": "Frontend: rename Copy All → Done, wire POST /api/done, show close-tab banner",
+      "description": "Source: PRD US-013 acceptance criterion 1, 5. As the user, the header button I press to wrap up reads \"Done — send to chat\", and after I press it the page tells me it's safe to close the tab.",
+      "acceptanceCriteria": [
+        "Rename the existing `#copy-all` header button label to \"Done — send to chat\" (id may stay the same or be renamed — implementer's choice as long as styling carries over)",
+        "Replace its click handler: instead of the clipboard-copy behaviour, POST /api/done; on a 200 response, render an in-page banner (e.g. floating header strip) reading \"You can close this tab.\"",
+        "After the banner appears, no further mutations are attempted (subsequent SSE events are ignored, all interaction is no-op)",
+        "On a non-2xx response, surface the same inline error pattern as spec 32 (e.g. \"couldn't finish — retry?\") — do not show the close-tab banner",
+        "Manual smoke test: launch `discuss <file>`, click Done, observe the banner, observe the CLI emitted `session.done` to stdout and exited 0",
+        "Verify in browser using dev-browser skill",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-041",
+      "title": "History archive write on Done",
+      "description": "Source: PRD US-014 acceptance criteria 1-3 (FR-24, FR-25). As a user, I want every completed review automatically archived to disk so I can revisit it later, with write failures never killing the session.",
+      "acceptanceCriteria": [
+        "On POST /api/done (after building the transcript), also write the same JSON to `<history_dir>/<source-basename>/<ISO8601-timestamp>.json` where history_dir defaults to `~/.discuss/history/` (resolved via `directories`)",
+        "`<source-basename>` is the input file's stem (no extension); non-filename-safe characters (slashes, colons, etc.) are replaced with `_`; falls back to `\"unnamed\"` if the input was stdin or unresolvable",
+        "Parent directory is created on demand via `fs::create_dir_all`",
+        "Write failures (permission denied, disk full, etc.) emit a single WARN to tracing AND a stderr line, but do NOT fail the /api/done response or the session shutdown",
+        "Integration test (using a tempdir as history_dir): POST /api/done writes the expected JSON file at the expected path; the file content equals the session.done event's transcript payload",
+        "Integration test: a write failure (e.g. history_dir set to a path under a read-only parent) does not panic, does not change the /api/done response, and the process still exits 0",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-042",
+      "title": "--no-save flag + --history-dir override + no_save config",
+      "description": "Source: PRD US-014 acceptance criteria 4 and 5. As a user, I want CLI / config controls to suppress the archive entirely or relocate it for a single invocation.",
+      "acceptanceCriteria": [
+        "Add `--no-save` and `--history-dir <path>` flags to the top-level CLI (clap)",
+        "Resolution: --no-save wins over config no_save (both true → suppress); --history-dir wins over config history_dir (both set → use CLI)",
+        "When suppressed, POST /api/done still emits the stdout `session.done` event but does NOT write a history file (verified by an integration test)",
+        "Integration test (--history-dir <tempdir>): the file lands in <tempdir>/<basename>/*.json instead of ~/.discuss/history/...",
+        "`--help` documents both flags",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-043",
+      "title": "install.sh dual-mode (clone-build + curl-download)",
+      "description": "Source: PRD US-015 (all acceptance criteria). As a user, I want one install script that works whether I cloned the repo or curl-piped it from GitHub Releases.",
+      "acceptanceCriteria": [
+        "Author install.sh at repo root with both modes",
+        "Detection: if Cargo.toml is present next to the script, use the clone-build path; else use the curl-download path",
+        "Clone-build path: run `cargo build --release`, copy `target/release/discuss` to `$INSTALL_DIR` (default `/usr/local/bin`, override via `DISCUSS_INSTALL_DIR`)",
+        "Curl-download path: detect platform via `uname -s` and `uname -m` mapped to a target triple (at minimum `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`); fetch `discuss-vX.Y.Z-<target>.tar.gz` from the latest GitHub Release; extract; install to $INSTALL_DIR",
+        "macOS quarantine handled (or documented in the failure message if user action is required)",
+        "PATH check at the end: if $INSTALL_DIR is not on PATH, print a clear instruction (with the right shell-rc snippet)",
+        "Respect `NO_COLOR`; detect TTY via `[ -t 1 ]` to decide whether to emit color/decorations",
+        "Script exits non-zero on any failure with a clear error message (e.g. \"failed to download <url>: <http code>\")",
+        "Manual smoke test (clone path) on the developer's local machine: `./install.sh` → `which discuss` returns the install path; `discuss --version` works",
+        "`cargo fmt --check` passes (no Rust changes expected; this gate is a sanity check that nothing else regressed)",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-044",
+      "title": "GitHub Actions CI workflow",
+      "description": "Source: PRD US-016 (all acceptance criteria). As a maintainer, I want every push to main and every pull request to run formatting, lint, build, and test gates with warnings treated as errors.",
+      "acceptanceCriteria": [
+        "Create `.github/workflows/ci.yml`",
+        "Triggers: `push` to `main` and `pull_request` (any branch)",
+        "Concurrency group: `${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true` (cancels stale runs on the same ref)",
+        "Workflow-level env: `RUSTFLAGS: \"-D warnings\"` and `CARGO_INCREMENTAL: \"0\"`",
+        "Steps in order: checkout (actions/checkout@v4), install stable toolchain with rustfmt + clippy (e.g. `dtolnay/rust-toolchain@stable`), `Swatinem/rust-cache@v2`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo build --all-targets`, `cargo test`",
+        "CI passes on the introducing commit (run locally with `act` if available, or push to a branch and verify)",
+        "`cargo fmt --check` still passes locally",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-045",
+      "title": "CHANGELOG.md skeleton with [Unreleased] section",
+      "description": "Source: PRD US-017 acceptance criterion 5. As a maintainer, I want CHANGELOG.md committed with at least an `## [Unreleased]` section so the release workflow has something to extract on first release.",
+      "acceptanceCriteria": [
+        "Create CHANGELOG.md at repo root following Keep a Changelog conventions",
+        "File contains an `## [Unreleased]` heading and at minimum the standard sub-sections (Added / Changed / Fixed) — empty bullets are OK",
+        "File header references the project name and a brief description of what the changelog covers",
+        "Manual sanity check: `awk '/^## \\[Unreleased\\]/,/^## \\[/' CHANGELOG.md` extracts a non-empty section",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-046",
+      "title": "GitHub Actions release workflow (tag-triggered)",
+      "description": "Source: PRD US-017 acceptance criteria 1-4, 6. As a maintainer, I want pushing a `vX.Y.Z` tag to build platform binaries, generate checksums, extract release notes, and publish a GitHub Release automatically — with no secrets beyond GITHUB_TOKEN.",
+      "acceptanceCriteria": [
+        "Create `.github/workflows/release.yml`",
+        "Triggers: tags matching `v*`",
+        "Build matrix includes `aarch64-apple-darwin` (required); add commented-out placeholder entries for `x86_64-apple-darwin` and `x86_64-unknown-linux-gnu` so they are easy to enable later",
+        "Each matrix job: checkout, install toolchain for the target, `cargo build --release --target <triple>`, package the binary as `discuss-${{ github.ref_name }}-<target>.tar.gz`, upload as a workflow artifact",
+        "After all matrix builds succeed, a publish job: downloads all artifacts, generates `checksums-sha256.txt` (sha256sum across the .tar.gz files), extracts the section for ${{ github.ref_name }} from CHANGELOG.md (e.g. via awk), creates a GitHub Release using `softprops/action-gh-release@v2` (or equivalent) with the extracted notes and the artifacts attached",
+        "Workflow does not require any secrets beyond `GITHUB_TOKEN` (no manual NPM_TOKEN, no PAT)",
+        "Document in CHANGELOG.md that pushing `v0.1.0` is the canonical first-release smoke test (do not actually push the tag in this spec)",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-047",
+      "title": "discuss update --check (releases/latest redirect-trick + semver compare)",
+      "description": "Source: PRD US-018 acceptance criteria 1, 4, 5, 6. As a user, I want `discuss update --check` to tell me whether a newer release exists, without requiring an API token and without ever phoning home automatically.",
+      "acceptanceCriteria": [
+        "Add `reqwest` (blocking) and `semver` to Cargo.toml",
+        "Implement `discuss update --check`: GET `https://github.com/<owner>/<repo>/releases/latest` with redirects DISABLED; read the `Location` response header; the trailing path segment is the latest tag (e.g. `v0.2.1`); strip the leading `v` and compare to `env!(\"CARGO_PKG_VERSION\")` via the `semver` crate",
+        "Print exactly one line to STDERR (never stdout) summarising current vs latest, e.g. `current: 0.1.0  latest: 0.2.1  (a newer version is available — run \\`discuss update -y\\`)` or `current: 0.1.0  latest: 0.1.0  (you're up to date)`",
+        "3-second connect timeout on the HTTP request; failures (network down, 5xx, missing Location header) print an actionable error to stderr and exit non-zero",
+        "There is NO passive / automatic update check anywhere else in the codebase — verified by a grep test that asserts `update::check` is only referenced from the `discuss update` subcommand",
+        "Subcommand `--help` documents that updates are explicit-only and that no env opt-out is needed",
+        "Unit tests cover: parse the latest tag from a synthetic Location header (e.g. `/owner/repo/releases/tag/v1.2.3` → \"1.2.3\"), semver compare upgrades / downgrades / equal, missing Location → actionable error",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-048",
+      "title": "discuss update -y (download + sha256 verify + self-replace)",
+      "description": "Source: PRD US-018 acceptance criteria 2, 3, 4. As a user, I want `discuss update -y` to download the platform-appropriate tarball, verify its sha256 against the published checksums file, and atomically swap the running binary.",
+      "acceptanceCriteria": [
+        "Add `self-replace` to Cargo.toml",
+        "Implement `discuss update -y` (alias `--yes`) — and the unflagged `discuss update` interactive prompt below",
+        "Determine current platform target triple (cfg-based or via `std::env::consts`); construct the asset URL `discuss-vX.Y.Z-<target>.tar.gz` from the latest release",
+        "Download the tarball + the `checksums-sha256.txt` from the same release; verify the sha256 of the downloaded tarball matches the entry in checksums; bail with a clear error otherwise",
+        "Extract to a temp file, then atomically swap the running binary using `self-replace::self_replace`",
+        "Without `-y`: if stdin is a TTY, prompt the user (\"Update from X to Y? [y/N]\") and proceed only on `y`/`yes`; if stdin is non-TTY, error out and require explicit `-y`",
+        "3-second connect timeout on each HTTP request; failures (network, sha256 mismatch, missing assets, etc.) print an actionable stderr error and exit non-zero",
+        "Unit tests cover the helper paths that don't require the network: target-triple selection per cfg, sha256 verification (good vs bad), TTY-vs-non-TTY prompt branching (with the prompt source dependency-injected)",
+        "Manual smoke test (after spec 46 lands AND a v0.1.0 release exists on GitHub): `discuss update --check` shows current vs latest; `discuss update -y` upgrades the binary in place",
+        "`cargo fmt --check` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo check` passes",
+        "`cargo clippy --all-targets -- -D warnings` passes",
+        "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
