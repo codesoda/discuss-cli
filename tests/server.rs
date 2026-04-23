@@ -7,7 +7,10 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
 use discuss::state::{Draft, Resolution, State, Thread, ThreadId, ThreadKind};
-use discuss::{serve, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind};
+use discuss::{
+    serve, serve_with_ready, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter,
+    EventKind,
+};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -1668,6 +1671,38 @@ async fn rejects_non_loopback_bind_addr() {
         error,
         DiscussError::ServerBindError { addr: rejected, .. } if rejected == addr
     ));
+}
+
+#[tokio::test]
+async fn serve_with_ready_reports_listener_address_after_bind() {
+    let addr = free_loopback_addr();
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve_with_ready(
+        addr,
+        AppState::for_process(),
+        async move {
+            let _ = shutdown_rx.await;
+        },
+        move |listening_addr| {
+            ready_tx
+                .send(listening_addr)
+                .expect("ready receiver should be active");
+        },
+    ));
+
+    let listening_addr = timeout(Duration::from_secs(1), ready_rx)
+        .await
+        .expect("ready callback should run")
+        .expect("ready callback should send address");
+    assert_eq!(listening_addr, addr);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
 }
 
 #[tokio::test]

@@ -1,6 +1,8 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, TcpListener};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -43,6 +45,46 @@ fn cli_busy_port_exits_three_and_reports_port() {
     assert!(stderr.contains(&format!("port {busy_port}")));
     assert!(stderr.contains("pass --port <N>"));
     assert!(stderr.contains("stop the other instance"));
+}
+
+#[test]
+fn cli_no_open_logs_listening_url_to_stderr() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg(&markdown_path)
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn discuss binary");
+    let stderr = child.stderr.take().expect("stderr pipe should be present");
+    let (line_tx, line_rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let result = reader.read_line(&mut line).map(|_| line);
+        let _ = line_tx.send(result);
+    });
+
+    let line = line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("listening line should be written")
+        .expect("stderr line should be readable");
+    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn free_port() -> u16 {

@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod exit;
+pub mod launch;
 pub mod logging;
 pub mod render;
 pub mod server;
@@ -21,9 +22,10 @@ pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use events::{Event, EventEmitter, EventKind};
 pub use exit::exit_code_for_error;
+pub use launch::{announce_listening, loopback_url, SystemBrowserLauncher};
 pub use logging::init_tracing;
 pub use render::render;
-pub use server::{serve, AppState};
+pub use server::{serve, serve_with_ready, AppState};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
 
@@ -39,11 +41,13 @@ where
 {
     let cli::Args {
         port,
+        no_open,
         file,
         command,
     } = args;
     let config = Config::resolve(ConfigOverrides {
         port,
+        auto_open: no_open.then_some(false),
         ..ConfigOverrides::default()
     })?;
     init_tracing(&config)?;
@@ -58,11 +62,27 @@ where
             let markdown_source = read_markdown_file(&file)?;
             let port = config.port.unwrap_or(DEFAULT_PORT);
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            let auto_open = config.auto_open;
 
-            serve(
+            server::serve_with_ready(
                 addr,
                 AppState::for_process().with_markdown_source(markdown_source),
                 shutdown,
+                move |listening_addr| {
+                    let url = launch::loopback_url(listening_addr);
+                    let launcher = launch::SystemBrowserLauncher;
+                    let mut stderr = io::stderr();
+
+                    if let Err(error) =
+                        launch::announce_listening(&mut stderr, &launcher, &url, auto_open)
+                    {
+                        tracing::warn!(
+                            %url,
+                            error = %error,
+                            "failed to write listening URL to stderr"
+                        );
+                    }
+                },
             )
             .await
         }

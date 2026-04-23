@@ -31,6 +31,9 @@ pub struct Args {
     )]
     pub port: Option<u16>,
 
+    #[arg(long, help = "Do not open the browser after the server starts")]
+    pub no_open: bool,
+
     #[arg(value_name = "FILE", help = "Markdown file to review")]
     pub file: Option<PathBuf>,
 
@@ -65,6 +68,7 @@ mod tests {
         let args = Args::try_parse_from(["discuss", "plan.md"]).expect("file arg should parse");
 
         assert_eq!(args.port, None);
+        assert!(!args.no_open);
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
         assert!(args.command.is_none());
     }
@@ -75,6 +79,16 @@ mod tests {
             .expect("port arg should parse");
 
         assert_eq!(args.port, Some(8888));
+        assert!(!args.no_open);
+        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+    }
+
+    #[test]
+    fn parses_no_open_flag() {
+        let args = Args::try_parse_from(["discuss", "--no-open", "plan.md"])
+            .expect("no-open arg should parse");
+
+        assert!(args.no_open);
         assert_eq!(args.file, Some(PathBuf::from("plan.md")));
     }
 
@@ -91,6 +105,7 @@ mod tests {
         let args = Args::try_parse_from(["discuss", "update"]).expect("update should parse");
 
         assert_eq!(args.port, None);
+        assert!(!args.no_open);
         assert!(args.file.is_none());
         assert!(matches!(args.command, Some(Commands::Update)));
     }

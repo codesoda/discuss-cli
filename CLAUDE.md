@@ -6,7 +6,8 @@
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` when parsing file contents so errors preserve the config path and line/column location.
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution. Internally, file/env layers are partial so omitted keys do not reset values from lower-priority layers.
-- Runtime launch resolves `--port` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve`; do not add a free-port fallback because agent URLs must stay predictable.
+- Runtime launch resolves `--port`/`--no-open` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve_with_ready`; do not add a free-port fallback because agent URLs must stay predictable.
+- Browser launch/status helpers live in `src/launch.rs`; write the single `listening on http://127.0.0.1:<port>` line to stderr after bind, call `open::that` only when `auto_open` remains true, and log browser-open failures with tracing warnings instead of failing the session.
 - Tracing initialization lives in `src/logging.rs`; `run` resolves `Config` and calls `init_tracing`, which must write only to the rolling log file because stdout is reserved for JSON events.
 - Markdown rendering lives in `src/render.rs` as pure `render(&str) -> String`; configure Comrak there, and keep the dependency on `default-features = false` unless a future story explicitly needs CLI/syntax-highlighting features.
 - Bundled page-shell rendering lives in `src/template.rs`; call `render_page(rendered_markdown, initial_state_json)` after markdown rendering to preserve `discuss.html` while injecting `#doc-content` and seeding `window.__DISCUSS_INITIAL_STATE__`.

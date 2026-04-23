@@ -8,7 +8,8 @@
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
 - Config defaults and TOML parsing live in `src/config.rs`; use `Config::from_toml_str` to preserve `DiscussError::ConfigParseError` path and line/column details.
 - Use `Config::resolve(ConfigOverrides)` for full layered config resolution; file/env layers are partial so omitted keys do not reset lower-priority values.
-- Runtime launch resolves `--port` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve`; do not add a free-port fallback because agent URLs must stay predictable.
+- Runtime launch resolves `--port`/`--no-open` through `ConfigOverrides` and binds exactly `127.0.0.1:<port-or-7777>` via `serve_with_ready`; do not add a free-port fallback because agent URLs must stay predictable.
+- Browser launch/status helpers live in `src/launch.rs`; write the single `listening on http://127.0.0.1:<port>` line to stderr after bind, call `open::that` only when `auto_open` remains true, and log browser-open failures with tracing warnings instead of failing the session.
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
@@ -311,4 +312,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: `discuss <file>` now runs the long-lived server path, while quick binary success tests should use a non-serving command such as `discuss update`.
   - Gotchas encountered: a file invocation in integration tests will hang unless the test uses a shutdown-capable helper or intentionally exercises an early failure such as a busy port.
   - Useful context: verification included strict Cargo checks plus `PATH="$HOME/.local/bin:$PATH" ./install.sh` and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
+---
+## 2026-04-23 15:32:00 AEST - US-034
+- Implemented `--no-open`, post-bind stderr URL reporting, and auto-open browser launch via the `open` crate.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/cli.rs`, `src/launch.rs`, `src/lib.rs`, `src/server.rs`, `tests/cli.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: CLI launch side effects are isolated in `src/launch.rs`, while `serve_with_ready` lets the runtime announce the final URL only after the listener binds.
+  - Gotchas encountered: integration tests that exercise `discuss <file>` must use `--no-open` and kill the long-lived child after reading the `listening on ...` stderr line.
+  - Useful context: browser testing tools were not available; verification covered injected launcher unit tests, stderr integration coverage, strict Cargo checks, `./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`.
 ---

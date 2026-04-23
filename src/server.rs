@@ -132,11 +132,27 @@ pub async fn serve<F>(addr: SocketAddr, app_state: AppState, shutdown: F) -> Res
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    serve_with_ready(addr, app_state, shutdown, |_| {}).await
+}
+
+pub async fn serve_with_ready<F, R>(
+    addr: SocketAddr,
+    app_state: AppState,
+    shutdown: F,
+    on_ready: R,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce(SocketAddr),
+{
     ensure_loopback(addr)?;
 
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|error| bind_error(addr, error))?;
+    let listening_addr = listener.local_addr().unwrap_or(addr);
+    on_ready(listening_addr);
+
     let router = build_router(app_state.clone());
     let shutdown_signal = app_state.shutdown.clone();
 
