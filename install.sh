@@ -216,6 +216,40 @@ print_path_hint() {
   esac
 }
 
+install_skill_symlinks() {
+  SOURCE_DIR="$1"
+  SKILL_SOURCE="${SOURCE_DIR}/skills/discuss"
+
+  if [ ! -d "${SKILL_SOURCE}" ]; then
+    warn "skill source not found at ${SKILL_SOURCE}; skipping skill install"
+    return 0
+  fi
+
+  for AGENT_ROOT in "${HOME}/.claude" "${HOME}/.codex" "${HOME}/.agents"; do
+    [ -d "${AGENT_ROOT}" ] || continue
+
+    SKILLS_DIR="${AGENT_ROOT}/skills"
+    mkdir -p "${SKILLS_DIR}" || {
+      warn "failed to create ${SKILLS_DIR}; skipping skill link"
+      continue
+    }
+
+    TARGET="${SKILLS_DIR}/discuss"
+    if [ -L "${TARGET}" ]; then
+      rm "${TARGET}"
+    elif [ -e "${TARGET}" ]; then
+      warn "${TARGET} exists and is not a symlink; skipping"
+      continue
+    fi
+
+    ln -s "${SKILL_SOURCE}" "${TARGET}" || {
+      warn "failed to link ${TARGET} -> ${SKILL_SOURCE}"
+      continue
+    }
+    status "Linked skill ${TARGET} -> ${SKILL_SOURCE}"
+  done
+}
+
 verify_install() {
   status "Installed ${BINARY_NAME} to ${INSTALLED_BINARY}"
   status "Linked ${LINK_BINARY} to ${INSTALLED_BINARY}"
@@ -240,6 +274,7 @@ SCRIPT_DIR="$(script_dir)" || die "failed to determine script directory"
 
 if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -f "${SCRIPT_DIR}/Cargo.toml" ]; then
   run_source_install "${SCRIPT_DIR}"
+  install_skill_symlinks "${SCRIPT_DIR}"
 else
   run_download_install
 fi

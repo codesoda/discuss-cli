@@ -12,6 +12,20 @@ Open a markdown file in `discuss`, watch the user drop comments and replies, and
 
 - `$ARGUMENTS` — Path to the markdown file to review. Required. If missing, ask the user which file and stop.
 
+## Preflight: Ensure `discuss` is installed
+
+Run `command -v discuss` (via Bash). If it resolves to a path, skip ahead to Step 0.
+
+If it doesn't resolve, the binary isn't on PATH. Ask the user:
+
+> `discuss` isn't on your PATH. Install it now? (runs `curl -sSL https://raw.githubusercontent.com/chrisraethke/discuss-cli/main/install.sh | sh`)
+
+On yes, run the install command via Bash. On completion, retry `command -v discuss`.
+
+If it still doesn't resolve, fall back to the absolute install path: `~/.discuss/bin/discuss`. Check it exists and is executable — if so, use that path for every subsequent call to `discuss` in this session. If it also doesn't exist, report the install failed and stop.
+
+If the user declines the install, stop.
+
 ## Step 0: Load deferred tool schemas
 
 `Monitor` may be a deferred tool. Before calling it, load its schema:
@@ -30,7 +44,7 @@ discuss "$ARGUMENTS" 2> /tmp/discuss-stderr.log
 
 Use `run_in_background: true`. Record the returned task ID (e.g., `b3mvlm9a4`).
 
-Don't preflight. If the port is already bound or the file doesn't exist, discuss will exit with a clear error — let that surface naturally and report it. Optionally `Read` the markdown source afterward for context on anchor snippets.
+No further preflight — if the port is already bound or the file doesn't exist, discuss will exit with a clear error. Let that surface naturally and report it. Optionally `Read` the markdown source afterward for context on anchor snippets.
 
 ## Step 2: Confirm startup and capture URL
 
