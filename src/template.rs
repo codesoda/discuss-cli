@@ -16,9 +16,8 @@ pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String 
 }
 
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
-    let section_start = template
-        .find(DOC_CONTENT_OPEN)
-        .expect("bundled template must contain #doc-content");
+    let section_start =
+        find_doc_content_open(template).expect("bundled template must contain #doc-content");
     let content_start = section_start + DOC_CONTENT_OPEN.len();
     let section_end = template[content_start..]
         .find(DOC_CONTENT_CLOSE)
@@ -36,6 +35,17 @@ fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
     }
     page.push_str(&template[section_end..]);
     page
+}
+
+fn find_doc_content_open(html: &str) -> Option<usize> {
+    let search_start = html
+        .find("<body")
+        .and_then(|body_start| html[body_start..].find('>').map(|end| body_start + end + 1))
+        .unwrap_or(0);
+
+    html[search_start..]
+        .find(DOC_CONTENT_OPEN)
+        .map(|index| search_start + index)
 }
 
 fn inject_initial_state(page: &str, initial_state_json: &str) -> String {
@@ -81,7 +91,7 @@ mod tests {
 
     fn doc_content_inner(html: &str) -> &str {
         let content_start =
-            html.find(DOC_CONTENT_OPEN).expect("doc-content start") + DOC_CONTENT_OPEN.len();
+            find_doc_content_open(html).expect("doc-content start") + DOC_CONTENT_OPEN.len();
         let content_end = html[content_start..]
             .find(DOC_CONTENT_CLOSE)
             .expect("doc-content end")
@@ -253,5 +263,28 @@ mod tests {
         assert!(page.contains("function scheduleEventReconnect()"));
         assert!(page.contains("refreshAllThreadsFromState()"));
         assert!(page.contains("refreshThreadFromState(reply.threadId)"));
+    }
+
+    #[test]
+    fn bundled_template_interleaves_takes_and_replies_chronologically() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("return sortCommentsByCreatedAt(items);"));
+        assert!(page.contains("function sortCommentsByCreatedAt(items)"));
+        assert!(page.contains("function commentTimestamp(item)"));
+        assert!(page.contains(r#".user-comment[data-kind="take"]"#));
+        assert!(page.contains("const metaPrefix = it.kind === 'take' ? 'Agent take"));
+    }
+
+    #[test]
+    fn bundled_template_marks_thread_contributor_state() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains(".thread-marker.kind-mixed"));
+        assert!(page.contains("function markerKindForThread(state, threadId, prep)"));
+        assert!(page.contains("if (hasTake && hasReply) return 'mixed';"));
+        assert!(page.contains("if (hasTake) return 'pending';"));
+        assert!(page.contains("function latestContributorForThread(state, threadId, prep)"));
+        assert!(page.contains("latest: ${latestContributorForThread(state, tid, prep)}"));
     }
 }

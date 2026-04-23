@@ -314,6 +314,7 @@
     box-shadow: 0 0 0 1px var(--line-strong), 0 2px 6px rgba(0,0,0,0.18);
   }
   .thread-marker.kind-prepopulated { background: var(--marker-blue); }
+  .thread-marker.kind-mixed { background: var(--marker-blue); }
   .thread-marker.kind-pending { background: var(--marker-yellow); color: #5a4500; }
   .thread-marker.kind-user { background: var(--marker-pink); }
   .thread-marker.active { transform: scale(1.2); box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0,0,0,0.2); }
@@ -476,6 +477,17 @@
     white-space: pre-wrap;
     font-size: 13px;
     position: relative;
+  }
+  .thread-take {
+    background: var(--callout);
+    border-left: 3px solid var(--callout-border);
+    padding: 7px 10px;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+  }
+  .user-comment[data-kind="take"] {
+    background: var(--callout);
+    border-left-color: var(--callout-border);
   }
   .user-comment .meta { font-size: 10.5px; color: var(--muted); font-style: italic; margin-top: 3px; }
 
@@ -1640,7 +1652,50 @@
       if (take.id && seenTakeIds.has(take.id)) return;
       items.push(take);
     });
-    return items;
+    return sortCommentsByCreatedAt(items);
+  }
+
+  function sortCommentsByCreatedAt(items) {
+    return items
+      .map((item, index) => ({ item, index }))
+      .sort((a, b) => {
+        const timeDiff = commentTimestamp(a.item) - commentTimestamp(b.item);
+        return timeDiff || a.index - b.index;
+      })
+      .map(entry => entry.item);
+  }
+
+  function commentTimestamp(item) {
+    const time = Date.parse(item.addedAt || item.createdAt || '');
+    return Number.isNaN(time) ? Number.MAX_SAFE_INTEGER : time;
+  }
+
+  function hasThreadTake(state, threadId, prep) {
+    return commentsForThread(state, threadId).some(item => item.kind === 'take')
+      || !!(prep && typeof prep.take === 'string' && prep.take.trim());
+  }
+
+  function hasThreadReply(state, threadId) {
+    return commentsForThread(state, threadId)
+      .some(item => item.kind !== 'take' && item.kind !== 'thread');
+  }
+
+  function markerKindForThread(state, threadId, prep) {
+    const hasTake = hasThreadTake(state, threadId, prep);
+    const hasReply = hasThreadReply(state, threadId);
+    if (hasTake && hasReply) return 'mixed';
+    if (hasTake) return 'pending';
+    if (hasReply || String(threadId).startsWith('u') || (prep && prep.userComment)) return 'user';
+    return prep && !prep.pending ? 'prepopulated' : 'pending';
+  }
+
+  function latestContributorForThread(state, threadId, prep) {
+    const comments = commentsForThread(state, threadId);
+    if (comments.length) {
+      return comments[comments.length - 1].kind === 'take' ? 'agent' : 'you';
+    }
+    if (prep && typeof prep.take === 'string' && prep.take.trim()) return 'agent';
+    return 'you';
   }
 
   function wireFollowup(threadEl, threadId) {
@@ -1988,8 +2043,7 @@
       list.forEach(thread => {
         const tid = thread.getAttribute('data-thread-id');
         const data = prepopulated.find(p => p.id === tid);
-        const isUser = tid.startsWith('u');
-        const kind = isUser ? 'user' : (data && data.pending ? 'pending' : 'prepopulated');
+        const kind = markerKindForThread(state, tid, data);
         const resolved = !!state.resolutions[tid];
         const hasDraftFollowup = !!(followupDrafts[tid] && (followupDrafts[tid].text || '').trim());
         const marker = document.createElement('button');
@@ -2062,7 +2116,9 @@
     const tid = marker.getAttribute('data-thread-id');
     const thread = document.querySelector(`.thread[data-thread-id="${tid}"]`);
     if (!thread) return;
+    const state = loadState();
     const prep = prepopulated.find(p => p.id === tid);
+    const comments = commentsForThread(state, tid);
     let kindLabel = 'Your thread';
     let quote = '';
     let extra = '';
@@ -2074,12 +2130,13 @@
       const start = parseInt(thread.getAttribute('data-anchor-start'));
       const end = parseInt(thread.getAttribute('data-anchor-end'));
       extra = start === end ? `#${start}` : `#${start}–${end}`;
-      const first = (loadState().followups[tid] || [])[0];
+      const first = comments[0];
       quote = first ? first.text : '(empty)';
     }
-    const followupCount = (loadState().followups[tid] || []).length;
-    const countSuffix = followupCount ? ` · ${followupCount} note${followupCount > 1 ? 's' : ''}` : '';
-    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div style="margin-top:4px; font-size:10.5px; opacity:0.7;">${escapeHtml(extra)}</div>`;
+    const noteCount = comments.length;
+    const countSuffix = noteCount ? ` · ${noteCount} note${noteCount > 1 ? 's' : ''}` : '';
+    const latestSuffix = ` · latest: ${latestContributorForThread(state, tid, prep)}`;
+    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}${escapeHtml(latestSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div style="margin-top:4px; font-size:10.5px; opacity:0.7;">${escapeHtml(extra)}</div>`;
     tooltip.style.display = 'block';
     positionTooltip(marker);
   }

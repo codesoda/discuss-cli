@@ -11,6 +11,7 @@
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
+- `src/template.rs` must find the real `#doc-content` section after `<body>` because the top instructional comment also contains the literal `<section id="doc-content">` text.
 - Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
 - Static browser asset routes live in `src/server.rs`; keep them exact-path, serve from `src/assets.rs`, and include `Cache-Control: public, max-age=86400`.
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
@@ -275,4 +276,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: EventSource startup belongs after initial state hydration/render, and SSE handlers should update `currentState` then re-render affected cards/markers rather than fetching full state.
   - Gotchas encountered: mutation tabs receive their own SSE echo after optimistic updates, so handlers need duplicate-safe IDs and pending-thread reconciliation.
   - Useful context: no dev-browser/browser testing tool is available in this session; manual two-tab browser verification is still needed, but the main inline script parse, strict Cargo checks, and installer smoke test passed.
+---
+## 2026-04-23 15:03:59 AEST - US-031
+- Implemented chronological frontend rendering for mixed user replies and agent takes, blue take styling, marker color precedence, and latest-contributor tooltip text.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: discussion-card message ordering should flow through `commentsForThread(...)`, which merges display followups and raw takes before sorting by `addedAt`/`createdAt`.
+  - Gotchas encountered: `src/template.rs` must avoid matching the instructional comment's literal `<section id="doc-content">` when injecting rendered markdown, or styles before the real section are stripped from served pages.
+  - Useful context: no dev-browser/browser testing tool is available in this session; verification was main inline script parsing, strict Cargo checks, and the final installer smoke test.
 ---
