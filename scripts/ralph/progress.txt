@@ -14,6 +14,7 @@
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
 - Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
 - Stdout JSON events live in `src/events.rs`; route all machine-readable stdout writes through `EventEmitter` and keep human-readable output on stderr or tracing.
+- Browser SSE broadcasts live in `src/sse.rs`; use `EventBus` as an `Arc`-friendly Tokio broadcast wrapper alongside `SharedState`, and keep `BroadcastEvent` distinct from stdout `Event`.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -112,4 +113,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: stdout event types and writes should stay centralized in `src/events.rs`; use `EventEmitter::stdout()` for the real stream and `EventEmitter::new(writer)` for tests.
   - Gotchas encountered: tests intentionally guard against `println!`, `print!`, and `io::stdout` outside `src/events.rs` so stderr output via `eprintln!` remains allowed while stdout stays machine-readable.
   - Useful context: `EventKind::ALL` is kept next to the enum so future event additions can be covered by serialization tests.
+---
+## 2026-04-23 13:08:17 AEST - US-013
+- Implemented the Tokio broadcast-backed SSE event bus with a distinct `BroadcastEvent` wire type, publish/subscribe API, crate exports, and async unit coverage for fan-out and dropped subscribers.
+- Files changed: `Cargo.toml`, `Cargo.lock`, `src/sse.rs`, `src/lib.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: browser SSE broadcasts should use `EventBus` from `src/sse.rs`, held alongside `SharedState` by future server state.
+  - Gotchas encountered: `tokio::sync::broadcast::Sender::send` returns an error when there are no active receivers; `EventBus::publish` intentionally ignores that because disconnected browsers should not fail mutations.
+  - Useful context: `BroadcastEvent` is intentionally separate from stdout `Event`, so future `/api/events` serialization can evolve independently from the newline-delimited agent stream.
 ---
