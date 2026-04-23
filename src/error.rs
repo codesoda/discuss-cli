@@ -48,6 +48,15 @@ pub enum DiscussError {
         #[source]
         source: io::Error,
     },
+
+    #[error(
+        "logging initialization failed for {path}: {source} - check directory permissions or set HOME to a writable location"
+    )]
+    LoggingInitError {
+        path: PathBuf,
+        #[source]
+        source: BoxedError,
+    },
 }
 
 #[cfg(test)]
@@ -145,6 +154,22 @@ mod tests {
                 "127.0.0.1:7777",
                 "address already in use",
                 "pass --port <N>",
+            ],
+        );
+    }
+
+    #[test]
+    fn logging_init_error_message_names_path_source_and_suggestion() {
+        assert_display_contains(
+            DiscussError::LoggingInitError {
+                path: PathBuf::from("/tmp/discuss/logs"),
+                source: Box::new(io::Error::other("permission denied")),
+            },
+            &[
+                "logging initialization failed",
+                "/tmp/discuss/logs",
+                "permission denied",
+                "check directory permissions",
             ],
         );
     }

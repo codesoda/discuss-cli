@@ -12,7 +12,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         DiscussError::PortInUse { .. } | DiscussError::ServerBindError { .. } => EXIT_SERVER_ERROR,
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
-        | DiscussError::RenderError { .. } => EXIT_GENERIC_FAILURE,
+        | DiscussError::RenderError { .. }
+        | DiscussError::LoggingInitError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
 
@@ -70,6 +71,13 @@ mod tests {
                     source: io::Error::new(io::ErrorKind::AddrInUse, "address already in use"),
                 },
                 EXIT_SERVER_ERROR,
+            ),
+            (
+                DiscussError::LoggingInitError {
+                    path: PathBuf::from("/tmp/discuss/logs"),
+                    source: Box::new(io::Error::other("permission denied")),
+                },
+                EXIT_GENERIC_FAILURE,
             ),
         ];
 
