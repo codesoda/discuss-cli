@@ -12,6 +12,7 @@
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
 - Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
 - State protocol types live in `src/state/types.rs`; keep serde field names camelCase, serialize `ThreadId` transparently as a string, and encode new-thread draft anchor ranges as `"start-end"` JSON object keys.
+- Process-local review state lives in `src/state/store.rs`; use `State::new_shared()` for `Arc<RwLock<State>>`, mutate through typed accessors, and call `snapshot()` for the active browser/API state while soft-deleted threads stay preserved internally.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -94,4 +95,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: state protocol types live in `src/state/types.rs` and should derive serde with camelCase field names for browser/API compatibility.
   - Gotchas encountered: `HashMap<(usize, usize), Draft>` cannot serialize directly as a JSON object, so new-thread drafts use custom `"start-end"` keys at the serde boundary.
   - Useful context: `chrono::DateTime<Utc>` with the serde feature gives the required ISO 8601 timestamp shape for state, events, and future transcript work.
+---
+## 2026-04-23 13:00:53 AEST - US-011
+- Implemented the process-local state container with `Arc<RwLock<State>>`, typed thread/reply/take/resolution/draft mutators, active-state snapshots, and soft-delete preservation.
+- Files changed: `src/state/store.rs`, `src/state/mod.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: state store code should live in `src/state/store.rs`; handlers can use `State::new_shared()` for shared ownership and `snapshot()` when serializing active browser/API state.
+  - Gotchas encountered: soft-deleted threads should be hidden from `get_threads()` and `snapshot()` but kept internally so future transcript/history stories can still account for them.
+  - Useful context: `cargo-agent.sh` is still not present in this repo, so the exact strict Cargo commands from `AGENTS.md` remain the validation source of truth.
 ---
