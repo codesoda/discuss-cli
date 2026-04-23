@@ -22,6 +22,8 @@
 - Browser state API routes should serialize `State::snapshot()` directly so `GET /api/state` and initial page hydration share the same JSON shape.
 - Browser SSE streaming lives in `src/server.rs` at `GET /api/events`; subscribe to `AppState.bus`, emit `BroadcastEvent.kind` as the SSE event name with the JSON payload as `data`, and stop streams via `AppState::subscribe_shutdown()` during graceful shutdown.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
+- Axum 0.8 dynamic path segments use `{id}` route syntax (for example `/api/threads/{id}/replies`), not legacy `:id`.
+- Child thread mutation routes should verify the target thread is present in `State::get_threads()` before writing child state; unknown or inactive IDs return structured 404 JSON.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -184,4 +186,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: mutation handlers should keep browser SSE and stdout event payloads in sync by serializing the stored state object once and reusing that payload.
   - Gotchas encountered: `AppState` needs boxed event emitters so integration tests can capture emitted JSON lines without writing to real stdout.
   - Useful context: new user thread IDs are process-local counter IDs (`u-1`, `u-2`, ...) and created threads use an empty breadcrumb because the v1 create-thread request body does not include breadcrumb data.
+---
+## 2026-04-23 13:54:39 AEST - US-020
+- Implemented `POST /api/threads/{id}/replies` for appending user replies to active threads, including structured 404/400 errors, state insertion, SSE broadcast, and stdout `reply.added` emission.
+- Files changed: `src/server.rs`, `tests/server.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: child thread mutation routes should validate the target active thread before mutating, then serialize the stored child object once and reuse that payload for SSE and stdout events.
+  - Gotchas encountered: axum 0.8 route parameters use `{id}` syntax even when PRD labels endpoints as `:id`; clippy denies needless references in equality comparisons.
+  - Useful context: reply IDs are process-local `r-<n>` counters on `AppState`; future take endpoints can mirror this with their own counter.
 ---

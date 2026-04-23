@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
+use axum::extract::Path;
 use axum::extract::State as AxumState;
 use axum::http::header;
 use axum::http::StatusCode;
@@ -24,7 +25,7 @@ use tower_http::trace::TraceLayer;
 use crate::assets;
 use crate::events::{Event, EventEmitter, EventKind};
 use crate::sse::{BroadcastEvent, EventBus};
-use crate::state::{SharedState, State, Thread, ThreadId, ThreadKind};
+use crate::state::{Reply, SharedState, State, Thread, ThreadId, ThreadKind};
 use crate::{render, template, DiscussError, Result};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -39,6 +40,7 @@ pub struct AppState {
     markdown_source: Arc<str>,
     shutdown: ShutdownSignal,
     next_thread_number: Arc<AtomicU64>,
+    next_reply_number: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -54,6 +56,7 @@ impl AppState {
             markdown_source: Arc::from(""),
             shutdown: ShutdownSignal::new(),
             next_thread_number: Arc::new(AtomicU64::new(1)),
+            next_reply_number: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -79,6 +82,12 @@ impl AppState {
         let number = self.next_thread_number.fetch_add(1, Ordering::Relaxed);
 
         ThreadId(format!("u-{number}"))
+    }
+
+    fn next_reply_id(&self) -> String {
+        let number = self.next_reply_number.fetch_add(1, Ordering::Relaxed);
+
+        format!("r-{number}")
     }
 }
 
@@ -136,6 +145,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
         .route("/api/threads", post(post_api_threads))
+        .route("/api/threads/{id}/replies", post(post_api_thread_replies))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .fallback(not_found)
@@ -157,6 +167,11 @@ struct CreateThreadRequest {
 struct CreateThreadResponse {
     id: ThreadId,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddReplyRequest {
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -242,6 +257,91 @@ async fn post_api_threads(
         created_at,
     })
     .into_response()
+}
+
+async fn post_api_thread_replies(
+    AxumState(app_state): AxumState<AppState>,
+    Path(thread_id): Path<String>,
+    payload: std::result::Result<Json<AddReplyRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    if request.text.trim().is_empty() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "reply text must not be empty",
+        );
+    }
+
+    let thread_id = ThreadId(thread_id);
+    let reply = {
+        let Ok(mut state) = app_state.state.write() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while adding reply",
+            );
+        };
+
+        if !state
+            .get_threads()
+            .iter()
+            .any(|thread| thread.id == thread_id)
+        {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("thread not found: {}", thread_id.0),
+            );
+        }
+
+        state.add_reply(Reply {
+            id: app_state.next_reply_id(),
+            thread_id: thread_id.clone(),
+            text: request.text,
+            created_at: Utc::now(),
+        })
+    };
+
+    let payload = match serde_json::to_value(&reply) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize reply: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::ReplyAdded.to_string(),
+        payload: payload.clone(),
+    });
+
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::ReplyAdded,
+        at: reply.created_at,
+        payload,
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit reply.added event: {error}"),
+        );
+    }
+
+    Json(reply).into_response()
 }
 
 fn api_error_response(
