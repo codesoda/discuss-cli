@@ -5,6 +5,7 @@
 - Rust validation for this repo must include `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, and `RUSTFLAGS="-D warnings" cargo test`.
 - Root `install.sh` is dual-mode and POSIX `sh` compatible: source checkout mode builds with warnings denied from a colocated `Cargo.toml`, while curl/download mode resolves the latest GitHub Release asset for the detected target triple before installing to `~/.discuss/bin/discuss` and symlinking `~/.local/bin/discuss`.
 - GitHub Actions CI lives in `.github/workflows/ci.yml`; keep workflow-level `RUSTFLAGS="-D warnings"` and `CARGO_INCREMENTAL="0"`, and preserve the Rust step order `cargo fmt --check` -> `cargo clippy --all-targets -- -D warnings` -> `cargo build --all-targets` -> `cargo test`.
+- GitHub Actions release workflow lives in `.github/workflows/release.yml`; package `discuss-<tag>-<target>.tar.gz`, publish `checksums-sha256.txt`, and extract changelog notes by matching either `## [vX.Y.Z]` or `## [X.Y.Z]` headings so Keep a Changelog sections work with `v` tags.
 - `CHANGELOG.md` should follow Keep a Changelog headings; the current `awk '/^## \\[Unreleased\\]/,/^## \\[/' CHANGELOG.md` smoke check only proves the `## [Unreleased]` heading exists because the end pattern matches the same line.
 - Shared fallible APIs should use `discuss::DiscussError` and `discuss::Result`, re-exported from `src/lib.rs`.
 - Keep clap argument definitions in `src/cli.rs`; `src/main.rs` should stay thin and map app errors through `discuss::exit_code_for_error`.
@@ -419,4 +420,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: keep `CHANGELOG.md` in Keep a Changelog form with `## [Unreleased]` and `### Added` / `Changed` / `Fixed` subsections so later release automation has predictable anchors.
   - Gotchas encountered: the current `awk '/^## \\[Unreleased\\]/,/^## \\[/'` smoke check only verifies that the `## [Unreleased]` heading exists because the end pattern matches that same line; it does not prove the section body was captured.
   - Useful context: verification passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo build --all-targets`, `RUSTFLAGS="-D warnings" cargo test`, and an isolated-temp-home `./install.sh` run that preserved the real rustup toolchain via `RUSTUP_HOME`/`CARGO_HOME` while confirming `discuss --version` from PATH.
+---
+## 2026-04-23 18:02:57 AEST - US-046
+- Implemented `.github/workflows/release.yml` for tag-triggered releases: build the Apple Silicon tarball, upload artifacts, generate `checksums-sha256.txt`, extract matching changelog notes, and publish a GitHub Release using `GITHUB_TOKEN` only.
+- Files changed: `.github/workflows/release.yml`, `CHANGELOG.md`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: release notes extraction should tolerate changelog headings with and without a leading `v` so Keep a Changelog version sections stay compatible with `v`-prefixed Git tags.
+  - Gotchas encountered: local validation for this workflow is limited to `actionlint`; the artifact upload and `softprops/action-gh-release` path still requires a real `v*` tag push on GitHub to execute end-to-end.
+  - Useful context: verification passed with `cargo fmt --check`, `RUSTFLAGS="-D warnings" cargo check`, `cargo clippy --all-targets -- -D warnings`, `RUSTFLAGS="-D warnings" cargo test`, `actionlint .github/workflows/release.yml .github/workflows/ci.yml`, `./install.sh`, and `discuss --version` from PATH.
 ---

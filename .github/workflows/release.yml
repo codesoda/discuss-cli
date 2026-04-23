@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runs_on: macos-15
+          # - target: x86_64-apple-darwin
+          #   runs_on: macos-15-intel
+          # - target: x86_64-unknown-linux-gnu
+          #   runs_on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Package release tarball
+        run: |
+          mkdir -p dist/package
+          install -m 0755 "target/${{ matrix.target }}/release/discuss" dist/package/discuss
+          tar -C dist/package -czf "dist/discuss-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" discuss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/discuss-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum discuss-*.tar.gz > checksums-sha256.txt
+
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          PREFIX_TAG="## [${TAG}]"
+          PREFIX_VERSION="## [${VERSION}]"
+          awk -v prefix_tag="${PREFIX_TAG}" -v prefix_version="${PREFIX_VERSION}" '
+            index($0, "## [") == 1 {
+              if (in_section) {
+                exit
+              }
+              if (index($0, prefix_tag) == 1 || index($0, prefix_version) == 1) {
+                in_section = 1
+              }
+            }
+            in_section {
+              print
+            }
+          ' CHANGELOG.md > dist/release-notes.md
+
+          if [ ! -s dist/release-notes.md ]; then
+            echo "missing release notes for ${TAG} in CHANGELOG.md" >&2
+            exit 1
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: dist/release-notes.md
+          files: |
+            dist/discuss-*.tar.gz
+            dist/checksums-sha256.txt
+          fail_on_unmatched_files: true
