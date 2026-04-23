@@ -324,4 +324,21 @@ mod tests {
         assert!(page.contains("function latestContributorForThread(state, threadId, prep)"));
         assert!(page.contains("latest: ${latestContributorForThread(state, tid, prep)}"));
     }
+
+    #[test]
+    fn bundled_template_finishes_session_through_done_api() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+
+        assert!(page.contains("Done \u{2014} send to chat"));
+        assert!(page.contains("You can close this tab."));
+        assert!(page.contains("await apiJson('/api/done')"));
+        assert!(page.contains("function markReviewComplete()"));
+        assert!(page.contains("reviewComplete = true;"));
+        assert!(page.contains("if (reviewComplete) return;"));
+        assert!(page.contains("document.body.classList.add('review-complete')"));
+        assert!(page.contains("showMutationError(doneControl, \"couldn't finish"));
+        assert!(!page.contains("navigator.clipboard"));
+        assert!(!page.contains("window.prompt"));
+        assert!(!page.contains("function buildCopyText"));
+    }
 }

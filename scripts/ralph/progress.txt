@@ -38,6 +38,7 @@
 - Successful state-mutation handlers in `src/server.rs` must call the shared mutation timestamp updater after writing state so idle prompts are delayed by user/agent activity.
 - HTTP mutation routes live in `src/server.rs`; after a successful state write, publish the browser `BroadcastEvent` and emit the matching stdout `Event`, and use `EventEmitter::boxed(...)` in integration tests to capture stdout without touching real stdout.
 - `POST /api/done` in `src/server.rs` builds transcripts with `build_transcript(&State)`, emits the `session.done` stdout event, then signals internal graceful shutdown; future Done/history work should preserve that ordering around any archive write.
+- Browser Done completion keeps the legacy `#copy-all` id for styling, calls `/api/done`, then uses `markReviewComplete()` to close SSE/heartbeat, disable controls, show `#done-banner`, and suppress further mutations/events.
 - New-thread draft mutation routes use `/api/drafts/new-thread`; payloads include `scope: "newThread"` plus `anchorStart`/`anchorEnd`, whitespace-only POST delegates to clear, and idempotent clears still emit `draft.cleared`.
 - Follow-up draft mutation routes use `/api/drafts/followup`; validate `threadId` against active `State::get_threads()` before upsert/clear, payloads include `scope: "followup"` plus `threadId`, and idempotent clears still emit `draft.cleared`.
 - Browser draft writes in `discuss.html` should go through `setNewThreadDraft`/`setFollowupDraft`; those helpers optimistically update local state and queue REST writes per draft key so later clears cannot be overwritten by older in-flight saves.
@@ -367,4 +368,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: `serve_with_ready` now listens to both the external shutdown future and the internal `AppState` shutdown signal, so request handlers can cleanly end the server.
   - Gotchas encountered: requests that race with shutdown may see either a structured 503 or a closed/refused connection; tests should accept both when verifying post-Done behavior.
   - Useful context: validation passed with strict Cargo checks, `PATH="$HOME/.local/bin:$PATH" ./install.sh`, and `PATH="$HOME/.local/bin:$PATH" discuss --version`; history archive writing is intentionally left for the later history stories.
+---
+## 2026-04-23 17:20:17 AEST - US-040
+- Implemented the frontend Done flow: renamed the header control, removed clipboard export behavior, POSTs `/api/done`, shows a close-tab banner, disables completed-session interactions, stops heartbeat/SSE, and ignores later SSE/mutation attempts.
+- Files changed: `discuss.html`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: browser completion should go through `markReviewComplete()` after `/api/done` so Done is a terminal UI state, not just a server call.
+  - Gotchas encountered: queued draft writes can outlive the button click, so draft queues and `apiJson` must no-op after `reviewComplete` for non-Done mutations.
+  - Useful context: no dev-browser/browser testing tool is available in this session; verification used inline JavaScript parsing, template regression tests, strict Cargo checks, `./install.sh`, and `discuss --version` from PATH.
 ---

@@ -7,9 +7,8 @@
     element (heading, paragraph, list item, quote, code block, etc.) and
     attach a contextual comment. Threads render on the right, anchored to
     their element on the left. Comments persist through the discuss server.
-    A "Copy All" button exports every comment with a stable anchor id, breadcrumb
-    path, and text snippet so a downstream AI assistant (or human) can
-    reconcile each comment with the exact element it is attached to.
+    A "Done" button sends the final server transcript back to the launching
+    agent, then locks the page so the completed session cannot be mutated.
 
   How to use
     1. Copy this file somewhere (usually /tmp for throwaway reviews, or a
@@ -25,7 +24,7 @@
     4. Open in a browser. Click any element to start a new comment.
        Drag-select across multiple elements to comment on a range. Click
        an existing marker (left-margin dot) to open its thread.
-    5. When done, press "Copy All" — paste the output into your chat.
+    5. When done, press "Done — send to chat" and wait for the close-tab banner.
 
   Features mirrored from /tmp/plan-review.html
     - Two-pane Google-Docs layout, draggable divider.
@@ -36,7 +35,7 @@
     - Click an element that already has a thread opens the existing one.
     - Escape closes the current open thread / new-thread editor.
     - Show-all toggle to pin every thread open at once.
-    - Copy All exports anchor + snippet + follow-ups per thread.
+    - Done sends the consolidated transcript and shuts down the session.
 
   State
     Runtime state is hydrated from the discuss server and mutated through
@@ -131,6 +130,37 @@
   }
   #copy-all:hover { opacity: 0.92; }
   #copy-all.ok { background: #2e7d32; border-color: #2e7d32; }
+  #copy-all:disabled { opacity: 0.65; cursor: default; }
+  .done-control {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+  .done-control .mutation-error {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 280px;
+    z-index: 140;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  }
+  .done-banner {
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    right: 0;
+    z-index: 95;
+    display: none;
+    justify-content: center;
+    padding: 10px 24px;
+    background: #e9f7ec;
+    border-bottom: 1px solid #b8dfc0;
+    color: #1f6b2f;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .done-banner.shown { display: flex; }
+  body.review-complete .workspace { pointer-events: none; opacity: 0.72; }
 
   .workspace {
     position: fixed;
@@ -687,8 +717,14 @@
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
-  <button id="copy-all" title="Copy every comment with its anchor + snippet">Copy All</button>
+  <span class="done-control" id="done-control">
+    <button id="copy-all" title="Finish the review and send the transcript to the agent">Done — send to chat</button>
+  </span>
 </header>
+
+<div class="done-banner" id="done-banner" role="status" aria-live="polite">
+  You can close this tab.
+</div>
 
 <div class="workspace" id="workspace">
   <div class="workspace-grid" id="workspace-grid">
@@ -733,7 +769,7 @@
           <li>Replace <code>#doc-content</code> with the document you want reviewed.</li>
           <li>Optionally pre-seed discussion threads via the <code>#prepopulated-threads</code> JSON block below.</li>
           <li>Open in a browser. Click any element to comment; drag-select for a range.</li>
-          <li>Use the <b>Copy All</b> button to export every thread with its anchor id, text snippet, and follow-ups.</li>
+          <li>Use the <b>Done — send to chat</b> button to emit the transcript and finish the session.</li>
         </ol>
 
         <blockquote>
@@ -783,6 +819,7 @@
     ? window.__DISCUSS_INITIAL_STATE__
     : null;
   let currentState = emptyDiscussionState();
+  let reviewComplete = false;
 
   function emptyDiscussionState() {
     return {
@@ -942,6 +979,7 @@
     currentState = setCurrentState(s);
   }
   async function apiJson(path, { method = 'POST', body } = {}) {
+    if (reviewComplete && path !== '/api/done') return null;
     const options = { method, headers: { Accept: 'application/json' } };
     if (body !== undefined) {
       options.headers['Content-Type'] = 'application/json';
@@ -992,6 +1030,7 @@
   let eventReconnectTimer = null;
 
   function startEventStream() {
+    if (reviewComplete) return;
     if (!('EventSource' in window)) {
       console.warn('EventSource is not supported; live updates are disabled.');
       return;
@@ -1014,6 +1053,7 @@
   }
 
   function scheduleEventReconnect() {
+    if (reviewComplete) return;
     if (eventReconnectTimer) return;
     eventReconnectTimer = setTimeout(() => {
       eventReconnectTimer = null;
@@ -1032,6 +1072,7 @@
   }
 
   function applyServerEvent(kind, payload) {
+    if (reviewComplete) return;
     switch (kind) {
       case 'thread.created':
         applyThreadCreatedEvent(payload);
@@ -1065,6 +1106,7 @@
   let heartbeatTimer = null;
 
   function sendHeartbeat() {
+    if (reviewComplete) return;
     fetch('/api/heartbeat', {
       method: 'POST',
       headers: { Accept: 'application/json' },
@@ -1075,6 +1117,7 @@
   }
 
   function startHeartbeat() {
+    if (reviewComplete) return;
     if (heartbeatTimer) return;
     sendHeartbeat();
     heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
@@ -1084,6 +1127,43 @@
     if (!heartbeatTimer) return;
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
+  }
+
+  function showDoneBanner() {
+    const banner = document.getElementById('done-banner');
+    if (!banner) return;
+    banner.classList.add('shown');
+  }
+
+  function markReviewComplete() {
+    reviewComplete = true;
+    document.body.classList.add('review-complete');
+    stopHeartbeat();
+    if (eventReconnectTimer) {
+      clearTimeout(eventReconnectTimer);
+      eventReconnectTimer = null;
+    }
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    if (newThreadEditor) closeNewThreadEditor();
+    document.querySelectorAll('button, textarea').forEach(control => {
+      control.disabled = true;
+    });
+    const btn = document.getElementById('copy-all');
+    if (btn) {
+      btn.textContent = 'Done ✓';
+      btn.classList.add('ok');
+    }
+    showDoneBanner();
+  }
+
+  function blockCompletedInteraction(event) {
+    if (!reviewComplete) return;
+    if (event.target.closest && event.target.closest('#done-banner')) return;
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function normalizeThreadPayload(payload) {
@@ -1468,7 +1548,10 @@
   const draftRequestQueues = new Map();
   function queueDraftRequest(key, action) {
     const previous = draftRequestQueues.get(key) || Promise.resolve();
-    const run = previous.catch(() => {}).then(action);
+    const run = previous.catch(() => {}).then(() => {
+      if (reviewComplete) return null;
+      return action();
+    });
     draftRequestQueues.set(key, run);
     run.finally(() => {
       if (draftRequestQueues.get(key) === run) draftRequestQueues.delete(key);
@@ -2682,89 +2765,30 @@
     document.addEventListener('pointerup', onUp);
   });
 
-  // ---------- Copy All ----------
-  function buildCopyText() {
-    const s = loadState();
-    const out = [];
-    out.push('=== CONTEXTUAL DISCUSSION EXPORT ===');
-    out.push(`Exported: ${new Date().toISOString()}`);
-    out.push('');
-
-    prepopulated.forEach(t => {
-      const fus = s.followups[t.id] || [];
-      const resolution = s.resolutions[t.id];
-      if (!fus.length && !resolution) return;
-      const anchor = getAnchorElByIdx(t.anchorIdx);
-      const snippet = anchor ? snippetOfAnchor(anchor) : '';
-      const crumb = anchor ? breadcrumbOfAnchor(anchor) : '';
-      const header = [
-        `#${t.anchorIdx}`,
-        t.index != null ? `Comment ${t.index}` : 'Comment',
-        t.subtitle,
-        t.pending ? 'INITIAL TAKE' : null,
-        resolution ? 'RESOLVED' : null,
-      ].filter(Boolean).join(' · ');
-      out.push(`----- ${header} -----`);
-      if (crumb) out.push(`Breadcrumb: ${crumb}`);
-      out.push(`Anchor text: "${snippet.replace(/"/g, '\\"')}"`);
-      if (t.userComment) out.push(`Original input: ${t.userComment}`);
-      if (resolution) {
-        out.push(`Resolution: ${resolution.decision || '(resolved without a decision)'}`);
-        out.push(`  resolved at ${resolution.resolvedAt}`);
-      }
-      if (fus.length) {
-        out.push('Your follow-ups:');
-        fus.forEach((f, i) => {
-          out.push(`  [${i+1}] ${f.text.split('\n').join('\n      ')}`);
-          out.push(`      (added ${f.addedAt})`);
-        });
-      }
-      out.push('');
-    });
-
-    if (s.userThreads.length) {
-      out.push('----- NEW THREADS YOU ADDED -----');
-      s.userThreads.forEach(ut => {
-        const rangeLabel = ut.anchorStart === ut.anchorEnd ? `#${ut.anchorStart}` : `#${ut.anchorStart}–${ut.anchorEnd}`;
-        const snippet = snippetOfRange(ut.anchorStart, ut.anchorEnd) || ut.snippet || '';
-        const anchorEl = getAnchorElByIdx(ut.anchorStart);
-        const crumb = anchorEl ? breadcrumbOfAnchor(anchorEl) : '';
-        const fus = s.followups[ut.id] || [];
-        const resolution = s.resolutions[ut.id];
-        const tags = resolution ? ' · RESOLVED' : '';
-        out.push(`  ${rangeLabel}${tags}${crumb ? ' · ' + crumb : ''}`);
-        out.push(`  Anchor text: "${(snippet || '').replace(/"/g, '\\"')}"`);
-        if (resolution) {
-          out.push(`    Resolution: ${resolution.decision || '(resolved without a decision)'}`);
-          out.push(`      resolved at ${resolution.resolvedAt}`);
-        }
-        fus.forEach((f, i) => {
-          out.push(`    [${i+1}] ${f.text.split('\n').join('\n         ')}`);
-          out.push(`         (added ${f.addedAt})`);
-        });
-        out.push('');
-      });
-    }
-
-    const anyFollowups = Object.values(s.followups).some(arr => arr && arr.length);
-    const anyResolutions = Object.keys(s.resolutions).length > 0;
-    if (!anyFollowups && !s.userThreads.length && !anyResolutions) out.push('(no user comments yet)');
-    return out.join('\n');
-  }
-
+  // ---------- Done ----------
   document.getElementById('copy-all').addEventListener('click', async () => {
     const btn = document.getElementById('copy-all');
-    const text = buildCopyText();
+    const doneControl = document.getElementById('done-control');
+    if (reviewComplete || !btn) return;
+    clearMutationError(doneControl);
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
     try {
-      await navigator.clipboard.writeText(text);
-      const original = btn.textContent;
-      btn.textContent = 'Copied ✓';
-      btn.classList.add('ok');
-      setTimeout(() => { btn.textContent = original; btn.classList.remove('ok'); }, 1800);
-    } catch {
-      window.prompt('Copy the text below:', text);
+      await apiJson('/api/done');
+      markReviewComplete();
+    } catch (error) {
+      console.error('Failed to finish review:', error);
+      btn.disabled = false;
+      btn.textContent = original;
+      showMutationError(doneControl, "couldn't finish — retry?", () => {
+        btn.click();
+      });
     }
   });
+
+  document.addEventListener('click', blockCompletedInteraction, true);
+  document.addEventListener('input', blockCompletedInteraction, true);
 
   // ---------- Init ----------
   hydrateState().then(() => {
