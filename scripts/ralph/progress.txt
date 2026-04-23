@@ -10,6 +10,7 @@
 - Tracing initialization lives in `src/logging.rs`; it must use file-only output because stdout is reserved for JSON events and stderr is for human status.
 - Markdown rendering lives in `src/render.rs` as a pure `render(&str) -> String`; keep Comrak configured there with GFM extensions and `default-features = false`.
 - Bundled page rendering lives in `src/template.rs`; use `render_page(rendered_markdown, initial_state_json)` to inject content into `#doc-content` and seed `window.__DISCUSS_INITIAL_STATE__`.
+- Bundled browser assets live in `assets/` and are exposed through `src/assets.rs`; `render_page` inlines the Mermaid shim, while `assets::mermaid_js()` provides the minified asset for later static routes.
 
 Started: Thu 23 Apr 2026 11:20:03 AEST
 ---
@@ -76,4 +77,12 @@ Started: Thu 23 Apr 2026 11:20:03 AEST
   - Patterns discovered: page-shell injection is centralized in `src/template.rs`; callers should pass already-rendered markdown plus serialized initial state JSON to `render_page`.
   - Gotchas encountered: initial state JSON must be safe inside a script tag, so the helper escapes `<`, U+2028, and U+2029 before assignment.
   - Useful context: this story only seeds the global; later frontend/API stories still need to consume `window.__DISCUSS_INITIAL_STATE__`.
+---
+## 2026-04-23 12:52:35 AEST - US-009
+- Implemented the bundled Mermaid browser asset, a dynamic hydration shim, and page-renderer injection for offline Mermaid diagrams.
+- Files changed: `assets/mermaid.min.js`, `assets/mermaid-shim.js`, `src/assets.rs`, `src/lib.rs`, `src/template.rs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`.
+- **Learnings for future iterations:**
+  - Patterns discovered: bundled browser assets should be added under `assets/`, exposed via `src/assets.rs`, and wired into the page through `src/template.rs` rather than scattering `include_str!` calls.
+  - Gotchas encountered: the current template wraps `<pre>` blocks in `.pre-wrap` before assigning anchors, so Mermaid hydration must replace only the `<pre>` contents and leave the element in place.
+  - Useful context: the `cargo-agent` helper script is not present in this repo; use the exact strict Cargo commands from `AGENTS.md`. No browser testing tool was available, so browser verification is still needed once HTTP asset routes exist.
 ---

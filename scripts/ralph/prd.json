@@ -178,7 +178,7 @@
         "`RUSTFLAGS=\"-D warnings\" cargo test` passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

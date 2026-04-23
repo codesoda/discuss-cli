@@ -1,13 +1,18 @@
+use crate::assets;
+
 const TEMPLATE: &str = include_str!("../discuss.html");
 const DOC_CONTENT_OPEN: &str = "<section id=\"doc-content\">";
 const DOC_CONTENT_CLOSE: &str = "</section>";
 const INITIAL_STATE_INSERT_BEFORE: &str = "<script>\n(function() {";
 const INITIAL_STATE_SCRIPT_OPEN: &str = "<script id=\"discuss-initial-state\">";
 const INITIAL_STATE_SCRIPT_CLOSE: &str = "</script>";
+const MERMAID_SHIM_SCRIPT_OPEN: &str = "<script id=\"discuss-mermaid-shim\">";
+const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
 
 pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
-    inject_initial_state(&page, initial_state_json)
+    let page = inject_initial_state(&page, initial_state_json);
+    inject_mermaid_shim(&page)
 }
 
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
@@ -34,18 +39,32 @@ fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
 }
 
 fn inject_initial_state(page: &str, initial_state_json: &str) -> String {
-    let insert_at = page
-        .find(INITIAL_STATE_INSERT_BEFORE)
-        .or_else(|| page.find("</body>"))
-        .expect("bundled template must contain a script block or closing body");
     let initial_state_script = format!(
         "{INITIAL_STATE_SCRIPT_OPEN}\nwindow.__DISCUSS_INITIAL_STATE__ = {};\n{INITIAL_STATE_SCRIPT_CLOSE}\n\n",
         js_safe_json(initial_state_json)
     );
 
-    let mut rendered = String::with_capacity(page.len() + initial_state_script.len());
+    inject_before_main_script(page, &initial_state_script)
+}
+
+fn inject_mermaid_shim(page: &str) -> String {
+    let mermaid_shim_script = format!(
+        "{MERMAID_SHIM_SCRIPT_OPEN}\n{}\n{MERMAID_SHIM_SCRIPT_CLOSE}\n\n",
+        assets::mermaid_shim_js()
+    );
+
+    inject_before_main_script(page, &mermaid_shim_script)
+}
+
+fn inject_before_main_script(page: &str, insertion: &str) -> String {
+    let insert_at = page
+        .find(INITIAL_STATE_INSERT_BEFORE)
+        .or_else(|| page.find("</body>"))
+        .expect("bundled template must contain a script block or closing body");
+
+    let mut rendered = String::with_capacity(page.len() + insertion.len());
     rendered.push_str(&page[..insert_at]);
-    rendered.push_str(&initial_state_script);
+    rendered.push_str(insertion);
     rendered.push_str(&page[insert_at..]);
     rendered
 }
@@ -71,15 +90,13 @@ mod tests {
         &html[content_start..content_end]
     }
 
-    fn without_initial_state_script(html: &str) -> String {
-        let script_start = html
-            .find(INITIAL_STATE_SCRIPT_OPEN)
-            .expect("initial state script start");
+    fn without_injected_script(html: &str, script_open: &str, script_close: &str) -> String {
+        let script_start = html.find(script_open).expect("injected script start");
         let script_end = html[script_start..]
-            .find(INITIAL_STATE_SCRIPT_CLOSE)
-            .expect("initial state script end")
+            .find(script_close)
+            .expect("injected script end")
             + script_start
-            + INITIAL_STATE_SCRIPT_CLOSE.len();
+            + script_close.len();
         let trailing_newlines = html[script_end..]
             .chars()
             .take_while(|character| *character == '\n')
@@ -90,6 +107,12 @@ mod tests {
         stripped.push_str(&html[..script_start]);
         stripped.push_str(&html[script_end + trailing_newlines..]);
         stripped
+    }
+
+    fn without_injected_scripts(html: &str) -> String {
+        let html =
+            without_injected_script(html, INITIAL_STATE_SCRIPT_OPEN, INITIAL_STATE_SCRIPT_CLOSE);
+        without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE)
     }
 
     #[test]
@@ -123,7 +146,7 @@ mod tests {
         let expected_without_state = inject_doc_content(TEMPLATE, rendered_markdown);
         let page = render_page(rendered_markdown, "{}");
 
-        assert_eq!(without_initial_state_script(&page), expected_without_state);
+        assert_eq!(without_injected_scripts(&page), expected_without_state);
     }
 
     #[test]
@@ -146,5 +169,24 @@ mod tests {
 
         assert!(page.contains(r#"{"text":"\u003c/script>\u003cp>break\u003c/p>"}"#));
         assert_eq!(page.matches(INITIAL_STATE_SCRIPT_OPEN).count(), 1);
+    }
+
+    #[test]
+    fn injects_mermaid_shim_before_main_script() {
+        let page = render_page(
+            "<pre><code class=\"language-mermaid\">flowchart TD</code></pre>",
+            "{}",
+        );
+
+        let shim_script_start = page
+            .find(MERMAID_SHIM_SCRIPT_OPEN)
+            .expect("mermaid shim script should be present");
+        let main_script_start = page
+            .find(INITIAL_STATE_INSERT_BEFORE)
+            .expect("main script should be present");
+
+        assert!(shim_script_start < main_script_start);
+        assert!(page.contains("pre > code.language-mermaid"));
+        assert!(page.contains("/assets/mermaid.min.js"));
     }
 }
