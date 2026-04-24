@@ -1,7 +1,7 @@
 ---
 name: discuss
 description: Launch the discuss CLI on a markdown file, stream the event log via Monitor, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path>.
-allowed-tools: Bash, Monitor, Read, ToolSearch
+allowed-tools: Bash, Monitor, TaskStop, Read, ToolSearch
 ---
 
 # discuss — Interactive markdown review session
@@ -28,27 +28,36 @@ If the user declines the install, stop.
 
 ## Step 0: Load deferred tool schemas
 
-`Monitor` may be a deferred tool. Before calling it, load its schema:
+`Monitor` and `TaskStop` may be deferred tools. Before calling them, load their schemas:
 
 ```
-ToolSearch(query: "select:Monitor", max_results: 1)
+ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 ```
 
-## Step 1: Launch
+## Step 1: Launch as a persistent Monitor
 
-Start `discuss` as a background Bash task. Redirect stderr only — stdout (newline-delimited JSON events) must flow into the task output buffer so Monitor can stream it.
+Run `discuss` directly as the Monitor command — do NOT launch it via Bash with `run_in_background`. Monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
 
-```bash
-discuss "$ARGUMENTS" 2> /tmp/discuss-stderr.log
+```
+Monitor(
+  description: "discuss events for <file>",
+  command: "discuss \"$ARGUMENTS\"",
+  persistent: true
+)
 ```
 
-Use `run_in_background: true`. Record the returned task ID (e.g., `b3mvlm9a4`).
+Notes:
 
-No further preflight — if the port is already bound or the file doesn't exist, discuss will exit with a clear error. Let that surface naturally and report it. Optionally `Read` the markdown source afterward for context on anchor snippets.
+- `persistent: true` is required — discuss is a long-running server that only exits when the user is done.
+- Do NOT redirect stderr. Monitor sends stderr to the output file (readable via Read) and it never triggers notifications, so discuss's `listening on …` stderr line can't pollute the event stream.
+- Record the `task_id` returned by Monitor — you'll need it for `TaskStop` later.
+- If the port is already bound or the file doesn't exist, discuss exits immediately and Monitor ends without ever emitting a `session.started` event. Read the Monitor output file to surface the error, then stop.
+
+Optionally `Read` the markdown source afterward for context on anchor snippets.
 
 ## Step 2: Confirm startup and capture URL
 
-Call Monitor on the task ID and wait for the first line. It should be:
+The first Monitor notification should be a `session.started` event:
 
 ```json
 {"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","source_file":"...","started_at":"..."}}
@@ -56,7 +65,7 @@ Call Monitor on the task ID and wait for the first line. It should be:
 
 Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
 
-If the first line is an error on stderr instead (bind failure, file not found), the task will exit. Report the failure and stop.
+If Monitor ends without emitting `session.started`, discuss failed to start. Read the Monitor output file for the stderr error, report it, and stop.
 
 Post a short message to chat:
 
@@ -64,7 +73,7 @@ Post a short message to chat:
 
 ## Step 3: Event loop
 
-Keep calling Monitor on the task. Each stdout line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
+Monitor notifications arrive on their own schedule — you don't poll. Each notification line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
 
 Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.deleted`. Lifecycle events (`session.started`, `session.done`, `thread.unresolved`, `prompt.suggest_done`) are informational — acknowledge in chat if useful but don't post to the API.
 
@@ -100,12 +109,12 @@ Acknowledge in chat ("`u-3` resolved" / "`u-2` deleted") but do not post anythin
 End the session and shut down when any of these happen:
 
 - The user types "stop", "end session", "kill it", or similar in chat.
-- The Monitor-watched task exits (user Ctrl+C'd the terminal, browser quit, or `discuss` otherwise shut down). Monitor will return without a new line.
+- The Monitor task exits on its own (user quit the browser, server crashed, `session.done` event arrived). No further notifications will arrive.
 - The user starts a new unrelated task — don't linger.
 
 On stop:
 
-1. Kill the background task.
+1. Call `TaskStop(task_id: <monitor-task-id>)` to terminate the Monitor task (which in turn kills discuss).
 2. Summarize: each thread, a one-line takeaway, resolution state.
 
 ## API reference
