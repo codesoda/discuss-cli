@@ -15,24 +15,18 @@ pub enum EventKind {
     ThreadResolved,
     ThreadUnresolved,
     ReplyAdded,
-    TakeAdded,
-    DraftUpdated,
-    DraftCleared,
     PromptSuggestDone,
     SessionDone,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 8] = [
         Self::SessionStarted,
         Self::ThreadCreated,
         Self::ThreadDeleted,
         Self::ThreadResolved,
         Self::ThreadUnresolved,
         Self::ReplyAdded,
-        Self::TakeAdded,
-        Self::DraftUpdated,
-        Self::DraftCleared,
         Self::PromptSuggestDone,
         Self::SessionDone,
     ];
@@ -45,9 +39,6 @@ impl EventKind {
             Self::ThreadResolved => "thread.resolved",
             Self::ThreadUnresolved => "thread.unresolved",
             Self::ReplyAdded => "reply.added",
-            Self::TakeAdded => "take.added",
-            Self::DraftUpdated => "draft.updated",
-            Self::DraftCleared => "draft.cleared",
             Self::PromptSuggestDone => "prompt.suggest_done",
             Self::SessionDone => "session.done",
         }
@@ -83,9 +74,6 @@ impl<'de> Deserialize<'de> for EventKind {
             "thread.resolved" => Ok(Self::ThreadResolved),
             "thread.unresolved" => Ok(Self::ThreadUnresolved),
             "reply.added" => Ok(Self::ReplyAdded),
-            "take.added" => Ok(Self::TakeAdded),
-            "draft.updated" => Ok(Self::DraftUpdated),
-            "draft.cleared" => Ok(Self::DraftCleared),
             "prompt.suggest_done" => Ok(Self::PromptSuggestDone),
             "session.done" => Ok(Self::SessionDone),
             _ => Err(de::Error::unknown_variant(
@@ -97,9 +85,6 @@ impl<'de> Deserialize<'de> for EventKind {
                     "thread.resolved",
                     "thread.unresolved",
                     "reply.added",
-                    "take.added",
-                    "draft.updated",
-                    "draft.cleared",
                     "prompt.suggest_done",
                     "session.done",
                 ],
@@ -207,9 +192,6 @@ mod tests {
             (EventKind::ThreadResolved, "thread.resolved"),
             (EventKind::ThreadUnresolved, "thread.unresolved"),
             (EventKind::ReplyAdded, "reply.added"),
-            (EventKind::TakeAdded, "take.added"),
-            (EventKind::DraftUpdated, "draft.updated"),
-            (EventKind::DraftCleared, "draft.cleared"),
             (EventKind::PromptSuggestDone, "prompt.suggest_done"),
             (EventKind::SessionDone, "session.done"),
         ];
@@ -236,9 +218,6 @@ mod tests {
             EventKind::ThreadResolved,
             EventKind::ThreadUnresolved,
             EventKind::ReplyAdded,
-            EventKind::TakeAdded,
-            EventKind::DraftUpdated,
-            EventKind::DraftCleared,
             EventKind::PromptSuggestDone,
             EventKind::SessionDone,
         ];

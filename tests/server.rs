@@ -743,17 +743,7 @@ async fn post_api_thread_takes_appends_take_and_emits_events() {
     assert!(sse_event.contains("\"threadId\":\"u-take\""));
     assert!(sse_event.contains("\"text\":\"Agent recommends tightening this section\""));
 
-    let stdout = stdout_string(&stdout);
-    assert_eq!(stdout.lines().count(), 1);
-    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::TakeAdded.to_string());
-    assert_eq!(emitted["payload"]["id"], "t-1");
-    assert_eq!(emitted["payload"]["threadId"], "u-take");
-    assert_eq!(
-        emitted["payload"]["text"],
-        "Agent recommends tightening this section"
-    );
-    assert_eq!(emitted["payload"]["createdAt"], body["createdAt"]);
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1219,16 +1209,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
     assert!(sse_event.contains("\"anchorEnd\":4"));
     assert!(sse_event.contains("\"text\":\"First draft\""));
 
-    let stdout_after_first = stdout_string(&stdout);
-    assert_eq!(stdout_after_first.lines().count(), 1);
-    let emitted: Value =
-        serde_json::from_str(stdout_after_first.trim_end()).expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftUpdated.to_string());
-    assert_eq!(emitted["payload"]["scope"], "newThread");
-    assert_eq!(emitted["payload"]["anchorStart"], 2);
-    assert_eq!(emitted["payload"]["anchorEnd"], 4);
-    assert_eq!(emitted["payload"]["text"], "First draft");
-    assert_eq!(emitted["payload"]["updatedAt"], body["updatedAt"]);
+    assert!(stdout_string(&stdout).is_empty());
 
     let response = post_json_path(
         addr,
@@ -1255,18 +1236,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
     assert!(sse_event.contains("event: draft.updated"));
     assert!(sse_event.contains("\"text\":\"Revised draft\""));
 
-    let stdout_after_second = stdout_string(&stdout);
-    assert_eq!(stdout_after_second.lines().count(), 2);
-    let emitted: Value = serde_json::from_str(
-        stdout_after_second
-            .lines()
-            .nth(1)
-            .expect("second stdout event"),
-    )
-    .expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftUpdated.to_string());
-    assert_eq!(emitted["payload"]["text"], "Revised draft");
-    assert_eq!(emitted["payload"]["updatedAt"], body["updatedAt"]);
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1322,14 +1292,7 @@ async fn post_api_drafts_new_thread_whitespace_text_clears_draft() {
     assert!(sse_event.contains("\"anchorStart\":5"));
     assert!(sse_event.contains("\"anchorEnd\":7"));
 
-    let stdout = stdout_string(&stdout);
-    assert_eq!(stdout.lines().count(), 1);
-    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftCleared.to_string());
-    assert_eq!(emitted["payload"]["scope"], "newThread");
-    assert_eq!(emitted["payload"]["anchorStart"], 5);
-    assert_eq!(emitted["payload"]["anchorEnd"], 7);
-    assert!(emitted["payload"].get("text").is_none());
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1399,15 +1362,7 @@ async fn delete_api_drafts_new_thread_clears_idempotently_and_emits_events() {
     assert!(sse_event.contains("\"anchorStart\":8"));
     assert!(sse_event.contains("\"anchorEnd\":9"));
 
-    let stdout = stdout_string(&stdout);
-    assert_eq!(stdout.lines().count(), 2);
-    for emitted in stdout.lines() {
-        let emitted: Value = serde_json::from_str(emitted).expect("stdout event JSON");
-        assert_eq!(emitted["kind"], EventKind::DraftCleared.to_string());
-        assert_eq!(emitted["payload"]["scope"], "newThread");
-        assert_eq!(emitted["payload"]["anchorStart"], 8);
-        assert_eq!(emitted["payload"]["anchorEnd"], 9);
-    }
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1472,15 +1427,7 @@ async fn post_api_drafts_followup_upserts_replaces_and_emits_events() {
     assert!(sse_event.contains("\"threadId\":\"u-followup\""));
     assert!(sse_event.contains("\"text\":\"First follow-up\""));
 
-    let stdout_after_first = stdout_string(&stdout);
-    assert_eq!(stdout_after_first.lines().count(), 1);
-    let emitted: Value =
-        serde_json::from_str(stdout_after_first.trim_end()).expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftUpdated.to_string());
-    assert_eq!(emitted["payload"]["scope"], "followup");
-    assert_eq!(emitted["payload"]["threadId"], "u-followup");
-    assert_eq!(emitted["payload"]["text"], "First follow-up");
-    assert_eq!(emitted["payload"]["updatedAt"], body["updatedAt"]);
+    assert!(stdout_string(&stdout).is_empty());
 
     let response = post_json_path(
         addr,
@@ -1507,19 +1454,7 @@ async fn post_api_drafts_followup_upserts_replaces_and_emits_events() {
     assert!(sse_event.contains("event: draft.updated"));
     assert!(sse_event.contains("\"text\":\"Revised follow-up\""));
 
-    let stdout_after_second = stdout_string(&stdout);
-    assert_eq!(stdout_after_second.lines().count(), 2);
-    let emitted: Value = serde_json::from_str(
-        stdout_after_second
-            .lines()
-            .nth(1)
-            .expect("second stdout event"),
-    )
-    .expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftUpdated.to_string());
-    assert_eq!(emitted["payload"]["threadId"], "u-followup");
-    assert_eq!(emitted["payload"]["text"], "Revised follow-up");
-    assert_eq!(emitted["payload"]["updatedAt"], body["updatedAt"]);
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1576,13 +1511,7 @@ async fn post_api_drafts_followup_whitespace_text_clears_draft() {
     assert!(sse_event.contains("\"scope\":\"followup\""));
     assert!(sse_event.contains("\"threadId\":\"u-followup\""));
 
-    let stdout = stdout_string(&stdout);
-    assert_eq!(stdout.lines().count(), 1);
-    let emitted: Value = serde_json::from_str(stdout.trim_end()).expect("stdout event JSON");
-    assert_eq!(emitted["kind"], EventKind::DraftCleared.to_string());
-    assert_eq!(emitted["payload"]["scope"], "followup");
-    assert_eq!(emitted["payload"]["threadId"], "u-followup");
-    assert!(emitted["payload"].get("text").is_none());
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1645,14 +1574,7 @@ async fn delete_api_drafts_followup_clears_idempotently_and_emits_events() {
     assert!(sse_event.contains("event: draft.cleared"));
     assert!(sse_event.contains("\"threadId\":\"u-followup\""));
 
-    let stdout = stdout_string(&stdout);
-    assert_eq!(stdout.lines().count(), 2);
-    for emitted in stdout.lines() {
-        let emitted: Value = serde_json::from_str(emitted).expect("stdout event JSON");
-        assert_eq!(emitted["kind"], EventKind::DraftCleared.to_string());
-        assert_eq!(emitted["payload"]["scope"], "followup");
-        assert_eq!(emitted["payload"]["threadId"], "u-followup");
-    }
+    assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

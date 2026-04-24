@@ -763,21 +763,9 @@ async fn post_api_thread_takes(
     };
 
     app_state.bus.publish(BroadcastEvent {
-        kind: EventKind::TakeAdded.to_string(),
+        kind: "take.added".to_string(),
         payload: payload.clone(),
     });
-
-    if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::TakeAdded,
-        at: take.created_at,
-        payload,
-    }) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to emit take.added event: {error}"),
-        );
-    }
 
     Json(take).into_response()
 }
@@ -1037,21 +1025,9 @@ async fn post_api_drafts_new_thread(
     };
 
     app_state.bus.publish(BroadcastEvent {
-        kind: EventKind::DraftUpdated.to_string(),
+        kind: "draft.updated".to_string(),
         payload: payload.clone(),
     });
-
-    if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::DraftUpdated,
-        at: updated_at,
-        payload,
-    }) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to emit draft.updated event: {error}"),
-        );
-    }
 
     Json(response).into_response()
 }
@@ -1075,8 +1051,6 @@ async fn delete_api_drafts_new_thread(
 }
 
 fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequest) -> Response {
-    let emitted_at = Utc::now();
-
     if app_state
         .state
         .write()
@@ -1108,21 +1082,9 @@ fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequ
     };
 
     app_state.bus.publish(BroadcastEvent {
-        kind: EventKind::DraftCleared.to_string(),
+        kind: "draft.cleared".to_string(),
         payload: payload.clone(),
     });
-
-    if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::DraftCleared,
-        at: emitted_at,
-        payload,
-    }) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to emit draft.cleared event: {error}"),
-        );
-    }
 
     Json(OkResponse { ok: true }).into_response()
 }
@@ -1199,21 +1161,9 @@ async fn post_api_drafts_followup(
     };
 
     app_state.bus.publish(BroadcastEvent {
-        kind: EventKind::DraftUpdated.to_string(),
+        kind: "draft.updated".to_string(),
         payload: payload.clone(),
     });
-
-    if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::DraftUpdated,
-        at: updated_at,
-        payload,
-    }) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to emit draft.updated event: {error}"),
-        );
-    }
 
     Json(response).into_response()
 }
@@ -1237,8 +1187,6 @@ async fn delete_api_drafts_followup(
 }
 
 fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest) -> Response {
-    let emitted_at = Utc::now();
-
     {
         let Ok(mut state) = app_state.state.write() else {
             return api_error_response(
@@ -1280,21 +1228,9 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
     };
 
     app_state.bus.publish(BroadcastEvent {
-        kind: EventKind::DraftCleared.to_string(),
+        kind: "draft.cleared".to_string(),
         payload: payload.clone(),
     });
-
-    if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::DraftCleared,
-        at: emitted_at,
-        payload,
-    }) {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to emit draft.cleared event: {error}"),
-        );
-    }
 
     Json(OkResponse { ok: true }).into_response()
 }
