@@ -1,8 +1,8 @@
 [package]
 name = "discuss"
 version = "0.3.0"
-edition = "2021"
-rust-version = "1.74"
+edition = "2024"
+rust-version = "1.88"
 description = "A Rust CLI for live bidirectional markdown review sessions."
 repository = "https://github.com/codesoda/discuss-cli"
 license = "MIT"

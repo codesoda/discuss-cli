@@ -83,7 +83,7 @@ pub struct UpdateArgs {
 
 #[cfg(test)]
 mod tests {
-    use clap::{error::ErrorKind, CommandFactory, Parser};
+    use clap::{CommandFactory, Parser, error::ErrorKind};
 
     use super::*;
 

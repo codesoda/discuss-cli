@@ -1,4 +1,4 @@
-use comrak::{markdown_to_html, Options};
+use comrak::{Options, markdown_to_html};
 
 pub fn render(markdown: &str) -> String {
     markdown_to_html(markdown, &render_options())

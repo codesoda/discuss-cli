@@ -10,10 +10,10 @@ use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
 use discuss::state::{Draft, Resolution, State, Thread, ThreadId, ThreadKind};
 use discuss::{
-    serve, serve_with_ready, AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter,
-    EventKind, Transcript,
+    AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript, serve,
+    serve_with_ready,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -33,9 +33,11 @@ async fn get_root_renders_template_and_shutdown_completes() {
 
     let response = get_root(addr).await;
     assert!(response.starts_with("HTTP/1.1 200"));
-    assert!(response
-        .to_ascii_lowercase()
-        .contains("content-type: text/html; charset=utf-8"));
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("content-type: text/html; charset=utf-8")
+    );
     assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
@@ -274,9 +276,11 @@ async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
 
     let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(3)).await;
     assert_eq!(events.len(), 2);
-    assert!(events
-        .iter()
-        .all(|event| event["kind"] == EventKind::PromptSuggestDone.to_string()));
+    assert!(
+        events
+            .iter()
+            .all(|event| event["kind"] == EventKind::PromptSuggestDone.to_string())
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -637,10 +641,12 @@ async fn post_api_thread_replies_returns_structured_404_for_unknown_thread() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -673,10 +679,12 @@ async fn post_api_thread_replies_returns_structured_400_for_empty_text() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "validation_error");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("text"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("text")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -768,10 +776,12 @@ async fn post_api_thread_takes_returns_structured_404_for_unknown_thread() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -804,10 +814,12 @@ async fn post_api_thread_takes_returns_structured_400_for_empty_text() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "validation_error");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("text"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("text")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -964,12 +976,14 @@ async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_even
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .resolutions
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .resolutions
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: thread.unresolved"));
@@ -986,12 +1000,14 @@ async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_even
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .resolutions
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .resolutions
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: thread.unresolved"));
@@ -1044,12 +1060,14 @@ async fn delete_api_thread_soft_deletes_user_thread_and_emits_events() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .threads
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .threads
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: thread.deleted"));
@@ -1097,10 +1115,12 @@ async fn delete_api_thread_rejects_prepopulated_thread_without_events() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "prepopulated_thread");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("p-delete"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("p-delete")
+    );
     assert_eq!(
         state
             .read()
@@ -1143,10 +1163,12 @@ async fn delete_api_thread_returns_structured_404_for_unknown_thread() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
     assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
@@ -1278,13 +1300,15 @@ async fn post_api_drafts_new_thread_whitespace_text_clears_draft() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .drafts
-        .new_thread
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .drafts
+            .new_thread
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: draft.cleared"));
@@ -1334,13 +1358,15 @@ async fn delete_api_drafts_new_thread_clears_idempotently_and_emits_events() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .drafts
-        .new_thread
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .drafts
+            .new_thread
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: draft.cleared"));
@@ -1498,13 +1524,15 @@ async fn post_api_drafts_followup_whitespace_text_clears_draft() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .drafts
-        .followup
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .drafts
+            .followup
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: draft.cleared"));
@@ -1551,13 +1579,15 @@ async fn delete_api_drafts_followup_clears_idempotently_and_emits_events() {
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     assert_eq!(response_json(&response), json!({ "ok": true }));
-    assert!(state
-        .read()
-        .expect("state lock should not be poisoned")
-        .snapshot()
-        .drafts
-        .followup
-        .is_empty());
+    assert!(
+        state
+            .read()
+            .expect("state lock should not be poisoned")
+            .snapshot()
+            .drafts
+            .followup
+            .is_empty()
+    );
 
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: draft.cleared"));
@@ -1610,10 +1640,12 @@ async fn api_drafts_followup_returns_structured_404_for_unknown_thread() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
 
     let response =
         delete_json_path(addr, "/api/drafts/followup", r#"{"threadId":"missing"}"#).await;
@@ -1621,10 +1653,12 @@ async fn api_drafts_followup_returns_structured_404_for_unknown_thread() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
     assert!(stdout_string(&stdout).is_empty());
 
     shutdown_tx.send(()).expect("send shutdown signal");
@@ -1676,20 +1710,24 @@ async fn post_api_thread_resolution_routes_return_structured_404_for_unknown_thr
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
 
     let response = post_json_path(addr, "/api/threads/missing/unresolve", "").await;
     assert!(response.starts_with("HTTP/1.1 404"));
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "not_found");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("missing"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("missing")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -1714,10 +1752,12 @@ async fn post_api_threads_returns_structured_400_for_missing_fields() {
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "bad_request");
-    assert!(body["error"]["message"]
-        .as_str()
-        .expect("message string")
-        .contains("anchorEnd"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message string")
+            .contains("anchorEnd")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

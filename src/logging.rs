@@ -6,7 +6,7 @@ use directories::BaseDirs;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
-use crate::{error::BoxedError, Config, DiscussError, Result};
+use crate::{Config, DiscussError, Result, error::BoxedError};
 
 const LOG_FILE_PREFIX: &str = "discuss";
 const LOG_FILE_SUFFIX: &str = "log";
@@ -98,8 +98,12 @@ mod tests {
                 discuss_log: env::var_os("DISCUSS_LOG"),
             };
 
-            env::set_var("HOME", home);
-            env::remove_var("DISCUSS_LOG");
+            // SAFETY: callers acquire `env_mutex()` before constructing an EnvGuard,
+            // serializing all process-wide env mutations within these tests.
+            unsafe {
+                env::set_var("HOME", home);
+                env::remove_var("DISCUSS_LOG");
+            }
 
             guard
         }
@@ -107,16 +111,20 @@ mod tests {
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            if let Some(home) = &self.home {
-                env::set_var("HOME", home);
-            } else {
-                env::remove_var("HOME");
-            }
+            // SAFETY: same `env_mutex()` invariant as `set_temp_home`; the guard's
+            // lifetime is bounded by the lock the test holds.
+            unsafe {
+                if let Some(home) = &self.home {
+                    env::set_var("HOME", home);
+                } else {
+                    env::remove_var("HOME");
+                }
 
-            if let Some(discuss_log) = &self.discuss_log {
-                env::set_var("DISCUSS_LOG", discuss_log);
-            } else {
-                env::remove_var("DISCUSS_LOG");
+                if let Some(discuss_log) = &self.discuss_log {
+                    env::set_var("DISCUSS_LOG", discuss_log);
+                } else {
+                    env::remove_var("DISCUSS_LOG");
+                }
             }
         }
     }
@@ -155,8 +163,10 @@ mod tests {
             .to_string_lossy();
         assert!(log_file_name.starts_with("discuss."));
         assert!(log_file_name.ends_with(".log"));
-        assert!(fs::read_to_string(&log_files[0])
-            .expect("log file should be readable")
-            .contains("test log event"));
+        assert!(
+            fs::read_to_string(&log_files[0])
+                .expect("log file should be readable")
+                .contains("test log event")
+        );
     }
 }

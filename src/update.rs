@@ -526,9 +526,11 @@ mod tests {
     fn unsupported_target_returns_actionable_error() {
         let error = target_triple_for("linux", "aarch64").expect_err("unsupported target");
 
-        assert!(error
-            .to_string()
-            .contains("unsupported platform linux/aarch64"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported platform linux/aarch64")
+        );
     }
 
     #[test]

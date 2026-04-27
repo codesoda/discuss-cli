@@ -1,5 +1,5 @@
 use std::fs;
-use std::future::{pending, Future};
+use std::future::{Future, pending};
 use std::io::{self, IsTerminal, Read};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -28,13 +28,13 @@ pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use events::{Event, EventEmitter, EventKind};
 pub use exit::exit_code_for_error;
-pub use launch::{announce_listening, loopback_url, SystemBrowserLauncher};
+pub use launch::{SystemBrowserLauncher, announce_listening, loopback_url};
 pub use logging::init_tracing;
 pub use render::render;
-pub use server::{serve, serve_with_ready, AppState};
+pub use server::{AppState, serve, serve_with_ready};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
-pub use transcript::{build_transcript, Transcript, TranscriptThread};
+pub use transcript::{Transcript, TranscriptThread, build_transcript};
 
 pub const DEFAULT_PORT: u16 = 7777;
 

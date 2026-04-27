@@ -30,10 +30,8 @@ where
 {
     writeln!(writer, "listening on {url}")?;
 
-    if auto_open {
-        if let Err(error) = launcher.open(url) {
-            tracing::warn!(%url, error = %error, "failed to open browser");
-        }
+    if auto_open && let Err(error) = launcher.open(url) {
+        tracing::warn!(%url, error = %error, "failed to open browser");
     }
 
     Ok(())

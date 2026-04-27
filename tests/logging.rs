@@ -34,7 +34,9 @@ fn cli_tracing_uses_file_logs_without_polluting_stderr() {
         .collect::<Vec<_>>();
 
     assert_eq!(log_files.len(), 1);
-    assert!(std::fs::read_to_string(&log_files[0])
-        .expect("log file should be readable")
-        .contains("tracing initialized"));
+    assert!(
+        std::fs::read_to_string(&log_files[0])
+            .expect("log file should be readable")
+            .contains("tracing initialized")
+    );
 }
