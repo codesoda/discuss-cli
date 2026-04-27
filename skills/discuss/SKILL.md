@@ -1,16 +1,27 @@
 ---
 name: discuss
-description: Launch the discuss CLI on a markdown file, stream the event log via Monitor, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path>.
+description: Launch the discuss CLI on a markdown file (or piped stdin), stream the event log via Monitor, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path> or when the user wants to review markdown content piped from another command.
 allowed-tools: Bash, Monitor, TaskStop, Read, ToolSearch
 ---
 
 # discuss — Interactive markdown review session
 
-Open a markdown file in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown content in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+
+The source can be either a file on disk or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
 ## Arguments
 
-- `$ARGUMENTS` — Path to the markdown file to review. Required. If missing, ask the user which file and stop.
+- `$ARGUMENTS` — Either a path to the markdown file to review, OR markdown content the user wants to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
+
+### Stdin mode
+
+When you have markdown content already in hand (e.g. a generated summary of staged changes) and don't need it on disk, pipe it in instead of writing a temp file:
+
+- `discuss -` reads markdown from stdin explicitly.
+- `<some-command> | discuss` also reads stdin (auto-detected when no file arg is given and stdin is not a TTY).
+
+In stdin mode, the `session.started` event reports `source_file: "<stdin>"` and history archives are written under `.../unnamed/` since there is no source path to derive a folder name from.
 
 ## Preflight: Ensure `discuss` is installed
 
@@ -38,10 +49,32 @@ ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 
 Run `discuss` directly as the Monitor command — do NOT launch it via Bash with `run_in_background`. Monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
 
+**File mode:**
+
 ```
 Monitor(
   description: "discuss events for <file>",
   command: "discuss \"$ARGUMENTS\"",
+  persistent: true
+)
+```
+
+**Stdin mode** — pipe the markdown content into `discuss -`. Use a heredoc to keep the content readable in the Monitor command:
+
+```
+Monitor(
+  description: "discuss events for staged-diff review",
+  command: "discuss - <<'DISCUSS_EOF'\n# Staged Diff Review\n\n## src/foo.rs\n\n... markdown body ...\nDISCUSS_EOF",
+  persistent: true
+)
+```
+
+Or pipe the output of another command:
+
+```
+Monitor(
+  description: "discuss events for staged-diff review",
+  command: "git diff --cached -U10 | render-as-markdown | discuss -",
   persistent: true
 )
 ```
@@ -52,8 +85,9 @@ Notes:
 - Do NOT redirect stderr. Monitor sends stderr to the output file (readable via Read) and it never triggers notifications, so discuss's `listening on …` stderr line can't pollute the event stream.
 - Record the `task_id` returned by Monitor — you'll need it for `TaskStop` later.
 - If the port is already bound or the file doesn't exist, discuss exits immediately and Monitor ends without ever emitting a `session.started` event. Read the Monitor output file to surface the error, then stop.
+- In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.
 
-Optionally `Read` the markdown source afterward for context on anchor snippets.
+Optionally `Read` the markdown source afterward for context on anchor snippets (file mode only).
 
 ## Step 2: Confirm startup and capture URL
 

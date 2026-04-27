@@ -70,9 +70,9 @@ pub struct Draft {
 mod anchor_range_keys {
     use std::collections::HashMap;
 
+    use serde::Deserialize;
     use serde::de::{self, Deserializer};
     use serde::ser::{SerializeMap, Serializer};
-    use serde::Deserialize;
 
     use super::Draft;
 
@@ -134,7 +134,7 @@ mod tests {
     use super::*;
 
     use chrono::TimeZone;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn timestamp() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 4, 23, 2, 30, 0)

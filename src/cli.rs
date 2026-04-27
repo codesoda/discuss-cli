@@ -18,7 +18,6 @@ LLM ref: https://github.com/codesoda/discuss-cli/blob/main/llms.txt";
     name = "discuss",
     version,
     about = "Launch a live bidirectional markdown review session.",
-    arg_required_else_help = true,
     after_help = HELP_FOOTER,
     after_long_help = HELP_FOOTER
 )]
@@ -44,7 +43,10 @@ pub struct Args {
     )]
     pub history_dir: Option<PathBuf>,
 
-    #[arg(value_name = "FILE", help = "Markdown file to review")]
+    #[arg(
+        value_name = "FILE",
+        help = "Markdown file to review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin."
+    )]
     pub file: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -81,18 +83,23 @@ pub struct UpdateArgs {
 
 #[cfg(test)]
 mod tests {
-    use clap::{error::ErrorKind, CommandFactory, Parser};
+    use clap::{CommandFactory, Parser, error::ErrorKind};
 
     use super::*;
 
     #[test]
-    fn bare_command_displays_help() {
-        let error = Args::try_parse_from(["discuss"]).expect_err("bare command should show help");
+    fn bare_command_parses_with_no_file_or_subcommand() {
+        let args = Args::try_parse_from(["discuss"]).expect("bare command should parse");
 
-        assert_eq!(
-            error.kind(),
-            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-        );
+        assert!(args.file.is_none());
+        assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn parses_stdin_dash_argument() {
+        let args = Args::try_parse_from(["discuss", "-"]).expect("dash should parse as stdin");
+
+        assert_eq!(args.file, Some(PathBuf::from("-")));
     }
 
     #[test]
