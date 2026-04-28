@@ -2540,19 +2540,41 @@
       const anchor = getAnchorElByIdx(draft.anchorStart);
       if (!anchor) return;
       anchor.classList.add('has-thread');
-      let stack = anchor.querySelector('.thread-marker-stack');
-      if (!stack) {
-        stack = document.createElement('div');
-        stack.className = 'thread-marker-stack';
-        anchor.appendChild(stack);
-      }
       const marker = document.createElement('button');
       marker.className = 'thread-marker kind-draft';
       marker.setAttribute('data-draft-key', key);
       marker.setAttribute('data-anchor-start', draft.anchorStart);
       marker.setAttribute('data-anchor-end', draft.anchorEnd);
       marker.textContent = '…';
-      stack.appendChild(marker);
+      // Drafts don't carry lineRange in persisted state, but if the editor
+      // for this exact anchor range is open we can read its lineRange from
+      // the in-memory cache and position the dot at the line.
+      const lineRange = (
+        activeNewThreadDraft
+        && activeNewThreadDraft.anchorStart === draft.anchorStart
+        && activeNewThreadDraft.anchorEnd === draft.anchorEnd
+      ) ? activeNewThreadDraft.lineRange : null;
+      const pre = lineRange
+        ? (anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre'))
+        : null;
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
+      if (row) {
+        const wrapperRect = anchor.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        const top = rowRect.top - wrapperRect.top + (rowRect.height - 20) / 2;
+        marker.classList.add('aligned-to-line');
+        marker.style.top = top + 'px';
+        anchor.appendChild(marker);
+      } else {
+        let stack = anchor.querySelector('.thread-marker-stack');
+        if (!stack) {
+          stack = document.createElement('div');
+          stack.className = 'thread-marker-stack';
+          anchor.appendChild(stack);
+        }
+        stack.appendChild(marker);
+      }
     });
 
     // Render line-range gutter bars for code-block threads.
@@ -2730,9 +2752,14 @@
 
   // ---------- New-thread editor ----------
   let newThreadEditor = null;
+  // Cached lineRange for the currently open editor so renderMarkers can
+  // place the teal draft dot at the line (drafts are persisted by anchor
+  // range only — line info lives in client memory until the thread saves).
+  let activeNewThreadDraft = null;
   function closeNewThreadEditor() {
     const hadEditor = !!newThreadEditor;
     if (newThreadEditor) { newThreadEditor.remove(); newThreadEditor = null; }
+    activeNewThreadDraft = null;
     document.querySelectorAll('#doc-content [data-anchor-idx].focused').forEach(el => el.classList.remove('focused'));
     document.querySelectorAll('#doc-content [data-anchor-idx].in-range').forEach(el => el.classList.remove('in-range'));
     document.querySelectorAll('.line-numbers-rows > span.draft-active-line').forEach(span => span.classList.remove('draft-active-line'));
@@ -2765,6 +2792,16 @@
     const anchorEl = getAnchorElByIdx(startIdx);
     if (!anchorEl) return;
 
+    // Stash the active draft's lineRange + anchor range so renderMarkers can
+    // place the teal draft dot line-aligned. Cleared in closeNewThreadEditor.
+    if (lineRange) {
+      activeNewThreadDraft = {
+        anchorStart: parseInt(startIdx, 10),
+        anchorEnd: parseInt(endIdx, 10),
+        lineRange: { ...lineRange },
+      };
+    }
+
     const editor = document.createElement('div');
     editor.className = 'new-thread-editor';
     const lineLabel = lineRange
@@ -2783,8 +2820,20 @@
     threadsHost.appendChild(editor);
 
     const paneRightRect = paneRight.getBoundingClientRect();
-    const anchorRect = anchorEl.getBoundingClientRect();
-    let top = anchorRect.top - paneRightRect.top;
+    // Anchor the editor card to the line row when lineRange is set, so it
+    // opens horizontally across from the line being commented on rather
+    // than at the top of the whole code block.
+    let top;
+    if (lineRange) {
+      const pre = anchorEl.tagName === 'PRE' ? anchorEl : anchorEl.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = rows && rows.children[lineRange.start - 1];
+      top = row
+        ? row.getBoundingClientRect().top - paneRightRect.top
+        : anchorEl.getBoundingClientRect().top - paneRightRect.top;
+    } else {
+      top = anchorEl.getBoundingClientRect().top - paneRightRect.top;
+    }
     const openThreads = Array.from(threadsHost.querySelectorAll('.thread.open'));
     openThreads.forEach(t => {
       const tTop = parseFloat(t.style.top || 0);
