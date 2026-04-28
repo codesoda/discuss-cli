@@ -166,7 +166,7 @@
     font-size: 12px;
     padding: 6px 12px;
     border: 1px solid var(--line-strong);
-    background: white;
+    background: var(--card);
     color: var(--ink);
     border-radius: 6px;
     cursor: pointer;
@@ -174,6 +174,7 @@
   header .toggle:hover { background: var(--accent-hover); }
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
+  header .theme-menu { position: relative; display: inline-flex; }
   header .theme-toggle {
     font: inherit;
     width: 32px;
@@ -189,8 +190,45 @@
     cursor: pointer;
   }
   header .theme-toggle:hover { background: var(--accent-hover); color: var(--ink); }
+  header .theme-toggle.open { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
   header .theme-toggle .theme-icon { width: 18px; height: 18px; }
   header .theme-toggle .theme-icon[hidden] { display: none; }
+  header .theme-menu-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 140px;
+    padding: 4px;
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 110;
+  }
+  header .theme-menu-list[hidden] { display: none; }
+  header .theme-menu-item {
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    padding: 6px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  header .theme-menu-item:hover { background: var(--accent-hover); }
+  header .theme-menu-item.active { background: var(--accent-soft); color: var(--ink); }
+  header .theme-menu-item .theme-icon { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
+  header .theme-menu-item.active .theme-icon { color: var(--accent); }
+  header .theme-menu-item .check { margin-left: auto; color: var(--accent); width: 14px; height: 14px; }
+  header .theme-menu-item:not(.active) .check { visibility: hidden; }
   #copy-all {
     font: inherit;
     padding: 7px 14px;
@@ -845,11 +883,30 @@
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
-  <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme (system / light / dark)">
-    <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
-    <svg class="theme-icon theme-icon-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
-    <svg class="theme-icon theme-icon-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-  </button>
+  <span class="theme-menu" id="theme-menu">
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
+      <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+      <svg class="theme-icon theme-icon-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
+      <svg class="theme-icon theme-icon-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <div class="theme-menu-list" id="theme-menu-list" role="menu" aria-labelledby="theme-toggle" hidden>
+      <button class="theme-menu-item" data-mode="system" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+        <span>System</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+      <button class="theme-menu-item" data-mode="light" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
+        <span>Light</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+      <button class="theme-menu-item" data-mode="dark" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        <span>Dark</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+    </div>
+  </span>
   <span class="done-control" id="done-control">
     <button id="copy-all" title="Finish the review and send the transcript to the agent">Done — send to chat</button>
   </span>
@@ -3166,19 +3223,60 @@
     document.querySelectorAll('link[data-prism-theme]').forEach(link => {
       link.disabled = (link.dataset.prismTheme !== effective);
     });
+    // The button shows the current mode's icon (system / light / dark).
     document.querySelectorAll('.theme-toggle .theme-icon').forEach(icon => {
       icon.hidden = !icon.classList.contains('theme-icon-' + mode);
+    });
+    // The menu shows a checkmark next to the active option.
+    document.querySelectorAll('.theme-menu-item').forEach(item => {
+      const isActive = item.getAttribute('data-mode') === mode;
+      item.classList.toggle('active', isActive);
+      item.setAttribute('aria-checked', isActive ? 'true' : 'false');
     });
   }
   function initThemeToggle() {
     const btn = document.getElementById('theme-toggle');
-    if (!btn) return;
+    const list = document.getElementById('theme-menu-list');
+    if (!btn || !list) return;
     applyThemeMode(currentThemeMode());
-    btn.addEventListener('click', () => {
-      const next = THEME_MODES[(THEME_MODES.indexOf(currentThemeMode()) + 1) % THEME_MODES.length];
-      try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
-      applyThemeMode(next);
+
+    function openMenu() {
+      list.hidden = false;
+      btn.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    function closeMenu() {
+      list.hidden = true;
+      btn.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (list.hidden) openMenu(); else closeMenu();
     });
+    list.addEventListener('click', (event) => {
+      const item = event.target.closest('.theme-menu-item');
+      if (!item) return;
+      event.stopPropagation();
+      const mode = item.getAttribute('data-mode');
+      if (!THEME_MODES.includes(mode)) return;
+      try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+      applyThemeMode(mode);
+      closeMenu();
+      btn.focus();
+    });
+    document.addEventListener('click', (event) => {
+      if (list.hidden) return;
+      if (event.target.closest('#theme-menu')) return;
+      closeMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !list.hidden) {
+        closeMenu();
+        btn.focus();
+      }
+    });
+
     if (themeMediaQuery) {
       const onSystemChange = () => {
         if (currentThemeMode() === 'system') applyThemeMode('system');
