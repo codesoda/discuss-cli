@@ -62,11 +62,24 @@ discuss ./plan.md
 
 Browser opens on `http://127.0.0.1:7777`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
+### Piping markdown via stdin
+
+`discuss` reads from stdin when given `-` explicitly, or auto-detects a non-TTY stdin when no file argument is supplied. Useful for ad-hoc review of generated markdown without writing a temp file:
+
+```sh
+git diff --cached | render-as-markdown | discuss -
+echo "# Quick note\n\nReview this." | discuss
+```
+
+In stdin mode, `session.started` reports `source_file: "<stdin>"` and history archives are written under `<history-dir>/unnamed/<timestamp>.json` since there's no source path to derive a folder name from. Bare `discuss` in an interactive terminal still prints help and exits 2.
+
 ## CLI
 
 | Command | Description |
 |---------|-------------|
 | `discuss <file>` | Open a markdown file in a browser-based review session |
+| `discuss -` | Read markdown from stdin explicitly |
+| `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
 | `discuss update --check` | Check GitHub for a newer release |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |
 
