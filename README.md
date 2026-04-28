@@ -1,10 +1,12 @@
 # Discuss CLI
 
-Turn agent plans and Markdown docs into an AI-native review surface.
+**Stop reviewing agent plans in the terminal.**
 
-`discuss` is a local CLI that opens any Markdown file in your browser with real-time, PR-style comment threads on every paragraph. Your coding agent joins the session, reads the exact text under discussion, and argues back in the margins.
+<img src="docs/demo.gif" alt="Discuss CLI demo" width="100%">
 
-Anchored. Threaded. Bidirectional. No cloud. No copy-paste.
+`discuss` opens any Markdown file (or piped stdin) in your browser with PR-style comment threads on every paragraph. Your Codex or Claude Code session reads your comments and replies in the margins — same terminal session, no copy-paste.
+
+Anchored. Threaded. Bidirectional. No cloud.
 
 ## Why?
 
@@ -13,6 +15,7 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 `discuss` makes the doc itself the workspace:
 
 - **Inline anchored threads** — click any paragraph, drop a comment, get a threaded response.
+- **Syntax highlighting** — tag fenced code blocks with a language (e.g. ` ```rust `, ` ```diff-typescript `) for browser-side highlighting. See [Prism's supported languages](https://prismjs.com/#supported-languages) for the full set.
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. Rendered distinctly so you can tell who said what at a glance.
 - **Bidirectional** — the browser writes through a local REST API; the agent reads stdout events and writes back through the same API.
 - **No cloud.** One Rust binary, one localhost server, one browser tab.
@@ -25,9 +28,9 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh
 ```
 
-Downloads the latest release tarball from GitHub, installs the binary to `~/.discuss/bin/`, and symlinks `~/.local/bin/discuss`. Skill is **not** installed on this path — pair with `npx skills add` below, or let your agent install it on first use.
+Downloads the latest release tarball from GitHub, installs the binary to `~/.discuss/bin/`, symlinks `~/.local/bin/discuss`, fetches the `/discuss` skill files into `~/.discuss/skills/discuss/`, and links them into every agent root present (`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/`).
 
-### Full install (CLI + skill) from a clone
+### From a clone
 
 ```sh
 git clone https://github.com/codesoda/discuss-cli.git
@@ -35,15 +38,7 @@ cd discuss-cli
 ./install.sh
 ```
 
-Builds from source with `cargo build --release`, installs the binary to `~/.discuss/bin/`, symlinks `~/.local/bin/discuss`, and symlinks the `/discuss` skill into every agent root present (`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/`).
-
-### Skill-only (lazy binary bootstrap)
-
-```sh
-npx skills add codesoda/discuss-cli
-```
-
-Uses the [vercel-labs/skills](https://github.com/vercel-labs/skills) CLI to drop the `/discuss` skill into your agent roots. The binary isn't installed yet — the skill bootstraps it on first use (see Quick Start).
+Same outcome as the curl path, but builds the binary from source with `cargo build --release` and links the skill directly out of the clone so `git pull` updates it.
 
 ## Quick Start
 
