@@ -6,9 +6,14 @@ allowed-tools: Bash, Monitor, TaskStop, Read, ToolSearch
 
 # discuss — Interactive markdown review session
 
-Open markdown content in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown content (or a git diff) in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
-The source can be either a file on disk or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
+The source can be:
+
+- A markdown file on disk (`discuss plan.md`)
+- Multiple markdown files in one session (`discuss plan.md design.md notes.md`) — each renders in one scrollable column with a left-rail file tree
+- Markdown piped in on stdin (`<cmd> | discuss` or `discuss -`)
+- **A git diff via the built-in subcommand** — `discuss diff` (staged), `discuss diff --unstaged`, or `discuss diff <range>`. Use this instead of regenerating the diff inside markdown — it's the supported path and avoids prompt drift / wasted tokens.
 
 ## Arguments
 
@@ -22,6 +27,32 @@ When you have markdown content already in hand (e.g. a generated summary of stag
 - `<some-command> | discuss` also reads stdin (auto-detected when no file arg is given and stdin is not a TTY).
 
 In stdin mode, the `session.started` event reports `source_file: "<stdin>"` and history archives are written under `.../unnamed/` since there is no source path to derive a folder name from.
+
+### Diff review mode
+
+When the user wants to review a git diff, use the `discuss diff` subcommand directly instead of generating a markdown wrapper. Each changed file becomes a `kind: "diff"` file in the session, the v2 UI (open with `?ui=v2`) renders one Prism-highlighted block per hunk, and threads anchor at hunk granularity.
+
+```
+Monitor(
+  description: "discuss diff (staged) review",
+  command: "discuss diff",
+  persistent: true
+)
+```
+
+Variants:
+
+- `discuss diff` — staged diff (`git diff --cached`); this is the default.
+- `discuss diff --unstaged` — working tree.
+- `discuss diff HEAD~3..HEAD` (or `main...feature`, single commit, etc.) — any range arg is forwarded to `git diff`.
+
+In diff mode the `session.started` payload looks like:
+
+```json
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:7777","mode":"diff","source_file":"git diff --no-color --no-ext-diff --cached","files_count":4,"git_args":["diff","--no-color","--no-ext-diff","--cached"],"started_at":"..."}}
+```
+
+If the working tree / index is clean, `discuss diff` exits before binding with `diff error: no changes to review` — Monitor ends without a `session.started` event. Read the Monitor output file to surface that error and stop.
 
 ## Preflight: Ensure `discuss` is installed
 
@@ -94,8 +125,10 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 The first Monitor notification should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","mode":"markdown","source_file":"...","files_count":1,"started_at":"..."}}
 ```
+
+`mode` is `"markdown"` for file / stdin / multi-file sessions and `"diff"` for `discuss diff` (which adds a `git_args` array). `files_count` is the number of files in the session.
 
 Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
 
@@ -168,7 +201,7 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 
 ## Stdout event kinds
 
-- `session.started` → `{url, source_file, started_at}`
+- `session.started` → `{url, mode, source_file, files_count, started_at}` (plus `git_args` in diff mode)
 - `session.done` → `{}` — emitted when discuss exits cleanly
 - `thread.created` → `{id, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`

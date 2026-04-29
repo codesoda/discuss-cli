@@ -73,9 +73,33 @@ echo "# Quick note\n\nReview this." | discuss
 
 In stdin mode, `session.started` reports `source_file: "<stdin>"` and history archives are written under `<history-dir>/unnamed/<timestamp>.json` since there's no source path to derive a folder name from. Bare `discuss` in an interactive terminal still prints help and exits 2.
 
-### Reviewing a staged git diff
+### Reviewing a git diff
 
-Stdin + syntax highlighting + line-anchored threads make `discuss` a natural pre-commit review surface. Drop this in a custom prompt your agent can run before each commit:
+Use the built-in `discuss diff` subcommand. It runs `git diff` for you, splits the unified output into one file per `diff --git` header, and opens a browser-based review session with one collapsible block per hunk. Each hunk gets a Prism-highlighted `language-diff-<lang>` fence (e.g. `diff-rust`, `diff-typescript`) so additions and deletions render with both the diff gutter and language-aware syntax colors.
+
+```sh
+discuss diff                 # staged diff (git diff --cached) — default
+discuss diff --unstaged      # working tree
+discuss diff HEAD~3..HEAD    # arbitrary range
+discuss diff main...feature  # branch comparison
+```
+
+Anchor a thread on any hunk to leave a comment; the agent posts takes via `/api/threads/{id}/takes` exactly as it does in markdown mode. `session.started` carries `mode: "diff"` and `git_args`, and history archives land under `<history-dir>/multi-N-files/<timestamp>.json`.
+
+#### Reviewing multiple markdown files
+
+```sh
+discuss plan.md design.md notes.md
+```
+
+All three files render as one scrollable column with a left-rail file tree (with per-file open / total thread badges, path filter, and "only with open threads" toggle). Threads stay anchored to their originating file, and the Done transcript groups by file.
+
+#### Deprecated: prompt-driven diff wrapper
+
+The old "agent generates a markdown wrapper around `git diff --cached`" recipe still works, but `discuss diff` is the supported path going forward and avoids the wasted tokens, prompt drift, and missing language hints that came with regenerating the diff inside markdown.
+
+<details>
+<summary>Old recipe (kept for one or two releases)</summary>
 
 > Before committing, open the staged diff for review in discuss.
 >
@@ -86,15 +110,19 @@ Stdin + syntax highlighting + line-anchored threads make `discuss` a natural pre
 >
 > Use `git diff --cached -U10` so each hunk includes 10 lines of original file context, and let nearby hunks merge naturally. Open it with `discuss` in browser-opening mode. Do not use `--no-open`. Watch the discuss session until `session.done`, respond to comments with takes, and do not commit until I explicitly confirm after the review.
 
-The agent's per-file prose anchors block-level threads ("why is this changing?"), and the fenced ` ```diff ` blocks let you drop line-anchored comments directly on the added/removed lines. No PR, no Google Doc, no copy-paste — just review-then-commit in one terminal session.
+</details>
 
 ## CLI
 
 | Command | Description |
 |---------|-------------|
 | `discuss <file>` | Open a markdown file in a browser-based review session |
+| `discuss <a> <b> ...` | Open multiple files in one session with a left-rail file tree |
 | `discuss -` | Read markdown from stdin explicitly |
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
+| `discuss diff` | Review the staged diff (`git diff --cached`) |
+| `discuss diff --unstaged` | Review the working tree (`git diff`) |
+| `discuss diff <range>` | Forward arbitrary range args to `git diff` (e.g. `HEAD~3..HEAD`) |
 | `discuss update --check` | Check GitHub for a newer release |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |
 
@@ -128,7 +156,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 
 | Kind | When |
 |------|------|
-| `session.started` | Server bound and listening |
+| `session.started` | Server bound and listening (payload includes `mode: "markdown"` or `"diff"`, `files_count`, and `git_args` in diff mode) |
 | `thread.created` | User opened a new thread |
 | `reply.added` | Human posted a reply |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |

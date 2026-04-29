@@ -7,6 +7,55 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct ThreadId(pub String);
 
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct FileId(pub String);
+
+pub fn default_file_id() -> FileId {
+    FileId("f-1".to_string())
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    Markdown,
+    Diff,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct File {
+    pub id: FileId,
+    pub path: String,
+    pub kind: FileKind,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Source {
+    #[serde(default)]
+    pub files: Vec<File>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMeta {
+    pub id: FileId,
+    pub path: String,
+    pub kind: FileKind,
+}
+
+impl From<&File> for FileMeta {
+    fn from(file: &File) -> Self {
+        Self {
+            id: file.id.clone(),
+            path: file.path.clone(),
+            kind: file.kind,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadKind {
@@ -25,6 +74,8 @@ pub struct LineRange {
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
     pub id: ThreadId,
+    #[serde(default = "default_file_id")]
+    pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
     pub snippet: String,
@@ -65,8 +116,25 @@ pub struct Resolution {
 #[serde(rename_all = "camelCase")]
 pub struct Drafts {
     #[serde(with = "anchor_range_keys")]
-    pub new_thread: HashMap<(usize, usize), Draft>,
+    pub new_thread: HashMap<NewThreadDraftKey, Draft>,
     pub followup: HashMap<ThreadId, Draft>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NewThreadDraftKey {
+    pub file_id: FileId,
+    pub anchor_start: usize,
+    pub anchor_end: usize,
+}
+
+impl NewThreadDraftKey {
+    pub fn new(file_id: FileId, anchor_start: usize, anchor_end: usize) -> Self {
+        Self {
+            file_id,
+            anchor_start,
+            anchor_end,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -83,10 +151,10 @@ mod anchor_range_keys {
     use serde::de::{self, Deserializer};
     use serde::ser::{SerializeMap, Serializer};
 
-    use super::Draft;
+    use super::{Draft, FileId, NewThreadDraftKey, default_file_id};
 
     pub fn serialize<S>(
-        drafts: &HashMap<(usize, usize), Draft>,
+        drafts: &HashMap<NewThreadDraftKey, Draft>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -94,14 +162,19 @@ mod anchor_range_keys {
     {
         let mut map = serializer.serialize_map(Some(drafts.len()))?;
 
-        for ((anchor_start, anchor_end), draft) in drafts {
-            map.serialize_entry(&format!("{anchor_start}-{anchor_end}"), draft)?;
+        for (key, draft) in drafts {
+            map.serialize_entry(
+                &format!("{}|{}-{}", key.file_id.0, key.anchor_start, key.anchor_end),
+                draft,
+            )?;
         }
 
         map.end()
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<(usize, usize), Draft>, D::Error>
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<HashMap<NewThreadDraftKey, Draft>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -115,12 +188,19 @@ mod anchor_range_keys {
         Ok(drafts)
     }
 
-    fn parse_anchor_range_key<E>(key: &str) -> Result<(usize, usize), E>
+    fn parse_anchor_range_key<E>(key: &str) -> Result<NewThreadDraftKey, E>
     where
         E: de::Error,
     {
-        let (anchor_start, anchor_end) = key.split_once('-').ok_or_else(|| {
-            E::custom(format!("expected draft key {key:?} to look like start-end"))
+        let (file_id, range) = match key.split_once('|') {
+            Some((file_id, range)) => (FileId(file_id.to_string()), range),
+            None => (default_file_id(), key),
+        };
+
+        let (anchor_start, anchor_end) = range.split_once('-').ok_or_else(|| {
+            E::custom(format!(
+                "expected draft key {key:?} to look like fileId|start-end"
+            ))
         })?;
 
         let anchor_start = anchor_start.parse().map_err(|error| {
@@ -134,7 +214,11 @@ mod anchor_range_keys {
             ))
         })?;
 
-        Ok((anchor_start, anchor_end))
+        Ok(NewThreadDraftKey {
+            file_id,
+            anchor_start,
+            anchor_end,
+        })
     }
 }
 
@@ -155,6 +239,7 @@ mod tests {
     fn thread_serializes_with_template_compatible_camel_case_keys() {
         let thread = Thread {
             id: ThreadId("u-abc".to_string()),
+            file_id: FileId("f-1".to_string()),
             anchor_start: 2,
             anchor_end: 4,
             snippet: "selected text".to_string(),
@@ -168,12 +253,14 @@ mod tests {
         let value = serde_json::to_value(&thread).expect("serialize thread");
 
         assert_eq!(value["id"], "u-abc");
+        assert_eq!(value["fileId"], "f-1");
         assert_eq!(value["anchorStart"], 2);
         assert_eq!(value["anchorEnd"], 4);
         assert_eq!(value["createdAt"], "2026-04-23T02:30:00Z");
         assert_eq!(value["kind"], "user");
         assert!(value.get("anchor_start").is_none());
         assert!(value.get("created_at").is_none());
+        assert!(value.get("file_id").is_none());
         assert!(value.get("lineRange").is_none());
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
@@ -184,6 +271,7 @@ mod tests {
     fn thread_round_trips_with_line_range_in_camel_case() {
         let thread = Thread {
             id: ThreadId("u-code".to_string()),
+            file_id: FileId("f-1".to_string()),
             anchor_start: 7,
             anchor_end: 7,
             snippet: "fn main() {}".to_string(),
@@ -200,6 +288,64 @@ mod tests {
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
         assert_eq!(round_tripped, thread);
+    }
+
+    #[test]
+    fn thread_deserializes_default_file_id_when_missing() {
+        let value = json!({
+            "id": "u-old",
+            "anchorStart": 1,
+            "anchorEnd": 2,
+            "snippet": "snippet",
+            "breadcrumb": "",
+            "text": "from an archive predating fileId",
+            "createdAt": "2026-04-23T02:30:00Z",
+            "kind": "user"
+        });
+
+        let thread: Thread = serde_json::from_value(value).expect("deserialize legacy thread");
+        assert_eq!(thread.file_id, default_file_id());
+    }
+
+    #[test]
+    fn file_and_file_meta_round_trip_in_camel_case() {
+        let file = File {
+            id: FileId("f-1".to_string()),
+            path: "plan.md".to_string(),
+            kind: FileKind::Markdown,
+            content: "# heading".to_string(),
+        };
+
+        let value = serde_json::to_value(&file).expect("serialize file");
+        assert_eq!(value["id"], "f-1");
+        assert_eq!(value["path"], "plan.md");
+        assert_eq!(value["kind"], "markdown");
+        assert_eq!(value["content"], "# heading");
+
+        let round_tripped: File = serde_json::from_value(value).expect("deserialize file");
+        assert_eq!(round_tripped, file);
+
+        let meta: FileMeta = (&file).into();
+        let value = serde_json::to_value(&meta).expect("serialize file meta");
+        assert_eq!(
+            value,
+            json!({ "id": "f-1", "path": "plan.md", "kind": "markdown" })
+        );
+
+        let round_tripped: FileMeta = serde_json::from_value(value).expect("deserialize file meta");
+        assert_eq!(round_tripped, meta);
+    }
+
+    #[test]
+    fn file_kind_serializes_to_lowercase_strings() {
+        assert_eq!(
+            serde_json::to_value(FileKind::Markdown).expect("serialize markdown"),
+            "markdown"
+        );
+        assert_eq!(
+            serde_json::to_value(FileKind::Diff).expect("serialize diff"),
+            "diff"
+        );
     }
 
     #[test]
@@ -278,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn drafts_round_trip_with_anchor_range_and_thread_id_keys() {
+    fn drafts_round_trip_with_file_scoped_anchor_keys_and_thread_id_keys() {
         let mut drafts = Drafts::default();
         let draft = Draft {
             text: "New thread draft".to_string(),
@@ -289,16 +435,17 @@ mod tests {
             updated_at: timestamp(),
         };
 
-        drafts.new_thread.insert((3, 5), draft.clone());
+        let key = NewThreadDraftKey::new(FileId("f-2".to_string()), 3, 5);
+        drafts.new_thread.insert(key.clone(), draft.clone());
         drafts
             .followup
             .insert(ThreadId("u-abc".to_string()), followup.clone());
 
         let value = serde_json::to_value(&drafts).expect("serialize drafts");
 
-        assert_eq!(value["newThread"]["3-5"]["text"], draft.text);
+        assert_eq!(value["newThread"]["f-2|3-5"]["text"], draft.text);
         assert_eq!(
-            value["newThread"]["3-5"]["updatedAt"],
+            value["newThread"]["f-2|3-5"]["updatedAt"],
             "2026-04-23T02:30:00Z"
         );
         assert_eq!(value["followup"]["u-abc"]["text"], followup.text);
@@ -307,6 +454,17 @@ mod tests {
 
         let round_tripped: Drafts = serde_json::from_value(value).expect("deserialize drafts");
         assert_eq!(round_tripped, drafts);
+    }
+
+    #[test]
+    fn drafts_deserialize_legacy_anchor_range_key_into_default_file() {
+        let payload = serde_json::json!({
+            "newThread": {"3-5": {"text": "legacy", "updatedAt": "2026-04-23T02:30:00Z"}},
+            "followup": {},
+        });
+        let drafts: Drafts = serde_json::from_value(payload).expect("legacy key parses");
+        let expected_key = NewThreadDraftKey::new(default_file_id(), 3, 5);
+        assert_eq!(drafts.new_thread[&expected_key].text, "legacy");
     }
 
     #[test]

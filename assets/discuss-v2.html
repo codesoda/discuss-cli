@@ -1,0 +1,1587 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>discuss</title>
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism.min.css" data-prism-theme="light">
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css" data-prism-theme="dark" disabled>
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
+  <style>
+    :root { color-scheme: light dark; --tree-w: 220px; --threads-w: 320px; }
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="dark"] { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; }
+    .v2-layout { display: grid; grid-template-columns: var(--tree-w) 1fr var(--threads-w); min-height: 100vh; }
+    .v2-layout[data-single-file="true"] { grid-template-columns: 1fr var(--threads-w); }
+    .v2-layout[data-single-file="true"] .v2-tree { display: none; }
+    .v2-tree, .v2-threads-panel { border-right: 1px solid rgba(127,127,127,0.25); padding: 1rem 0.75rem; font-size: 0.9rem; overflow-y: auto; max-height: 100vh; }
+    .v2-threads-panel { border-right: none; border-left: 1px solid rgba(127,127,127,0.25); }
+    .v2-tree h2, .v2-threads-panel h2 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.55; margin: 0 0 0.5rem 0.25rem; }
+    .v2-tree ul { list-style: none; padding: 0; margin: 0; }
+    .v2-tree li { padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; }
+    .v2-tree li:hover { background: rgba(127,127,127,0.12); }
+    .v2-tree li.active { background: rgba(127,127,127,0.2); font-weight: 600; }
+    .v2-tree li .v2-tree-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .v2-tree li .v2-tree-kind { font-size: 0.7rem; opacity: 0.55; }
+    .v2-tree li.tree-empty { opacity: 0.55; cursor: default; padding: 0.25rem 0.4rem; }
+    .v2-tree li.tree-empty:hover { background: transparent; }
+    .v2-tree-badges { display: inline-flex; gap: 0.25rem; }
+    .v2-tree-badge { font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 999px; line-height: 1.4; min-width: 1.25rem; text-align: center; }
+    .v2-tree-badge.total { background: rgba(127,127,127,0.18); }
+    .v2-tree-badge.open { background: rgba(29,111,216,0.18); color: #1d6fd8; font-weight: 600; }
+    html[data-theme="dark"] .v2-tree-badge.open { color: #5fa6ff; background: rgba(95,166,255,0.18); }
+    .v2-tree-controls { display: flex; flex-direction: column; gap: 0.35rem; padding: 0 0.25rem 0.5rem; }
+    .v2-tree-controls input[type="search"] { font: inherit; padding: 0.25rem 0.4rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); background: transparent; color: inherit; font-size: 0.8rem; }
+    .v2-tree-controls input[type="search"]:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-tree-controls label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; opacity: 0.8; cursor: pointer; }
+    .v2-tree-controls label input { margin: 0; }
+    .v2-tree-empty-message { font-size: 0.75rem; opacity: 0.55; padding: 0.25rem 0.4rem; font-style: italic; }
+    .v2-diff { display: flex; flex-direction: column; gap: 0.6rem; }
+    .v2-diff-header { display: flex; align-items: center; gap: 0.6rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; padding: 0.4rem 0.6rem; background: rgba(127,127,127,0.08); border: 1px solid rgba(127,127,127,0.2); border-radius: 6px; }
+    .v2-diff-path { font-weight: 600; }
+    .v2-diff-status { font-size: 0.7rem; padding: 0.05rem 0.45rem; border-radius: 999px; background: rgba(127,127,127,0.18); text-transform: uppercase; letter-spacing: 0.04em; }
+    .v2-diff-counts { margin-left: auto; display: inline-flex; gap: 0.5rem; font-size: 0.75rem; }
+    .v2-diff-add { color: #2e7d32; }
+    .v2-diff-del { color: #c33; }
+    html[data-theme="dark"] .v2-diff-add { color: #6dd178; }
+    html[data-theme="dark"] .v2-diff-del { color: #ff8a8a; }
+    .v2-diff-hunk { margin: 0; padding: 0; background: rgba(127,127,127,0.06); border: 1px solid rgba(127,127,127,0.18); border-radius: 6px; overflow: hidden; }
+    .v2-diff-hunk .v2-diff-hunk-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.7; padding: 0.35rem 0.6rem; background: rgba(127,127,127,0.1); border-bottom: 1px solid rgba(127,127,127,0.18); }
+    .v2-diff-hunk code { display: block; padding: 0.6rem 0.75rem; overflow-x: auto; }
+    .v2-content { padding: 2rem 2.5rem; max-width: 920px; }
+    .v2-banner { padding: 0.6rem 0.8rem; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; opacity: 0.8; font-size: 0.8rem; margin-bottom: 1.5rem; }
+    .v2-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+    .v2-doc { line-height: 1.55; }
+    .v2-doc pre { overflow-x: auto; padding: 0.75rem 1rem; background: rgba(127,127,127,0.08); border-radius: 6px; }
+    .v2-doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .v2-doc [data-anchor-idx].v2-anchor-flash { transition: background-color 0.4s; background: rgba(255,200,0,0.25); }
+    .v2-empty { opacity: 0.55; font-style: italic; }
+    .v2-section + .v2-section { margin-top: 3rem; padding-top: 2rem; border-top: 1px dashed rgba(127,127,127,0.3); }
+    .v2-section-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.55; margin-bottom: 0.75rem; }
+    .v2-thread-group { margin-bottom: 1.25rem; }
+    .v2-thread-group-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.55; margin-bottom: 0.4rem; }
+    .v2-thread-card { padding: 0.5rem 0.6rem; border: 1px solid rgba(127,127,127,0.25); border-radius: 6px; margin-bottom: 0.5rem; cursor: pointer; background: transparent; text-align: left; width: 100%; font: inherit; color: inherit; }
+    .v2-thread-card:hover { background: rgba(127,127,127,0.1); }
+    .v2-thread-card[data-resolved="true"] { opacity: 0.6; }
+    .v2-thread-card .v2-thread-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.6; margin-bottom: 0.25rem; }
+    .v2-thread-card .v2-thread-snippet { font-style: italic; opacity: 0.75; margin-bottom: 0.25rem; font-size: 0.8rem; line-height: 1.35; }
+    .v2-thread-card .v2-thread-text { font-size: 0.85rem; line-height: 1.4; }
+    .v2-thread-card .v2-thread-counts { font-size: 0.7rem; opacity: 0.55; margin-top: 0.3rem; }
+    .v2-threads-empty { opacity: 0.55; font-style: italic; font-size: 0.85rem; }
+    .v2-selection-popup { position: fixed; z-index: 1000; padding: 0.35rem 0.6rem; background: rgba(20,20,20,0.92); color: #fff; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
+    .v2-selection-popup:hover { background: rgba(20,20,20,1); }
+    .v2-new-thread-editor { position: absolute; z-index: 999; width: min(420px, 90vw); padding: 0.75rem; border-radius: 8px; background: var(--editor-bg, #fff); border: 1px solid rgba(127,127,127,0.4); box-shadow: 0 6px 18px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 0.5rem; }
+    html[data-theme="dark"] .v2-new-thread-editor { background: #1f1f1f; }
+    .v2-new-thread-editor .v2-editor-snippet { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.7; padding: 0.35rem 0.5rem; background: rgba(127,127,127,0.12); border-radius: 4px; max-height: 4.5em; overflow: hidden; }
+    .v2-new-thread-editor textarea { font: inherit; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); resize: vertical; min-height: 4.5em; background: transparent; color: inherit; }
+    .v2-new-thread-editor textarea:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-new-thread-editor .v2-editor-error { color: #d22; font-size: 0.8rem; }
+    .v2-new-thread-editor .v2-editor-buttons { display: flex; gap: 0.4rem; justify-content: flex-end; }
+    .v2-new-thread-editor button { font: inherit; padding: 0.35rem 0.75rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.45); background: transparent; cursor: pointer; color: inherit; }
+    .v2-new-thread-editor button.primary { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
+    .v2-new-thread-editor button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .v2-thread-card[data-expanded="true"] { background: rgba(127,127,127,0.08); cursor: default; }
+    .v2-thread-card[data-expanded="true"]:hover { background: rgba(127,127,127,0.08); }
+    .v2-thread-timeline { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid rgba(127,127,127,0.2); display: flex; flex-direction: column; gap: 0.45rem; }
+    .v2-thread-comment { font-size: 0.82rem; line-height: 1.4; }
+    .v2-thread-comment .v2-comment-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.55; margin-bottom: 0.15rem; }
+    .v2-thread-comment[data-kind="take"] .v2-comment-meta { color: #b06; }
+    .v2-thread-comment[data-kind="take"] .v2-comment-meta::before { content: '🤖 '; }
+    .v2-thread-actions { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .v2-thread-actions textarea { font: inherit; padding: 0.4rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); resize: vertical; min-height: 3em; background: transparent; color: inherit; }
+    .v2-thread-actions textarea:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-thread-buttons { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+    .v2-thread-buttons .spacer { flex: 1; }
+    .v2-thread-buttons button { font: inherit; padding: 0.25rem 0.6rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.45); background: transparent; cursor: pointer; color: inherit; font-size: 0.78rem; }
+    .v2-thread-buttons button.primary { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
+    .v2-thread-buttons button.danger { color: #c33; border-color: rgba(204,51,51,0.5); }
+    .v2-thread-buttons button.danger:hover { background: rgba(204,51,51,0.1); }
+    .v2-thread-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .v2-thread-buttons a { font-size: 0.78rem; opacity: 0.7; text-decoration: none; }
+    .v2-thread-buttons a:hover { opacity: 1; text-decoration: underline; }
+    .v2-thread-error { color: #d22; font-size: 0.78rem; }
+    .v2-thread-resolution { font-size: 0.78rem; opacity: 0.75; padding: 0.3rem 0.5rem; background: rgba(127,127,127,0.1); border-radius: 4px; }
+    .v2-draft-status { font-size: 0.7rem; opacity: 0.55; font-style: italic; }
+    .v2-draft-status[data-status="error"] { color: #d22; opacity: 0.85; font-style: normal; }
+    .v2-editor-buttons .v2-draft-status { margin-right: auto; }
+    .v2-done-bar { display: flex; align-items: center; gap: 0.6rem; margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px dashed rgba(127,127,127,0.3); }
+    .v2-done-bar button { font: inherit; padding: 0.45rem 0.9rem; border-radius: 5px; border: 1px solid #1d6fd8; background: #1d6fd8; color: #fff; cursor: pointer; }
+    .v2-done-bar button:hover { background: #185fbf; }
+    .v2-done-bar button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .v2-done-bar button.ok { background: #2e7d32; border-color: #2e7d32; }
+    .v2-done-error { color: #d22; font-size: 0.8rem; }
+    .v2-done-banner { display: none; position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); padding: 0.6rem 1rem; background: rgba(46,125,50,0.95); color: #fff; border-radius: 6px; font-size: 0.85rem; box-shadow: 0 6px 18px rgba(0,0,0,0.25); z-index: 1100; }
+    .v2-done-banner[data-shown="true"] { display: block; }
+    .review-complete .v2-doc { opacity: 0.9; }
+    .review-complete .v2-thread-card .v2-thread-actions,
+    .review-complete .v2-thread-card[data-expanded="false"] { pointer-events: none; }
+    .review-complete .v2-thread-card button,
+    .review-complete .v2-thread-card textarea { pointer-events: none; opacity: 0.55; }
+    .review-complete .v2-tree li { pointer-events: none; }
+    .v2-banner .v2-theme-toggle { margin-left: 0.5rem; padding: 0.15rem 0.55rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); background: transparent; cursor: pointer; font: inherit; font-size: 0.75rem; color: inherit; }
+    .v2-banner .v2-theme-toggle:hover { background: rgba(127,127,127,0.12); }
+  </style>
+  <script src="/assets/preact.umd.js"></script>
+  <script src="/assets/preact-hooks.umd.js"></script>
+  <script src="/assets/htm.umd.js"></script>
+  <script id="v2-theme-bootstrap">
+(function () {
+    var stored = null;
+    try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+    var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
+    var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+    var root = document.documentElement;
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
+    document.querySelectorAll('link[data-prism-theme]').forEach(function (link) {
+      link.disabled = (link.dataset.prismTheme !== effective);
+    });
+  })();
+  </script>
+  <script src="https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"></script>
+  <script src="https://unpkg.com/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script id="discuss-initial-state">
+window.__DISCUSS_INITIAL_STATE__ = {};
+  </script>
+  <script id="discuss-rendered-files">
+window.__DISCUSS_RENDERED_FILES__ = {};
+  </script>
+  <script>
+(function() {
+  const HEARTBEAT_INTERVAL_MS = 30000;
+  const SSE_RECONNECT_MIN_MS = 1000;
+  const SSE_RECONNECT_MAX_MS = 30000;
+  const SSE_EVENT_KINDS = [
+    'thread.created',
+    'thread.deleted',
+    'thread.resolved',
+    'thread.unresolved',
+    'reply.added',
+    'take.added',
+    'draft.updated',
+    'draft.cleared',
+  ];
+
+  const initial = (window.__DISCUSS_INITIAL_STATE__ && typeof window.__DISCUSS_INITIAL_STATE__ === 'object')
+    ? window.__DISCUSS_INITIAL_STATE__
+    : {};
+  const renderedFiles = (window.__DISCUSS_RENDERED_FILES__ && typeof window.__DISCUSS_RENDERED_FILES__ === 'object')
+    ? window.__DISCUSS_RENDERED_FILES__
+    : {};
+  const { h, render } = preact;
+  const hooks = (window.preactHooks && typeof window.preactHooks === 'object')
+    ? window.preactHooks
+    : (preact.hooks || {});
+  const { useState, useEffect, useRef, useMemo } = hooks;
+  const html = htm.bind(h);
+
+  if (typeof useState !== 'function' || typeof useEffect !== 'function') {
+    document.getElementById('app').innerHTML = '<p style="padding:2rem;color:#c00">discuss v2 failed to load: preact hooks unavailable.</p>';
+    return;
+  }
+
+  const initialFiles = Array.isArray(initial.files) ? initial.files : [];
+  const initialThreads = Array.isArray(initial.threads) ? initial.threads : [];
+  const initialReplies = (initial.replies && typeof initial.replies === 'object') ? initial.replies : {};
+  const initialTakes = (initial.takes && typeof initial.takes === 'object') ? initial.takes : {};
+  const initialResolutions = (initial.resolutions && typeof initial.resolutions === 'object') ? initial.resolutions : {};
+  const initialDrafts = normalizeDrafts(initial.drafts);
+
+  function normalizeDrafts(raw) {
+    const out = { newThread: {}, followup: {} };
+    if (!raw || typeof raw !== 'object') return out;
+    if (raw.newThread && typeof raw.newThread === 'object') {
+      Object.entries(raw.newThread).forEach(([key, draft]) => {
+        if (!draft || typeof draft !== 'object') return;
+        const parsed = parseLegacyOrFileScopedKey(key);
+        if (!parsed) return;
+        const normalizedKey = newThreadDraftKey(parsed.fileId, parsed.anchorStart, parsed.anchorEnd);
+        out.newThread[normalizedKey] = {
+          fileId: parsed.fileId,
+          anchorStart: parsed.anchorStart,
+          anchorEnd: parsed.anchorEnd,
+          text: draft.text || '',
+          updatedAt: draft.updatedAt || draft.savedAt || null,
+        };
+      });
+    }
+    if (raw.followup && typeof raw.followup === 'object') {
+      Object.entries(raw.followup).forEach(([threadId, draft]) => {
+        if (!draft || typeof draft !== 'object') return;
+        out.followup[threadId] = {
+          text: draft.text || '',
+          updatedAt: draft.updatedAt || draft.savedAt || null,
+        };
+      });
+    }
+    return out;
+  }
+
+  function parseLegacyOrFileScopedKey(key) {
+    if (typeof key !== 'string') return null;
+    const pipe = key.indexOf('|');
+    let fileId = 'f-1';
+    let range = key;
+    if (pipe >= 0) {
+      fileId = key.slice(0, pipe) || 'f-1';
+      range = key.slice(pipe + 1);
+    }
+    const dash = range.indexOf('-');
+    if (dash < 0) return null;
+    const anchorStart = parseInt(range.slice(0, dash), 10);
+    const anchorEnd = parseInt(range.slice(dash + 1), 10);
+    if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return null;
+    return { fileId, anchorStart, anchorEnd };
+  }
+
+  const THEME_STORAGE_KEY = 'discuss-theme';
+  const THEME_MODES = ['system', 'light', 'dark'];
+  const themeMediaQuery = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+  function effectiveThemeFor(mode) {
+    if (mode === 'system') {
+      return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+    }
+    return mode;
+  }
+  function readStoredThemeMode() {
+    const root = document.documentElement;
+    if (THEME_MODES.includes(root.dataset.themeMode)) return root.dataset.themeMode;
+    try {
+      const stored = localStorage.getItem(THEME_STORAGE_KEY);
+      if (stored === 'light' || stored === 'dark') return stored;
+    } catch (_) {}
+    return 'system';
+  }
+  function applyThemeMode(mode) {
+    const root = document.documentElement;
+    const effective = effectiveThemeFor(mode);
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
+    document.querySelectorAll('link[data-prism-theme]').forEach(link => {
+      link.disabled = (link.dataset.prismTheme !== effective);
+    });
+    try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+  }
+  function nextThemeMode(current) {
+    const idx = Math.max(0, THEME_MODES.indexOf(current));
+    return THEME_MODES[(idx + 1) % THEME_MODES.length];
+  }
+  function themeIcon(mode) {
+    if (mode === 'light') return '☀';
+    if (mode === 'dark') return '☾';
+    return '⌖';
+  }
+
+  function ThemeToggle() {
+    const [mode, setMode] = useState(readStoredThemeMode());
+    useEffect(() => {
+      if (!themeMediaQuery) return undefined;
+      const onChange = () => { if (mode === 'system') applyThemeMode('system'); };
+      if (themeMediaQuery.addEventListener) {
+        themeMediaQuery.addEventListener('change', onChange);
+        return () => themeMediaQuery.removeEventListener('change', onChange);
+      }
+      themeMediaQuery.addListener(onChange);
+      return () => themeMediaQuery.removeListener(onChange);
+    }, [mode]);
+    function cycle() {
+      const next = nextThemeMode(mode);
+      applyThemeMode(next);
+      setMode(next);
+    }
+    return html`
+      <button
+        class="v2-theme-toggle"
+        type="button"
+        aria-label=${`theme: ${mode}`}
+        title=${`theme: ${mode} (click to change)`}
+        onClick=${cycle}
+      >
+        ${themeIcon(mode)} ${mode}
+      </button>
+    `;
+  }
+
+  function FileTree({ files, activeId, threadCounts, onSelect }) {
+    const [query, setQuery] = useState('');
+    const [openOnly, setOpenOnly] = useState(false);
+
+    if (!files.length) {
+      return html`
+        <nav class="v2-tree">
+          <h2>Files</h2>
+          <ul><li class="tree-empty">no files</li></ul>
+        </nav>
+      `;
+    }
+
+    const trimmed = query.trim().toLowerCase();
+    const visible = files.filter(file => {
+      if (trimmed && !file.path.toLowerCase().includes(trimmed)) return false;
+      if (openOnly) {
+        const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
+        if (counts.open === 0) return false;
+      }
+      return true;
+    });
+
+    return html`
+      <nav class="v2-tree">
+        <h2>Files</h2>
+        <div class="v2-tree-controls">
+          <input
+            type="search"
+            placeholder="filter files…"
+            value=${query}
+            onInput=${e => setQuery(e.target.value)}
+          />
+          <label>
+            <input
+              type="checkbox"
+              checked=${openOnly}
+              onChange=${e => setOpenOnly(e.target.checked)}
+            />
+            only with open threads
+          </label>
+        </div>
+        ${visible.length === 0
+          ? html`<p class="v2-tree-empty-message">no matches</p>`
+          : html`
+            <ul>
+              ${visible.map(file => {
+                const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
+                return html`
+                <li
+                  key=${file.id}
+                  class=${file.id === activeId ? 'active' : ''}
+                  onClick=${() => onSelect(file.id)}
+                  title=${`${file.path} · ${counts.total} thread${counts.total === 1 ? '' : 's'}`}
+                >
+                  <span class="v2-tree-path">${file.path}</span>
+                  <span class="v2-tree-kind">${file.kind}</span>
+                  ${counts.total > 0 ? html`
+                    <span class="v2-tree-badges">
+                      ${counts.open > 0
+                        ? html`<span class="v2-tree-badge open" title=${`${counts.open} open`}>${counts.open}</span>`
+                        : null}
+                      <span class="v2-tree-badge total" title=${`${counts.total} total`}>${counts.total}</span>
+                    </span>
+                  ` : null}
+                </li>
+              `;
+              })}
+            </ul>
+          `}
+      </nav>
+    `;
+  }
+
+  function MarkdownFile({ fileId }) {
+    const renderedHtml = renderedFiles[fileId];
+    const articleRef = useRef(null);
+
+    useEffect(() => {
+      if (!articleRef.current) return;
+      Array.from(articleRef.current.children).forEach((child, idx) => {
+        child.setAttribute('data-anchor-idx', String(idx + 1));
+      });
+      highlightWithPrism(articleRef.current);
+      renderMermaidUnder(articleRef.current);
+    }, [fileId, renderedHtml]);
+
+    if (renderedHtml == null) {
+      return html`<p class="v2-empty">No content for ${fileId}.</p>`;
+    }
+    return html`
+      <article
+        class="v2-doc"
+        data-file-id=${fileId}
+        ref=${articleRef}
+        dangerouslySetInnerHTML=${{ __html: renderedHtml }}
+      />
+    `;
+  }
+
+  function DiffFile({ fileId, content, path }) {
+    const articleRef = useRef(null);
+    const parsed = useMemo(() => parseDiffFile(content || '', path), [content, path]);
+
+    useEffect(() => {
+      if (!articleRef.current) return undefined;
+      Array.from(articleRef.current.querySelectorAll('[data-hunk-idx]')).forEach((el, idx) => {
+        el.setAttribute('data-anchor-idx', String(idx + 1));
+      });
+      return observeForLazyHighlight(articleRef.current);
+    }, [fileId, content, path]);
+
+    if (parsed.binary) {
+      return html`
+        <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+          <header class="v2-diff-header" data-anchor-idx="1">
+            <span class="v2-diff-path">${path || fileId}</span>
+            <span class="v2-diff-status">binary</span>
+          </header>
+          <p class="v2-empty">binary file changed (no preview)</p>
+        </article>
+      `;
+    }
+
+    if (!parsed.hunks.length) {
+      return html`
+        <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+          <header class="v2-diff-header" data-anchor-idx="1">
+            <span class="v2-diff-path">${path || fileId}</span>
+            ${parsed.status ? html`<span class="v2-diff-status">${parsed.status}</span>` : null}
+          </header>
+          <p class="v2-empty">${parsed.headerOnly ? 'header-only diff (no hunks)' : '(empty diff)'}</p>
+        </article>
+      `;
+    }
+
+    const lang = parsed.language;
+    const langClass = lang ? `language-diff-${lang}` : 'language-diff';
+    return html`
+      <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+        <header class="v2-diff-header">
+          <span class="v2-diff-path">${path || fileId}</span>
+          ${parsed.status ? html`<span class="v2-diff-status">${parsed.status}</span>` : null}
+          <span class="v2-diff-counts">
+            <span class="v2-diff-add">+${parsed.additions}</span>
+            <span class="v2-diff-del">-${parsed.deletions}</span>
+          </span>
+        </header>
+        ${parsed.hunks.map((hunk, idx) => html`
+          <pre
+            key=${idx}
+            class=${`v2-diff-hunk ${langClass} diff-highlight`}
+            data-hunk-idx=${idx + 1}
+          ><div class="v2-diff-hunk-header">${hunk.header}</div><code class=${langClass}>${hunk.body}</code></pre>
+        `)}
+      </article>
+    `;
+  }
+
+  const DIFF_LANGUAGE_BY_EXT = {
+    rs: 'rust',
+    ts: 'typescript',
+    tsx: 'tsx',
+    js: 'javascript',
+    jsx: 'jsx',
+    py: 'python',
+    go: 'go',
+    rb: 'ruby',
+    java: 'java',
+    kt: 'kotlin',
+    swift: 'swift',
+    c: 'c',
+    h: 'c',
+    cc: 'cpp',
+    cpp: 'cpp',
+    hpp: 'cpp',
+    cs: 'csharp',
+    php: 'php',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    json: 'json',
+    md: 'markdown',
+    html: 'markup',
+    xml: 'markup',
+    css: 'css',
+    scss: 'scss',
+    sql: 'sql',
+  };
+
+  function languageFromPath(path) {
+    if (!path) return null;
+    const dot = path.lastIndexOf('.');
+    if (dot < 0) return null;
+    const ext = path.slice(dot + 1).toLowerCase();
+    return DIFF_LANGUAGE_BY_EXT[ext] || null;
+  }
+
+  function parseDiffFile(content, path) {
+    const lines = content.split(/\r?\n/);
+    let status = null;
+    let binary = false;
+    const hunks = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.startsWith('new file mode')) status = 'added';
+      else if (line.startsWith('deleted file mode')) status = 'deleted';
+      else if (line.startsWith('rename from')) status = status || 'renamed';
+      else if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) binary = true;
+      if (line.startsWith('@@')) {
+        const header = line;
+        const bodyLines = [];
+        i += 1;
+        while (i < lines.length && !lines[i].startsWith('@@') && !lines[i].startsWith('diff --git')) {
+          bodyLines.push(lines[i]);
+          i += 1;
+        }
+        hunks.push({ header, body: bodyLines.join('\n') });
+        continue;
+      }
+      i += 1;
+    }
+    let additions = 0;
+    let deletions = 0;
+    hunks.forEach(h => {
+      h.body.split('\n').forEach(l => {
+        if (l.startsWith('+') && !l.startsWith('+++')) additions += 1;
+        else if (l.startsWith('-') && !l.startsWith('---')) deletions += 1;
+      });
+    });
+    return {
+      hunks,
+      status,
+      binary,
+      headerOnly: hunks.length === 0 && !binary,
+      additions,
+      deletions,
+      language: languageFromPath(path),
+    };
+  }
+
+  function highlightWithPrism(root) {
+    if (!root || !window.Prism || typeof window.Prism.highlightAllUnder !== 'function') return;
+    try { window.Prism.highlightAllUnder(root); } catch (err) {
+      console.debug('discuss v2 prism highlight failed:', err && err.message);
+    }
+  }
+
+  function observeForLazyHighlight(root) {
+    if (!root) return () => {};
+    const targets = Array.from(root.querySelectorAll('pre.v2-diff-hunk'));
+    if (!targets.length) {
+      highlightWithPrism(root);
+      return () => {};
+    }
+    if (typeof window.IntersectionObserver !== 'function') {
+      targets.forEach(highlightWithPrism);
+      return () => {};
+    }
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        if (entry.target.dataset.prismHighlighted === 'true') return;
+        entry.target.dataset.prismHighlighted = 'true';
+        highlightWithPrism(entry.target);
+        observer.unobserve(entry.target);
+      });
+    }, { rootMargin: '200px 0px', threshold: 0 });
+    targets.forEach(target => observer.observe(target));
+    return () => observer.disconnect();
+  }
+
+  let mermaidPromise = null;
+  let mermaidCounter = 0;
+  function loadMermaid() {
+    if (mermaidPromise) return mermaidPromise;
+    mermaidPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = window.__DISCUSS_MERMAID_SRC__ || '/assets/mermaid.min.js';
+      script.async = true;
+      script.onload = () => {
+        const mermaid = window.mermaid && (window.mermaid.mermaidAPI || window.mermaid);
+        if (!mermaid || typeof mermaid.render !== 'function') {
+          reject(new Error('mermaid loaded but missing render API'));
+          return;
+        }
+        if (typeof mermaid.initialize === 'function') {
+          mermaid.initialize({ startOnLoad: false });
+        }
+        resolve(mermaid);
+      };
+      script.onerror = () => reject(new Error('failed to load mermaid script'));
+      document.head.appendChild(script);
+    });
+    return mermaidPromise;
+  }
+  function renderMermaidUnder(root) {
+    if (!root) return;
+    const blocks = Array.from(root.querySelectorAll('pre > code.language-mermaid'));
+    const pending = blocks.filter(code => !(code.parentElement && code.parentElement.dataset.mermaidRendered === 'true'));
+    if (!pending.length) return;
+    loadMermaid().then(mermaid => {
+      pending.forEach(code => {
+        const pre = code.parentElement;
+        if (!pre || pre.dataset.mermaidRendered === 'true') return;
+        const source = code.textContent || '';
+        const id = `discuss-v2-mermaid-${mermaidCounter++}`;
+        try {
+          mermaid.render(id, source, svg => {
+            pre.innerHTML = svg;
+            pre.setAttribute('data-mermaid-rendered', 'true');
+          }, pre);
+        } catch (err) {
+          console.debug('discuss v2 mermaid render failed:', err && err.message);
+        }
+      });
+    }).catch(err => {
+      console.debug('discuss v2 mermaid load failed:', err && err.message);
+    });
+  }
+
+  function FileSection({ file }) {
+    return html`
+      <section class="v2-section" data-section-file-id=${file.id}>
+        <div class="v2-section-header">${file.path} · ${file.kind}</div>
+        ${file.kind === 'diff'
+          ? html`<${DiffFile} fileId=${file.id} content=${file.content || ''} path=${file.path} />`
+          : html`<${MarkdownFile} fileId=${file.id} />`}
+      </section>
+    `;
+  }
+
+  function timestampOf(item) {
+    if (!item) return 0;
+    const raw = item.createdAt || item.addedAt;
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function ThreadComment({ comment, kind }) {
+    if (!comment) return null;
+    return html`
+      <div class="v2-thread-comment" data-kind=${kind}>
+        <div class="v2-comment-meta">${kind === 'take' ? 'agent take' : 'reply'}</div>
+        <div>${comment.text || ''}</div>
+      </div>
+    `;
+  }
+
+  function ThreadCard({
+    thread, file, replyList, takeList, resolution, replyDraftText, expanded,
+    onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+    onSaveFollowupDraft, onClearFollowupDraft,
+  }) {
+    const [replyText, setReplyText] = useState(replyDraftText || '');
+    const [busy, setBusy] = useState(null);
+    const [error, setError] = useState(null);
+    const replyRef = useRef(null);
+
+    useEffect(() => {
+      if (expanded) setReplyText(replyDraftText || '');
+    }, [expanded, thread.id]);
+
+    useEffect(() => {
+      if (expanded && replyRef.current) replyRef.current.focus();
+    }, [expanded]);
+
+    useEffect(() => {
+      if (!expanded) { setError(null); setBusy(null); }
+    }, [expanded]);
+
+    const replyDraftStatus = useDraftAutoSave({
+      value: expanded ? replyText : '',
+      key: expanded ? `followup:${thread.id}` : null,
+      save: t => onSaveFollowupDraft(thread.id, t),
+      clear: () => onClearFollowupDraft(thread.id),
+    });
+
+    const path = file ? file.path : thread.fileId;
+    const replies = replyList || [];
+    const takes = takeList || [];
+    const resolved = Boolean(resolution);
+    const replyCount = replies.length;
+    const takeCount = takes.length;
+    const optimistic = thread.__optimistic === true;
+
+    async function runMutation(kind, perform) {
+      if (busy) return;
+      setBusy(kind);
+      setError(null);
+      try { await perform(); }
+      catch (err) { setError(err && err.message ? err.message : `${kind} failed`); }
+      finally { setBusy(null); }
+    }
+
+    function handleReply() {
+      const text = replyText.trim();
+      if (!text) return;
+      runMutation('reply', async () => {
+        await onReply(thread.id, text);
+        setReplyText('');
+      });
+    }
+
+    function handleResolve() {
+      runMutation('resolve', () => onResolve(thread.id));
+    }
+
+    function handleUnresolve() {
+      runMutation('unresolve', () => onUnresolve(thread.id));
+    }
+
+    function handleDelete() {
+      if (!window.confirm('Delete this thread?')) return;
+      runMutation('delete', () => onDelete(thread.id));
+    }
+
+    if (!expanded) {
+      return html`
+        <button
+          class="v2-thread-card"
+          data-thread-id=${thread.id}
+          data-resolved=${resolved ? 'true' : 'false'}
+          data-expanded="false"
+          disabled=${optimistic}
+          onClick=${optimistic ? null : () => onSelect(thread.id)}
+        >
+          <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}${optimistic ? ' · posting…' : ''}</div>
+          ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
+          <div class="v2-thread-text">${thread.text || ''}</div>
+          ${(replyCount + takeCount) > 0
+            ? html`<div class="v2-thread-counts">${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} · ${takeCount} take${takeCount === 1 ? '' : 's'}</div>`
+            : null}
+        </button>
+      `;
+    }
+
+    const timeline = [
+      ...replies.map(r => ({ kind: 'reply', item: r })),
+      ...takes.map(t => ({ kind: 'take', item: t })),
+    ].sort((a, b) => timestampOf(a.item) - timestampOf(b.item));
+
+    return html`
+      <div class="v2-thread-card" data-thread-id=${thread.id} data-resolved=${resolved ? 'true' : 'false'} data-expanded="true">
+        <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}</div>
+        ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
+        <div class="v2-thread-text">${thread.text || ''}</div>
+        ${resolved && resolution.decision
+          ? html`<div class="v2-thread-resolution">resolved: ${resolution.decision}</div>`
+          : null}
+        ${timeline.length
+          ? html`<div class="v2-thread-timeline">${timeline.map((entry, idx) => html`<${ThreadComment} key=${(entry.item && entry.item.id) || idx} comment=${entry.item} kind=${entry.kind} />`)}</div>`
+          : null}
+        <div class="v2-thread-actions">
+          <textarea
+            ref=${replyRef}
+            value=${replyText}
+            placeholder="Reply…"
+            disabled=${busy === 'reply'}
+            onInput=${e => setReplyText(e.target.value)}
+            onKeyDown=${e => {
+              if (e.key === 'Escape') { e.preventDefault(); onCollapse(); }
+              else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleReply(); }
+            }}
+          ></textarea>
+          ${error ? html`<div class="v2-thread-error">${error}</div>` : null}
+          <div class="v2-thread-buttons">
+            <button class="primary" disabled=${!replyText.trim() || busy != null} onClick=${handleReply}>
+              ${busy === 'reply' ? 'Posting…' : 'Reply'}
+            </button>
+            <span class="v2-draft-status" data-status=${replyDraftStatus}>${draftStatusLabel(replyDraftStatus)}</span>
+            ${resolved
+              ? html`<button disabled=${busy != null} onClick=${handleUnresolve}>${busy === 'unresolve' ? 'Reopening…' : 'Reopen'}</button>`
+              : html`<button disabled=${busy != null} onClick=${handleResolve}>${busy === 'resolve' ? 'Resolving…' : 'Resolve'}</button>`}
+            ${thread.kind !== 'prepopulated'
+              ? html`<button class="danger" disabled=${busy != null} onClick=${handleDelete}>${busy === 'delete' ? 'Deleting…' : 'Delete'}</button>`
+              : null}
+            <span class="spacer"></span>
+            <a href="javascript:void(0)" onClick=${() => onScrollTo(thread)}>go to anchor →</a>
+            <button onClick=${onCollapse}>Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ThreadsPanel({
+    threads, files, replies, takes, resolutions, drafts,
+    selectedThreadId, onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+    onSaveFollowupDraft, onClearFollowupDraft,
+  }) {
+    const filesById = useMemo(() => {
+      const map = {};
+      files.forEach(file => { map[file.id] = file; });
+      return map;
+    }, [files]);
+
+    const grouped = useMemo(() => groupThreadsByFile(threads, files), [threads, files]);
+
+    if (!threads.length) {
+      return html`
+        <aside class="v2-threads-panel">
+          <h2>Threads</h2>
+          <p class="v2-threads-empty">no threads yet</p>
+        </aside>
+      `;
+    }
+    return html`
+      <aside class="v2-threads-panel">
+        <h2>Threads (${threads.length})</h2>
+        ${grouped.map(({ fileId, items }) => html`
+          <section class="v2-thread-group" key=${fileId}>
+            <div class="v2-thread-group-path">${(filesById[fileId] && filesById[fileId].path) || fileId}</div>
+            ${items.map(thread => html`
+              <${ThreadCard}
+                key=${thread.id}
+                thread=${thread}
+                file=${filesById[thread.fileId]}
+                replyList=${replies[thread.id]}
+                takeList=${takes[thread.id]}
+                resolution=${resolutions[thread.id] || null}
+                replyDraftText=${(drafts && drafts[thread.id] && drafts[thread.id].text) || ''}
+                expanded=${selectedThreadId === thread.id}
+                onSelect=${onSelect}
+                onCollapse=${onCollapse}
+                onReply=${onReply}
+                onResolve=${onResolve}
+                onUnresolve=${onUnresolve}
+                onDelete=${onDelete}
+                onScrollTo=${onScrollTo}
+                onSaveFollowupDraft=${onSaveFollowupDraft}
+                onClearFollowupDraft=${onClearFollowupDraft}
+              />
+            `)}
+          </section>
+        `)}
+      </aside>
+    `;
+  }
+
+  function groupThreadsByFile(threads, files) {
+    const order = files.map(f => f.id);
+    const buckets = {};
+    threads.forEach(thread => {
+      const key = thread.fileId || (files[0] ? files[0].id : '');
+      if (!buckets[key]) buckets[key] = [];
+      buckets[key].push(thread);
+    });
+    Object.keys(buckets).forEach(key => {
+      buckets[key].sort((a, b) => (a.anchorStart - b.anchorStart) || (a.anchorEnd - b.anchorEnd));
+    });
+    const seen = new Set();
+    const result = [];
+    order.forEach(id => {
+      if (buckets[id]) { result.push({ fileId: id, items: buckets[id] }); seen.add(id); }
+    });
+    Object.keys(buckets).forEach(id => {
+      if (!seen.has(id)) result.push({ fileId: id, items: buckets[id] });
+    });
+    return result;
+  }
+
+  function scrollToAnchor(fileId, anchorIdx) {
+    const el = document.querySelector(`[data-file-id="${cssEscape(fileId)}"] [data-anchor-idx="${anchorIdx}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('v2-anchor-flash');
+    setTimeout(() => el.classList.remove('v2-anchor-flash'), 800);
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, ch => `\\${ch}`);
+  }
+
+  function anchorElementFor(node) {
+    let el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+    while (el && !(el.dataset && el.dataset.anchorIdx)) el = el.parentElement;
+    return el;
+  }
+
+  function currentSelectionAnchors() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const startEl = anchorElementFor(range.startContainer);
+    const endEl = anchorElementFor(range.endContainer);
+    if (!startEl || !endEl) return null;
+    const startArticle = startEl.closest('[data-file-id]');
+    const endArticle = endEl.closest('[data-file-id]');
+    if (!startArticle || startArticle !== endArticle) return null;
+    const snippet = sel.toString().trim();
+    if (!snippet) return null;
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+    return {
+      fileId: startArticle.getAttribute('data-file-id'),
+      anchorStart: parseInt(startEl.getAttribute('data-anchor-idx'), 10),
+      anchorEnd: parseInt(endEl.getAttribute('data-anchor-idx'), 10),
+      snippet,
+      rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+    };
+  }
+
+  async function apiJson(path, { method = 'POST', body } = {}) {
+    const options = { method, headers: { Accept: 'application/json' } };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, options);
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { data = text; }
+    }
+    if (!response.ok) {
+      const message = data && data.error && data.error.message
+        ? data.error.message
+        : `${method} ${path} returned ${response.status}`;
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
+  function clearWindowSelection() {
+    const sel = window.getSelection();
+    if (sel && sel.removeAllRanges) sel.removeAllRanges();
+  }
+
+  function newThreadDraftKey(fileId, anchorStart, anchorEnd) {
+    return `${fileId || ''}|${anchorStart}-${anchorEnd}`;
+  }
+
+  function useDraftAutoSave({ value, key, save, clear, delayMs = 500 }) {
+    const lastSentRef = useRef(null);
+    const [status, setStatus] = useState('idle');
+
+    useEffect(() => {
+      lastSentRef.current = null;
+      setStatus('idle');
+    }, [key]);
+
+    useEffect(() => {
+      const trimmed = value.trim();
+      if (lastSentRef.current == null) {
+        lastSentRef.current = trimmed;
+        return;
+      }
+      if (lastSentRef.current === trimmed) return;
+      const handle = setTimeout(() => {
+        const promise = trimmed ? save(value) : clear();
+        if (!promise || typeof promise.then !== 'function') {
+          lastSentRef.current = trimmed;
+          setStatus(trimmed ? 'saved' : 'idle');
+          return;
+        }
+        setStatus('saving');
+        promise.then(
+          () => { lastSentRef.current = trimmed; setStatus(trimmed ? 'saved' : 'idle'); },
+          () => { setStatus('error'); },
+        );
+      }, delayMs);
+      return () => clearTimeout(handle);
+    }, [value, key]);
+
+    return status;
+  }
+
+  function SelectionPopup({ anchors, onCreate }) {
+    if (!anchors) return null;
+    const top = Math.max(8, anchors.rect.top - 36);
+    const left = Math.min(window.innerWidth - 120, Math.max(8, anchors.rect.left));
+    return html`
+      <button
+        class="v2-selection-popup"
+        style=${`top: ${top}px; left: ${left}px;`}
+        onMouseDown=${e => e.preventDefault()}
+        onClick=${() => onCreate(anchors)}
+      >
+        💬 Comment
+      </button>
+    `;
+  }
+
+  function NewThreadEditor({ anchors, files, draftText, onSubmit, onCancel, onSaveDraft, onClearDraft }) {
+    const initial = draftText || '';
+    const [text, setText] = useState(initial);
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState(null);
+    const textareaRef = useRef(null);
+    const draftKey = anchors ? newThreadDraftKey(anchors.fileId, anchors.anchorStart, anchors.anchorEnd) : null;
+
+    useEffect(() => {
+      if (textareaRef.current) textareaRef.current.focus();
+    }, []);
+
+    const draftStatus = useDraftAutoSave({
+      value: text,
+      key: draftKey,
+      save: t => onSaveDraft(anchors.fileId, anchors.anchorStart, anchors.anchorEnd, t),
+      clear: () => onClearDraft(anchors.fileId, anchors.anchorStart, anchors.anchorEnd),
+    });
+
+    if (!anchors) return null;
+    const file = files.find(f => f.id === anchors.fileId);
+    const top = window.scrollY + anchors.rect.bottom + 8;
+    const left = window.scrollX + Math.max(8, anchors.rect.left);
+
+    async function handleSubmit() {
+      const trimmed = text.trim();
+      if (!trimmed || submitting) return;
+      setSubmitting(true);
+      setError(null);
+      try {
+        await onSubmit({
+          fileId: anchors.fileId,
+          anchorStart: anchors.anchorStart,
+          anchorEnd: anchors.anchorEnd,
+          snippet: anchors.snippet,
+          text: trimmed,
+        });
+      } catch (err) {
+        setError(err && err.message ? err.message : 'failed to post comment');
+        setSubmitting(false);
+      }
+    }
+
+    return html`
+      <div
+        class="v2-new-thread-editor"
+        style=${`top: ${top}px; left: ${left}px;`}
+        onMouseDown=${e => e.stopPropagation()}
+      >
+        <div class="v2-editor-snippet">${(file && file.path) || anchors.fileId} · #${anchors.anchorStart}${anchors.anchorEnd !== anchors.anchorStart ? `-${anchors.anchorEnd}` : ''}: ${anchors.snippet}</div>
+        <textarea
+          ref=${textareaRef}
+          value=${text}
+          placeholder="Leave a comment…"
+          onInput=${e => setText(e.target.value)}
+          onKeyDown=${e => {
+            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
+          }}
+        ></textarea>
+        ${error ? html`<div class="v2-editor-error">${error}</div>` : null}
+        <div class="v2-editor-buttons">
+          <span class="v2-draft-status" data-status=${draftStatus}>${draftStatusLabel(draftStatus)}</span>
+          <button onClick=${onCancel} disabled=${submitting}>Cancel</button>
+          <button class="primary" onClick=${handleSubmit} disabled=${submitting || !text.trim()}>
+            ${submitting ? 'Posting…' : 'Post'}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function draftStatusLabel(status) {
+    if (status === 'saving') return 'saving…';
+    if (status === 'saved') return 'draft saved';
+    if (status === 'error') return 'draft save failed';
+    return '';
+  }
+
+  function App() {
+    const [activeFileId, setActiveFileId] = useState(initialFiles[0] ? initialFiles[0].id : null);
+    const [threads, setThreads] = useState(initialThreads);
+    const [replies, setReplies] = useState(initialReplies);
+    const [takes, setTakes] = useState(initialTakes);
+    const [resolutions, setResolutions] = useState(initialResolutions);
+    const [popupAnchors, setPopupAnchors] = useState(null);
+    const [editorAnchors, setEditorAnchors] = useState(null);
+    const [selectedThreadId, setSelectedThreadId] = useState(null);
+    const [drafts, setDrafts] = useState(initialDrafts);
+    const [reviewComplete, setReviewComplete] = useState(false);
+    const [doneBusy, setDoneBusy] = useState(false);
+    const [doneError, setDoneError] = useState(null);
+
+    useEffect(() => {
+      function handleSelectionChange() {
+        if (editorAnchors || reviewComplete) return;
+        setPopupAnchors(currentSelectionAnchors());
+      }
+      document.addEventListener('selectionchange', handleSelectionChange);
+      return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, [editorAnchors, reviewComplete]);
+
+    useEffect(() => {
+      if (reviewComplete) {
+        document.body.classList.add('review-complete');
+        stopHeartbeat();
+        stopEventStream();
+        setPopupAnchors(null);
+        setEditorAnchors(null);
+        setSelectedThreadId(null);
+      }
+    }, [reviewComplete]);
+
+    useEffect(() => {
+      if (reviewComplete) return undefined;
+      return startHeartbeat();
+    }, [reviewComplete]);
+    useEffect(() => {
+      if (reviewComplete) return undefined;
+      return startEventStream({
+      onThreadCreated: thread => setThreads(prev => upsertById(prev, thread)),
+      onThreadDeleted: payload => {
+        const id = payload && payload.threadId;
+        if (id == null) return;
+        setThreads(prev => prev.filter(t => t.id !== id));
+        setReplies(prev => removeKey(prev, id));
+        setTakes(prev => removeKey(prev, id));
+        setResolutions(prev => removeKey(prev, id));
+        setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, id) }));
+      },
+      onThreadResolved: payload => {
+        const id = payload && payload.threadId;
+        const resolution = payload && payload.resolution;
+        if (id == null || !resolution) return;
+        setResolutions(prev => ({ ...prev, [id]: resolution }));
+      },
+      onThreadUnresolved: payload => {
+        const id = payload && payload.threadId;
+        if (id == null) return;
+        setResolutions(prev => removeKey(prev, id));
+      },
+      onReplyAdded: reply => {
+        if (!reply || reply.threadId == null) return;
+        setReplies(prev => appendByKey(prev, reply.threadId, reply));
+      },
+      onTakeAdded: take => {
+        if (!take || take.threadId == null) return;
+        setTakes(prev => appendByKey(prev, take.threadId, take));
+      },
+      onDraftUpdated: payload => {
+        if (!payload || !payload.scope) return;
+        if (payload.scope === 'newThread') {
+          const key = newThreadDraftKey(payload.fileId, payload.anchorStart, payload.anchorEnd);
+          setDrafts(prev => ({
+            ...prev,
+            newThread: { ...prev.newThread, [key]: { fileId: payload.fileId, anchorStart: payload.anchorStart, anchorEnd: payload.anchorEnd, text: payload.text || '', updatedAt: payload.updatedAt || null } },
+          }));
+        } else if (payload.scope === 'followup' && payload.threadId != null) {
+          setDrafts(prev => ({
+            ...prev,
+            followup: { ...prev.followup, [payload.threadId]: { text: payload.text || '', updatedAt: payload.updatedAt || null } },
+          }));
+        }
+      },
+      onDraftCleared: payload => {
+        if (!payload || !payload.scope) return;
+        if (payload.scope === 'newThread') {
+          const key = newThreadDraftKey(payload.fileId, payload.anchorStart, payload.anchorEnd);
+          setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
+        } else if (payload.scope === 'followup' && payload.threadId != null) {
+          setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, payload.threadId) }));
+        }
+      },
+    });
+    }, [reviewComplete]);
+
+    function openEditor(anchors) {
+      setEditorAnchors(anchors);
+      setPopupAnchors(null);
+    }
+
+    function closeEditor() {
+      setEditorAnchors(null);
+      clearWindowSelection();
+    }
+
+    function saveNewThreadDraft(fileId, anchorStart, anchorEnd, text) {
+      const key = newThreadDraftKey(fileId, anchorStart, anchorEnd);
+      setDrafts(prev => ({
+        ...prev,
+        newThread: { ...prev.newThread, [key]: { fileId, anchorStart, anchorEnd, text, updatedAt: new Date().toISOString() } },
+      }));
+      return apiJson('/api/drafts/new-thread', {
+        method: 'POST',
+        body: { fileId, anchorStart, anchorEnd, text },
+      });
+    }
+
+    function clearNewThreadDraft(fileId, anchorStart, anchorEnd) {
+      const key = newThreadDraftKey(fileId, anchorStart, anchorEnd);
+      setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
+      return apiJson('/api/drafts/new-thread', {
+        method: 'DELETE',
+        body: { fileId, anchorStart, anchorEnd },
+      });
+    }
+
+    function saveFollowupDraft(threadId, text) {
+      setDrafts(prev => ({
+        ...prev,
+        followup: { ...prev.followup, [threadId]: { text, updatedAt: new Date().toISOString() } },
+      }));
+      return apiJson('/api/drafts/followup', {
+        method: 'POST',
+        body: { threadId, text },
+      });
+    }
+
+    function clearFollowupDraft(threadId) {
+      setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, threadId) }));
+      return apiJson('/api/drafts/followup', {
+        method: 'DELETE',
+        body: { threadId },
+      });
+    }
+
+    async function submitNewThread(payload) {
+      const tempId = `tmp-${Math.random().toString(36).slice(2)}`;
+      const optimistic = {
+        id: tempId,
+        fileId: payload.fileId,
+        anchorStart: payload.anchorStart,
+        anchorEnd: payload.anchorEnd,
+        snippet: payload.snippet,
+        text: payload.text,
+        kind: 'user',
+        createdAt: new Date().toISOString(),
+        __optimistic: true,
+      };
+      setThreads(prev => [...prev, optimistic]);
+      try {
+        const created = await apiJson('/api/threads', { method: 'POST', body: payload });
+        setThreads(prev => prev.map(t => (t.id === tempId
+          ? { ...optimistic, id: created.id, createdAt: created.createdAt, __optimistic: false }
+          : t)));
+        clearNewThreadDraft(payload.fileId, payload.anchorStart, payload.anchorEnd).catch(() => {});
+        closeEditor();
+      } catch (err) {
+        setThreads(prev => prev.filter(t => t.id !== tempId));
+        throw err;
+      }
+    }
+
+    async function postReply(threadId, text) {
+      const tempId = `tmp-${Math.random().toString(36).slice(2)}`;
+      const optimistic = {
+        id: tempId,
+        threadId,
+        text,
+        createdAt: new Date().toISOString(),
+        __optimistic: true,
+      };
+      setReplies(prev => appendByKey(prev, threadId, optimistic));
+      try {
+        const created = await apiJson(`/api/threads/${encodeURIComponent(threadId)}/replies`, {
+          method: 'POST',
+          body: { text },
+        });
+        setReplies(prev => {
+          const list = (prev[threadId] || []).map(r => (r.id === tempId ? { ...created, __optimistic: false } : r));
+          return { ...prev, [threadId]: list };
+        });
+        clearFollowupDraft(threadId).catch(() => {});
+      } catch (err) {
+        setReplies(prev => {
+          const list = (prev[threadId] || []).filter(r => r.id !== tempId);
+          return { ...prev, [threadId]: list };
+        });
+        throw err;
+      }
+    }
+
+    async function resolveThread(threadId) {
+      const previous = resolutions[threadId] || null;
+      const optimistic = { decision: null, resolvedAt: new Date().toISOString(), __optimistic: true };
+      setResolutions(prev => ({ ...prev, [threadId]: optimistic }));
+      try {
+        const resolution = await apiJson(`/api/threads/${encodeURIComponent(threadId)}/resolve`, {
+          method: 'POST',
+          body: {},
+        });
+        setResolutions(prev => ({ ...prev, [threadId]: resolution }));
+      } catch (err) {
+        setResolutions(prev => {
+          const next = { ...prev };
+          if (previous) next[threadId] = previous; else delete next[threadId];
+          return next;
+        });
+        throw err;
+      }
+    }
+
+    async function unresolveThread(threadId) {
+      const previous = resolutions[threadId] || null;
+      setResolutions(prev => removeKey(prev, threadId));
+      try {
+        await apiJson(`/api/threads/${encodeURIComponent(threadId)}/unresolve`, { method: 'POST' });
+      } catch (err) {
+        if (previous) setResolutions(prev => ({ ...prev, [threadId]: previous }));
+        throw err;
+      }
+    }
+
+    async function deleteThread(threadId) {
+      const previousThread = threads.find(t => t.id === threadId) || null;
+      const previousReplies = replies[threadId] || null;
+      const previousTakes = takes[threadId] || null;
+      const previousResolution = resolutions[threadId] || null;
+      setThreads(prev => prev.filter(t => t.id !== threadId));
+      setReplies(prev => removeKey(prev, threadId));
+      setTakes(prev => removeKey(prev, threadId));
+      setResolutions(prev => removeKey(prev, threadId));
+      if (selectedThreadId === threadId) setSelectedThreadId(null);
+      try {
+        await apiJson(`/api/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+      } catch (err) {
+        if (previousThread) setThreads(prev => upsertById(prev, previousThread));
+        if (previousReplies) setReplies(prev => ({ ...prev, [threadId]: previousReplies }));
+        if (previousTakes) setTakes(prev => ({ ...prev, [threadId]: previousTakes }));
+        if (previousResolution) setResolutions(prev => ({ ...prev, [threadId]: previousResolution }));
+        throw err;
+      }
+    }
+
+    function handleScrollTo(thread) {
+      scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart);
+    }
+
+    const threadCounts = useMemo(() => {
+      const counts = {};
+      threads.forEach(thread => {
+        const key = thread.fileId || (initialFiles[0] && initialFiles[0].id) || '';
+        if (!counts[key]) counts[key] = { open: 0, total: 0 };
+        counts[key].total += 1;
+        if (!resolutions[thread.id]) counts[key].open += 1;
+      });
+      return counts;
+    }, [threads, resolutions]);
+
+    function handleSelectFile(fileId) {
+      setActiveFileId(fileId);
+      const section = document.querySelector(`section[data-section-file-id="${cssEscape(fileId)}"]`);
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    async function submitDone() {
+      if (doneBusy || reviewComplete) return;
+      setDoneBusy(true);
+      setDoneError(null);
+      try {
+        await apiJson('/api/done');
+        setReviewComplete(true);
+      } catch (err) {
+        setDoneError(err && err.message ? err.message : "couldn't finish — retry?");
+        setDoneBusy(false);
+      }
+    }
+
+    const threadsPanelProps = {
+      threads,
+      files: initialFiles,
+      replies,
+      takes,
+      resolutions,
+      drafts: drafts.followup,
+      selectedThreadId,
+      onSelect: setSelectedThreadId,
+      onCollapse: () => setSelectedThreadId(null),
+      onReply: postReply,
+      onResolve: resolveThread,
+      onUnresolve: unresolveThread,
+      onDelete: deleteThread,
+      onScrollTo: handleScrollTo,
+      onSaveFollowupDraft: saveFollowupDraft,
+      onClearFollowupDraft: clearFollowupDraft,
+    };
+
+    const editorDraftKey = editorAnchors
+      ? newThreadDraftKey(editorAnchors.fileId, editorAnchors.anchorStart, editorAnchors.anchorEnd)
+      : null;
+    const editorDraftText = editorDraftKey && drafts.newThread[editorDraftKey]
+      ? drafts.newThread[editorDraftKey].text
+      : '';
+
+    if (!initialFiles.length) {
+      return html`
+        <div class="v2-layout">
+          <${FileTree} files=${initialFiles} activeId=${null} onSelect=${() => {}} />
+          <main class="v2-content">
+            <p class="v2-banner">discuss v2 — no files loaded.</p>
+          </main>
+          <${ThreadsPanel} ...${threadsPanelProps} />
+        </div>
+      `;
+    }
+
+    const singleFile = initialFiles.length === 1;
+    return html`
+      <div class="v2-layout" data-single-file=${singleFile ? 'true' : 'false'}>
+        ${singleFile
+          ? null
+          : html`<${FileTree}
+              files=${initialFiles}
+              activeId=${activeFileId}
+              threadCounts=${threadCounts}
+              onSelect=${handleSelectFile}
+            />`}
+        <main class="v2-content">
+          <p class="v2-banner">
+            ${initialFiles.length} file${initialFiles.length === 1 ? '' : 's'} · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
+            <a href="/?ui=v1" title="Switch back to the legacy UI for this release">legacy UI</a>
+            <${ThemeToggle} />
+          </p>
+          ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
+          <div class="v2-done-bar" id="v2-done-bar">
+            <button
+              id="v2-done-button"
+              class=${reviewComplete ? 'ok' : ''}
+              disabled=${doneBusy || reviewComplete}
+              title="Finish the review and send the transcript to the agent"
+              onClick=${submitDone}
+            >
+              ${reviewComplete ? 'Done ✓' : doneBusy ? 'Sending…' : 'Done — send to chat'}
+            </button>
+            ${doneError ? html`<span class="v2-done-error">${doneError}</span>` : null}
+          </div>
+        </main>
+        <${ThreadsPanel} ...${threadsPanelProps} />
+      </div>
+      ${!editorAnchors && !reviewComplete
+        ? html`<${SelectionPopup} anchors=${popupAnchors} onCreate=${openEditor} />`
+        : null}
+      ${!reviewComplete
+        ? html`<${NewThreadEditor}
+            anchors=${editorAnchors}
+            files=${initialFiles}
+            draftText=${editorDraftText}
+            onSubmit=${submitNewThread}
+            onCancel=${closeEditor}
+            onSaveDraft=${saveNewThreadDraft}
+            onClearDraft=${clearNewThreadDraft}
+          />`
+        : null}
+      <div class="v2-done-banner" data-shown=${reviewComplete ? 'true' : 'false'} role="status" aria-live="polite">
+        Review complete — you can close this tab.
+      </div>
+    `;
+  }
+
+  function upsertById(list, item) {
+    if (!item || item.id == null) return list;
+    const idx = list.findIndex(existing => existing.id === item.id);
+    if (idx === -1) return [...list, item];
+    const next = list.slice();
+    next[idx] = item;
+    return next;
+  }
+
+  function appendByKey(map, key, item) {
+    const existing = Array.isArray(map[key]) ? map[key] : [];
+    if (item && item.id != null && existing.some(e => e && e.id === item.id)) return map;
+    return { ...map, [key]: [...existing, item] };
+  }
+
+  function removeKey(map, key) {
+    if (!Object.prototype.hasOwnProperty.call(map, key)) return map;
+    const next = { ...map };
+    delete next[key];
+    return next;
+  }
+
+  let heartbeatTimer = null;
+  function startHeartbeat() {
+    sendHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    return stopHeartbeat;
+  }
+  function stopHeartbeat() {
+    if (heartbeatTimer != null) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  async function sendHeartbeat() {
+    try {
+      await fetch('/api/heartbeat', { method: 'POST' });
+    } catch (err) {
+      console.debug('discuss v2 heartbeat failed:', err && err.message);
+    }
+  }
+
+  let eventSource = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  function startEventStream(handlers) {
+    openEventStream(handlers || {});
+    return stopEventStream;
+  }
+  function stopEventStream() {
+    if (eventSource) eventSource.close();
+    eventSource = null;
+    if (reconnectTimer != null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  function openEventStream(handlers) {
+    try {
+      eventSource = new EventSource('/api/events');
+    } catch (err) {
+      console.warn('discuss v2 SSE failed to open:', err && err.message);
+      scheduleReconnect(handlers);
+      return;
+    }
+    SSE_EVENT_KINDS.forEach(kind => {
+      eventSource.addEventListener(kind, evt => {
+        let payload = null;
+        try { payload = JSON.parse(evt.data); } catch (err) { return; }
+        dispatchSseEvent(handlers, kind, payload);
+      });
+    });
+    eventSource.onopen = () => { reconnectAttempts = 0; };
+    eventSource.onerror = () => {
+      if (eventSource) eventSource.close();
+      eventSource = null;
+      scheduleReconnect(handlers);
+    };
+  }
+  function dispatchSseEvent(handlers, kind, payload) {
+    switch (kind) {
+      case 'thread.created':
+        if (handlers.onThreadCreated) handlers.onThreadCreated(payload);
+        return;
+      case 'thread.deleted':
+        if (handlers.onThreadDeleted) handlers.onThreadDeleted(payload);
+        return;
+      case 'thread.resolved':
+        if (handlers.onThreadResolved) handlers.onThreadResolved(payload);
+        return;
+      case 'thread.unresolved':
+        if (handlers.onThreadUnresolved) handlers.onThreadUnresolved(payload);
+        return;
+      case 'reply.added':
+        if (handlers.onReplyAdded) handlers.onReplyAdded(payload);
+        return;
+      case 'take.added':
+        if (handlers.onTakeAdded) handlers.onTakeAdded(payload);
+        return;
+      case 'draft.updated':
+        if (handlers.onDraftUpdated) handlers.onDraftUpdated(payload);
+        return;
+      case 'draft.cleared':
+        if (handlers.onDraftCleared) handlers.onDraftCleared(payload);
+        return;
+      default:
+        return;
+    }
+  }
+  function scheduleReconnect(handlers) {
+    if (reconnectTimer != null) return;
+    const delay = Math.min(
+      SSE_RECONNECT_MAX_MS,
+      SSE_RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts),
+    );
+    reconnectAttempts += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      openEventStream(handlers);
+    }, delay);
+  }
+
+  render(html`<${App} />`, document.getElementById('app'));
+})();
+  </script>
+</body>
+</html>

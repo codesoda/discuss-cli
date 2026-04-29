@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
-use discuss::state::{Draft, Resolution, State, Thread, ThreadId, ThreadKind};
+use discuss::state::{
+    Draft, NewThreadDraftKey, Resolution, State, Thread, ThreadId, ThreadKind, default_file_id,
+};
 use discuss::{
     AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript, serve,
     serve_with_ready,
@@ -38,7 +40,13 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("content-type: text/html; charset=utf-8")
     );
-    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
+    let body = response_body(&response);
+    assert!(body.contains("/assets/preact.umd.js"));
+    assert!(body.contains(r#"id="discuss-rendered-files""#));
+    assert!(
+        body.contains("Review Plan"),
+        "rendered markdown should be seeded into v2 page"
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -91,6 +99,54 @@ async fn shutdown_allows_started_request_to_complete() {
 }
 
 #[tokio::test]
+async fn get_root_defaults_to_v2_and_serves_v1_when_ui_query_param_set() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Hello v2");
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-v2", 1));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let body = response_body(&response);
+    assert!(body.contains("/assets/preact.umd.js"));
+    assert!(body.contains("/assets/preact-hooks.umd.js"));
+    assert!(body.contains("/assets/htm.umd.js"));
+    assert!(body.contains(r#"id="app""#));
+    assert!(body.contains(r#"id="discuss-initial-state""#));
+    assert!(body.contains(r#"id="discuss-rendered-files""#));
+    assert!(body.contains("\"u-v2\""));
+    assert!(body.contains("__DISCUSS_RENDERED_FILES__"));
+    assert!(
+        body.contains("Hello v2"),
+        "rendered markdown HTML should be seeded into v2 page"
+    );
+
+    let v1_response = get_path(addr, "/?ui=v1").await;
+    assert!(v1_response.starts_with("HTTP/1.1 200"));
+    let v1_body = response_body(&v1_response);
+    assert!(doc_content(v1_body).contains("<h1>Hello v2</h1>"));
+    assert!(!v1_body.contains("/assets/preact.umd.js"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_root_seeds_current_state_for_reload() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process().with_markdown_source("# State Seed");
@@ -110,11 +166,15 @@ async fn get_root_seeds_current_state_for_reload() {
     wait_for_server(addr).await;
 
     let response = get_root(addr).await;
-    let initial_state = initial_state_script(response_body(&response));
+    let body = response_body(&response);
+    let initial_state = initial_state_script(body);
 
     assert!(initial_state.contains("\"u-one\""));
     assert!(initial_state.contains("\"u-two\""));
-    assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+    assert!(
+        body.contains("State Seed"),
+        "rendered markdown should be seeded into v2 page"
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -147,7 +207,8 @@ async fn get_api_state_returns_empty_snapshot_json() {
             "drafts": {
                 "newThread": {},
                 "followup": {}
-            }
+            },
+            "files": []
         })
     );
 
@@ -1299,7 +1360,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
             .expect("state lock should not be poisoned")
             .snapshot()
             .drafts
-            .new_thread[&(2, 4)]
+            .new_thread[&NewThreadDraftKey::new(default_file_id(), 2, 4)]
             .text,
         "First draft"
     );
@@ -1329,7 +1390,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
             .expect("state lock should not be poisoned")
             .snapshot()
             .drafts
-            .new_thread[&(2, 4)]
+            .new_thread[&NewThreadDraftKey::new(default_file_id(), 2, 4)]
             .text,
         "Revised draft"
     );
@@ -1354,7 +1415,10 @@ async fn post_api_drafts_new_thread_whitespace_text_clears_draft() {
     let state = State::new_shared();
     {
         let mut state_guard = state.write().expect("state lock should not be poisoned");
-        state_guard.upsert_new_thread_draft(5, 7, draft("stashed draft", 1));
+        state_guard.upsert_new_thread_draft(
+            NewThreadDraftKey::new(default_file_id(), 5, 7),
+            draft("stashed draft", 1),
+        );
     }
     let bus = Arc::new(EventBus::new(16));
     let stdout = Arc::new(Mutex::new(Vec::new()));
@@ -1412,7 +1476,10 @@ async fn delete_api_drafts_new_thread_clears_idempotently_and_emits_events() {
     let state = State::new_shared();
     {
         let mut state_guard = state.write().expect("state lock should not be poisoned");
-        state_guard.upsert_new_thread_draft(8, 9, draft("delete me", 1));
+        state_guard.upsert_new_thread_draft(
+            NewThreadDraftKey::new(default_file_id(), 8, 9),
+            draft("delete me", 1),
+        );
     }
     let bus = Arc::new(EventBus::new(16));
     let stdout = Arc::new(Mutex::new(Vec::new()));
@@ -2113,6 +2180,75 @@ async fn get_mermaid_shim_asset_returns_bundled_shim() {
 }
 
 #[tokio::test]
+async fn get_preact_asset_returns_bundled_bytes_with_cache_headers() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/preact.umd.js").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_js_headers(&response);
+    assert!(response_body(&response).starts_with(&assets::preact_js()[..20]));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_preact_hooks_asset_returns_bundled_bytes_with_cache_headers() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/preact-hooks.umd.js").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_js_headers(&response);
+    assert!(response_body(&response).starts_with(&assets::preact_hooks_js()[..20]));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_htm_asset_returns_bundled_bytes_with_cache_headers() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/assets/htm.umd.js").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_js_headers(&response);
+    assert!(response_body(&response).starts_with(&assets::htm_js()[..20]));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn unknown_asset_path_returns_404() {
     let addr = free_loopback_addr();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -2370,6 +2506,7 @@ fn draft(text: &str, second: u32) -> Draft {
 fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
     Thread {
         id: ThreadId(id.to_string()),
+        file_id: default_file_id(),
         anchor_start,
         anchor_end: anchor_start + 1,
         snippet: format!("snippet {id}"),

@@ -8,14 +8,17 @@ pub const EXIT_INTERRUPTED: i32 = 5;
 
 pub fn exit_code_for_error(error: &DiscussError) -> i32 {
     match error {
-        DiscussError::ConfigParseError { .. } => EXIT_CONFIG_ERROR,
+        DiscussError::ConfigParseError { .. } | DiscussError::DuplicateInputPath { .. } => {
+            EXIT_CONFIG_ERROR
+        }
         DiscussError::PortInUse { .. } | DiscussError::ServerBindError { .. } => EXIT_SERVER_ERROR,
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
         | DiscussError::RenderError { .. }
         | DiscussError::LoggingInitError { .. }
         | DiscussError::UpdateCheckError { .. }
-        | DiscussError::UpdateError { .. } => EXIT_GENERIC_FAILURE,
+        | DiscussError::UpdateError { .. }
+        | DiscussError::DiffError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
 

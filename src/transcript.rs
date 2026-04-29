@@ -1,11 +1,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{LineRange, Reply, Resolution, State, Take, ThreadId, ThreadKind};
+use crate::state::{
+    FileId, FileMeta, LineRange, Reply, Resolution, Source, State, Take, ThreadId, ThreadKind,
+    default_file_id,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileMeta>,
     pub threads: Vec<TranscriptThread>,
 }
 
@@ -13,6 +18,8 @@ pub struct Transcript {
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptThread {
     pub id: ThreadId,
+    #[serde(default = "default_file_id")]
+    pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
     pub snippet: String,
@@ -29,11 +36,21 @@ pub struct TranscriptThread {
 }
 
 pub fn build_transcript(state: &State) -> Transcript {
+    build_transcript_inner(state, &[])
+}
+
+pub fn build_transcript_with_source(state: &State, source: &Source) -> Transcript {
+    let files = source.files.iter().map(FileMeta::from).collect::<Vec<_>>();
+    build_transcript_inner(state, &files)
+}
+
+fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
     let mut threads = state
         .all_threads()
         .iter()
         .map(|thread| TranscriptThread {
             id: thread.id.clone(),
+            file_id: thread.file_id.clone(),
             anchor_start: thread.anchor_start,
             anchor_end: thread.anchor_end,
             snippet: thread.snippet.clone(),
@@ -49,9 +66,26 @@ pub fn build_transcript(state: &State) -> Transcript {
         })
         .collect::<Vec<_>>();
 
-    threads.sort_by_key(|thread| (thread.anchor_start, thread.anchor_end));
+    let file_order: std::collections::HashMap<&FileId, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(idx, file)| (&file.id, idx))
+        .collect();
+    threads.sort_by_key(|thread| {
+        (
+            file_order
+                .get(&thread.file_id)
+                .copied()
+                .unwrap_or(usize::MAX),
+            thread.anchor_start,
+            thread.anchor_end,
+        )
+    });
 
-    Transcript { threads }
+    Transcript {
+        files: files.to_vec(),
+        threads,
+    }
 }
 
 #[cfg(test)]
@@ -72,6 +106,7 @@ mod tests {
     fn thread(id: &str, anchor_start: usize, anchor_end: usize) -> Thread {
         Thread {
             id: ThreadId(id.to_string()),
+            file_id: default_file_id(),
             anchor_start,
             anchor_end,
             snippet: format!("snippet {id}"),
@@ -190,6 +225,7 @@ mod tests {
             json!({
                 "threads": [{
                     "id": "u-1",
+                    "fileId": "f-1",
                     "anchorStart": 2,
                     "anchorEnd": 3,
                     "snippet": "snippet u-1",
@@ -235,6 +271,65 @@ mod tests {
         let value = serde_json::to_value(&transcript).expect("serialize");
         assert_eq!(value["threads"][0]["lineRange"]["start"], 2);
         assert_eq!(value["threads"][0]["lineRange"]["end"], 4);
+    }
+
+    #[test]
+    fn build_transcript_with_source_groups_threads_by_file_order_then_anchor() {
+        use crate::state::{File, FileKind, Source};
+
+        let mut state = State::default();
+        let mut t1 = thread("u-a", 5, 5);
+        t1.file_id = FileId("f-1".to_string());
+        let mut t2 = thread("u-b", 1, 1);
+        t2.file_id = FileId("f-2".to_string());
+        let mut t3 = thread("u-c", 3, 3);
+        t3.file_id = FileId("f-1".to_string());
+        state.add_thread(t1);
+        state.add_thread(t2);
+        state.add_thread(t3);
+
+        let source = Source {
+            files: vec![
+                File {
+                    id: FileId("f-1".to_string()),
+                    path: "alpha.md".to_string(),
+                    kind: FileKind::Markdown,
+                    content: String::new(),
+                },
+                File {
+                    id: FileId("f-2".to_string()),
+                    path: "beta.md".to_string(),
+                    kind: FileKind::Markdown,
+                    content: String::new(),
+                },
+            ],
+        };
+
+        let transcript = build_transcript_with_source(&state, &source);
+
+        assert_eq!(
+            transcript
+                .threads
+                .iter()
+                .map(|t| t.id.0.as_str())
+                .collect::<Vec<_>>(),
+            vec!["u-c", "u-a", "u-b"]
+        );
+        assert_eq!(transcript.files.len(), 2);
+        assert_eq!(transcript.files[0].path, "alpha.md");
+
+        let value = serde_json::to_value(&transcript).expect("serialize");
+        assert_eq!(value["files"][0]["id"], "f-1");
+        assert_eq!(value["files"][1]["path"], "beta.md");
+    }
+
+    #[test]
+    fn build_transcript_without_source_omits_files_key() {
+        let state = State::default();
+        let transcript = build_transcript(&state);
+        assert!(transcript.files.is_empty());
+        let value = serde_json::to_value(&transcript).expect("serialize");
+        assert!(value.get("files").is_none());
     }
 
     #[test]
