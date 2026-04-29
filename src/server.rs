@@ -1396,6 +1396,7 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         let history_path = history::history_archive_path(
             app_state.history_dir.as_ref().as_path(),
             app_state.source_path.as_ref().as_deref(),
+            app_state.source.files.len(),
             emitted_at,
         );
         if let Err(error) = history::write_history_archive(&history_path, &payload) {

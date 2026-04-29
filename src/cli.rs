@@ -45,9 +45,9 @@ pub struct Args {
 
     #[arg(
         value_name = "FILE",
-        help = "Markdown file to review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin."
+        help = "One or more files to review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin. Pass multiple paths to review them together."
     )]
-    pub file: Option<PathBuf>,
+    pub files: Vec<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -91,7 +91,7 @@ mod tests {
     fn bare_command_parses_with_no_file_or_subcommand() {
         let args = Args::try_parse_from(["discuss"]).expect("bare command should parse");
 
-        assert!(args.file.is_none());
+        assert!(args.files.is_empty());
         assert!(args.command.is_none());
     }
 
@@ -99,7 +99,7 @@ mod tests {
     fn parses_stdin_dash_argument() {
         let args = Args::try_parse_from(["discuss", "-"]).expect("dash should parse as stdin");
 
-        assert_eq!(args.file, Some(PathBuf::from("-")));
+        assert_eq!(args.files, vec![PathBuf::from("-")]);
     }
 
     #[test]
@@ -110,8 +110,38 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
         assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn parses_multiple_file_arguments_in_order() {
+        let args = Args::try_parse_from(["discuss", "a.md", "b.md", "c.md"])
+            .expect("multi file args should parse");
+
+        assert_eq!(
+            args.files,
+            vec![
+                PathBuf::from("a.md"),
+                PathBuf::from("b.md"),
+                PathBuf::from("c.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_mixed_stdin_and_file_arguments() {
+        let args = Args::try_parse_from(["discuss", "a.md", "-", "b.md"])
+            .expect("mixed stdin + files should parse");
+
+        assert_eq!(
+            args.files,
+            vec![
+                PathBuf::from("a.md"),
+                PathBuf::from("-"),
+                PathBuf::from("b.md"),
+            ]
+        );
     }
 
     #[test]
@@ -123,7 +153,7 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -134,7 +164,7 @@ mod tests {
         assert!(args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -153,7 +183,7 @@ mod tests {
             args.history_dir,
             Some(PathBuf::from("/tmp/discuss-history"))
         );
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -172,7 +202,7 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert!(args.file.is_none());
+        assert!(args.files.is_empty());
         assert!(matches!(
             args.command,
             Some(Commands::Update(UpdateArgs {
