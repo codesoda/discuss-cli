@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{LineRange, Reply, Resolution, State, Take, ThreadId, ThreadKind};
+use crate::state::{
+    FileId, LineRange, Reply, Resolution, State, Take, ThreadId, ThreadKind, default_file_id,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +15,8 @@ pub struct Transcript {
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptThread {
     pub id: ThreadId,
+    #[serde(default = "default_file_id")]
+    pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
     pub snippet: String,
@@ -34,6 +38,7 @@ pub fn build_transcript(state: &State) -> Transcript {
         .iter()
         .map(|thread| TranscriptThread {
             id: thread.id.clone(),
+            file_id: thread.file_id.clone(),
             anchor_start: thread.anchor_start,
             anchor_end: thread.anchor_end,
             snippet: thread.snippet.clone(),
@@ -72,6 +77,7 @@ mod tests {
     fn thread(id: &str, anchor_start: usize, anchor_end: usize) -> Thread {
         Thread {
             id: ThreadId(id.to_string()),
+            file_id: default_file_id(),
             anchor_start,
             anchor_end,
             snippet: format!("snippet {id}"),
@@ -190,6 +196,7 @@ mod tests {
             json!({
                 "threads": [{
                     "id": "u-1",
+                    "fileId": "f-1",
                     "anchorStart": 2,
                     "anchorEnd": 3,
                     "snippet": "snippet u-1",

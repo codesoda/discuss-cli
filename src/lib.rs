@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use clap::CommandFactory;
 
+use crate::state::{File, FileKind, Source, default_file_id};
+
 pub mod assets;
 pub mod cli;
 pub mod config;
@@ -91,8 +93,16 @@ where
             let port = config.port.unwrap_or(DEFAULT_PORT);
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             let auto_open = config.auto_open;
+            let source = Source {
+                files: vec![File {
+                    id: default_file_id(),
+                    path: source_file.clone(),
+                    kind: FileKind::Markdown,
+                    content: markdown_source,
+                }],
+            };
             let mut app_state = AppState::for_process()
-                .with_markdown_source(markdown_source)
+                .with_source(source)
                 .with_no_save(config.no_save)
                 .with_idle_timeout_secs(config.idle_timeout_secs);
             if let Some(source_path) = source_path {
@@ -112,6 +122,7 @@ where
                     at: started_at,
                     payload: serde_json::json!({
                         "url": url.clone(),
+                        "mode": "markdown",
                         "source_file": source_file,
                         "started_at": started_at.to_rfc3339(),
                     }),

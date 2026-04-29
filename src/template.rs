@@ -15,6 +15,25 @@ pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String 
     inject_mermaid_shim(&page)
 }
 
+pub fn render_v2_page(initial_state_json: &str, rendered_files_json: &str) -> String {
+    let template = assets::discuss_v2_html();
+    let state_replacement = format!(
+        "window.__DISCUSS_INITIAL_STATE__ = {};",
+        js_safe_json(initial_state_json)
+    );
+    let rendered_replacement = format!(
+        "window.__DISCUSS_RENDERED_FILES__ = {};",
+        js_safe_json(rendered_files_json)
+    );
+
+    template
+        .replacen(V2_INITIAL_STATE_PLACEHOLDER, &state_replacement, 1)
+        .replacen(V2_RENDERED_FILES_PLACEHOLDER, &rendered_replacement, 1)
+}
+
+const V2_INITIAL_STATE_PLACEHOLDER: &str = "window.__DISCUSS_INITIAL_STATE__ = {};";
+const V2_RENDERED_FILES_PLACEHOLDER: &str = "window.__DISCUSS_RENDERED_FILES__ = {};";
+
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
     let section_start =
         find_doc_content_open(template).expect("bundled template must contain #doc-content");
@@ -378,6 +397,59 @@ mod tests {
         assert!(page.contains("if (hasTake) return 'pending';"));
         assert!(page.contains("function latestContributorForThread(state, threadId, prep)"));
         assert!(page.contains("latest: ${latestContributorForThread(state, tid, prep)}"));
+    }
+
+    #[test]
+    fn v2_page_seeds_initial_state_and_rendered_files_into_placeholders() {
+        let page = render_v2_page(
+            r#"{"threads":[],"files":[{"id":"f-1","path":"a.md","kind":"markdown"}]}"#,
+            r#"{"f-1":"<h1>hi</h1>"}"#,
+        );
+
+        assert!(page.contains(r#"window.__DISCUSS_INITIAL_STATE__ = {"threads":[],"files":[{"id":"f-1","path":"a.md","kind":"markdown"}]};"#));
+        assert!(page.contains(r#"window.__DISCUSS_RENDERED_FILES__ = {"f-1":""#));
+        assert_eq!(
+            page.matches("window.__DISCUSS_INITIAL_STATE__ = ").count(),
+            1,
+            "state placeholder should be replaced exactly once"
+        );
+        assert_eq!(
+            page.matches("window.__DISCUSS_RENDERED_FILES__ = ").count(),
+            1,
+            "rendered-files placeholder should be replaced exactly once"
+        );
+        assert!(page.contains("/assets/preact.umd.js"));
+        assert!(page.contains("/assets/preact-hooks.umd.js"));
+        assert!(page.contains("/assets/htm.umd.js"));
+    }
+
+    #[test]
+    fn v2_page_seeds_are_safe_inside_script_tag() {
+        let page = render_v2_page(r#"{"text":"<break>"}"#, r#"{"f-1":"<p>break</p>"}"#);
+
+        let escaped_marker = "\\u003c";
+        for assignment in [
+            "__DISCUSS_INITIAL_STATE__ = ",
+            "__DISCUSS_RENDERED_FILES__ = ",
+        ] {
+            let start = page
+                .find(assignment)
+                .unwrap_or_else(|| panic!("missing assignment: {assignment}"));
+            let end = page[start..]
+                .find("</script>")
+                .map(|index| start + index)
+                .expect("closing script tag after seed");
+            let region = &page[start..end];
+
+            assert!(
+                !region.contains('<'),
+                "raw < must be escaped in {assignment}; got: {region}"
+            );
+            assert!(
+                region.contains(escaped_marker),
+                "expected {escaped_marker} in {assignment}; got: {region}"
+            );
+        }
     }
 
     #[test]

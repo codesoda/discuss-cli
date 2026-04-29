@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Draft, Drafts, Reply, Resolution, Take, Thread, ThreadId};
+use super::{Draft, Drafts, FileMeta, Reply, Resolution, Take, Thread, ThreadId};
 
 pub type SharedState = Arc<RwLock<State>>;
 
@@ -26,6 +26,8 @@ pub struct StateSnapshot {
     pub takes: HashMap<ThreadId, Vec<Take>>,
     pub resolutions: HashMap<ThreadId, Resolution>,
     pub drafts: Drafts,
+    #[serde(default)]
+    pub files: Vec<FileMeta>,
 }
 
 impl State {
@@ -138,6 +140,7 @@ impl State {
                 new_thread: self.drafts.new_thread.clone(),
                 followup: active_value_map(&self.drafts.followup, &active_thread_ids),
             },
+            files: Vec::new(),
         }
     }
 }
@@ -168,7 +171,7 @@ mod tests {
 
     use chrono::TimeZone;
 
-    use crate::state::ThreadKind;
+    use crate::state::{ThreadKind, types::default_file_id};
 
     fn timestamp(second: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 4, 23, 2, 30, second)
@@ -179,6 +182,7 @@ mod tests {
     fn thread(id: &str, anchor_start: usize) -> Thread {
         Thread {
             id: ThreadId(id.to_string()),
+            file_id: default_file_id(),
             anchor_start,
             anchor_end: anchor_start + 1,
             snippet: format!("snippet {id}"),

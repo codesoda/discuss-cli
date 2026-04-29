@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>discuss</title>
+  <style>
+    :root { color-scheme: light dark; --tree-w: 220px; --threads-w: 320px; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; }
+    .v2-layout { display: grid; grid-template-columns: var(--tree-w) 1fr var(--threads-w); min-height: 100vh; }
+    .v2-tree, .v2-threads-panel { border-right: 1px solid rgba(127,127,127,0.25); padding: 1rem 0.75rem; font-size: 0.9rem; overflow-y: auto; max-height: 100vh; }
+    .v2-threads-panel { border-right: none; border-left: 1px solid rgba(127,127,127,0.25); }
+    .v2-tree h2, .v2-threads-panel h2 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.55; margin: 0 0 0.5rem 0.25rem; }
+    .v2-tree ul { list-style: none; padding: 0; margin: 0; }
+    .v2-tree li { padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer; }
+    .v2-tree li:hover { background: rgba(127,127,127,0.12); }
+    .v2-tree li.active { background: rgba(127,127,127,0.2); font-weight: 600; }
+    .v2-tree li .v2-tree-kind { font-size: 0.7rem; opacity: 0.55; margin-left: 0.4rem; }
+    .v2-tree li.tree-empty { opacity: 0.55; cursor: default; padding: 0.25rem 0.4rem; }
+    .v2-tree li.tree-empty:hover { background: transparent; }
+    .v2-content { padding: 2rem 2.5rem; max-width: 920px; }
+    .v2-banner { padding: 0.6rem 0.8rem; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; opacity: 0.8; font-size: 0.8rem; margin-bottom: 1.5rem; }
+    .v2-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+    .v2-doc { line-height: 1.55; }
+    .v2-doc pre { overflow-x: auto; padding: 0.75rem 1rem; background: rgba(127,127,127,0.08); border-radius: 6px; }
+    .v2-doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .v2-doc [data-anchor-idx].v2-anchor-flash { transition: background-color 0.4s; background: rgba(255,200,0,0.25); }
+    .v2-empty { opacity: 0.55; font-style: italic; }
+    .v2-section + .v2-section { margin-top: 3rem; padding-top: 2rem; border-top: 1px dashed rgba(127,127,127,0.3); }
+    .v2-section-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.55; margin-bottom: 0.75rem; }
+    .v2-thread-group { margin-bottom: 1.25rem; }
+    .v2-thread-group-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.55; margin-bottom: 0.4rem; }
+    .v2-thread-card { padding: 0.5rem 0.6rem; border: 1px solid rgba(127,127,127,0.25); border-radius: 6px; margin-bottom: 0.5rem; cursor: pointer; background: transparent; text-align: left; width: 100%; font: inherit; color: inherit; }
+    .v2-thread-card:hover { background: rgba(127,127,127,0.1); }
+    .v2-thread-card[data-resolved="true"] { opacity: 0.6; }
+    .v2-thread-card .v2-thread-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.6; margin-bottom: 0.25rem; }
+    .v2-thread-card .v2-thread-snippet { font-style: italic; opacity: 0.75; margin-bottom: 0.25rem; font-size: 0.8rem; line-height: 1.35; }
+    .v2-thread-card .v2-thread-text { font-size: 0.85rem; line-height: 1.4; }
+    .v2-thread-card .v2-thread-counts { font-size: 0.7rem; opacity: 0.55; margin-top: 0.3rem; }
+    .v2-threads-empty { opacity: 0.55; font-style: italic; font-size: 0.85rem; }
+    .v2-selection-popup { position: fixed; z-index: 1000; padding: 0.35rem 0.6rem; background: rgba(20,20,20,0.92); color: #fff; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.25); }
+    .v2-selection-popup:hover { background: rgba(20,20,20,1); }
+    .v2-new-thread-editor { position: absolute; z-index: 999; width: min(420px, 90vw); padding: 0.75rem; border-radius: 8px; background: var(--editor-bg, #fff); border: 1px solid rgba(127,127,127,0.4); box-shadow: 0 6px 18px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 0.5rem; }
+    @media (prefers-color-scheme: dark) { .v2-new-thread-editor { background: #1f1f1f; } }
+    .v2-new-thread-editor .v2-editor-snippet { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.7; padding: 0.35rem 0.5rem; background: rgba(127,127,127,0.12); border-radius: 4px; max-height: 4.5em; overflow: hidden; }
+    .v2-new-thread-editor textarea { font: inherit; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); resize: vertical; min-height: 4.5em; background: transparent; color: inherit; }
+    .v2-new-thread-editor textarea:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-new-thread-editor .v2-editor-error { color: #d22; font-size: 0.8rem; }
+    .v2-new-thread-editor .v2-editor-buttons { display: flex; gap: 0.4rem; justify-content: flex-end; }
+    .v2-new-thread-editor button { font: inherit; padding: 0.35rem 0.75rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.45); background: transparent; cursor: pointer; color: inherit; }
+    .v2-new-thread-editor button.primary { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
+    .v2-new-thread-editor button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+  <script src="/assets/preact.umd.js"></script>
+  <script src="/assets/preact-hooks.umd.js"></script>
+  <script src="/assets/htm.umd.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script id="discuss-initial-state">
+window.__DISCUSS_INITIAL_STATE__ = {};
+  </script>
+  <script id="discuss-rendered-files">
+window.__DISCUSS_RENDERED_FILES__ = {};
+  </script>
+  <script>
+(function() {
+  const HEARTBEAT_INTERVAL_MS = 30000;
+  const SSE_RECONNECT_MIN_MS = 1000;
+  const SSE_RECONNECT_MAX_MS = 30000;
+  const SSE_EVENT_KINDS = [
+    'thread.created',
+    'thread.deleted',
+    'thread.resolved',
+    'thread.unresolved',
+    'reply.added',
+    'take.added',
+    'draft.updated',
+    'draft.cleared',
+  ];
+
+  const initial = (window.__DISCUSS_INITIAL_STATE__ && typeof window.__DISCUSS_INITIAL_STATE__ === 'object')
+    ? window.__DISCUSS_INITIAL_STATE__
+    : {};
+  const renderedFiles = (window.__DISCUSS_RENDERED_FILES__ && typeof window.__DISCUSS_RENDERED_FILES__ === 'object')
+    ? window.__DISCUSS_RENDERED_FILES__
+    : {};
+  const { h, render } = preact;
+  const hooks = (window.preactHooks && typeof window.preactHooks === 'object')
+    ? window.preactHooks
+    : (preact.hooks || {});
+  const { useState, useEffect, useRef, useMemo } = hooks;
+  const html = htm.bind(h);
+
+  if (typeof useState !== 'function' || typeof useEffect !== 'function') {
+    document.getElementById('app').innerHTML = '<p style="padding:2rem;color:#c00">discuss v2 failed to load: preact hooks unavailable.</p>';
+    return;
+  }
+
+  const initialFiles = Array.isArray(initial.files) ? initial.files : [];
+  const initialThreads = Array.isArray(initial.threads) ? initial.threads : [];
+  const initialReplies = (initial.replies && typeof initial.replies === 'object') ? initial.replies : {};
+  const initialTakes = (initial.takes && typeof initial.takes === 'object') ? initial.takes : {};
+  const initialResolutions = (initial.resolutions && typeof initial.resolutions === 'object') ? initial.resolutions : {};
+
+  function FileTree({ files, activeId, onSelect }) {
+    if (!files.length) {
+      return html`
+        <nav class="v2-tree">
+          <h2>Files</h2>
+          <ul><li class="tree-empty">no files</li></ul>
+        </nav>
+      `;
+    }
+    return html`
+      <nav class="v2-tree">
+        <h2>Files</h2>
+        <ul>
+          ${files.map(file => html`
+            <li
+              key=${file.id}
+              class=${file.id === activeId ? 'active' : ''}
+              onClick=${() => onSelect(file.id)}
+            >
+              ${file.path}
+              <span class="v2-tree-kind">${file.kind}</span>
+            </li>
+          `)}
+        </ul>
+      </nav>
+    `;
+  }
+
+  function MarkdownFile({ fileId }) {
+    const renderedHtml = renderedFiles[fileId];
+    const articleRef = useRef(null);
+
+    useEffect(() => {
+      if (!articleRef.current) return;
+      Array.from(articleRef.current.children).forEach((child, idx) => {
+        child.setAttribute('data-anchor-idx', String(idx + 1));
+      });
+    }, [fileId, renderedHtml]);
+
+    if (renderedHtml == null) {
+      return html`<p class="v2-empty">No content for ${fileId}.</p>`;
+    }
+    return html`
+      <article
+        class="v2-doc"
+        data-file-id=${fileId}
+        ref=${articleRef}
+        dangerouslySetInnerHTML=${{ __html: renderedHtml }}
+      />
+    `;
+  }
+
+  function DiffFile({ fileId, content }) {
+    return html`
+      <pre class="v2-doc" data-file-id=${fileId}><code>${content || '(empty diff)'}</code></pre>
+    `;
+  }
+
+  function FileSection({ file }) {
+    return html`
+      <section class="v2-section">
+        <div class="v2-section-header">${file.path} · ${file.kind}</div>
+        ${file.kind === 'diff'
+          ? html`<${DiffFile} fileId=${file.id} content=${file.content || ''} />`
+          : html`<${MarkdownFile} fileId=${file.id} />`}
+      </section>
+    `;
+  }
+
+  function ThreadCard({ thread, file, replyCount, takeCount, resolved, onClick }) {
+    const path = file ? file.path : thread.fileId;
+    return html`
+      <button class="v2-thread-card" data-thread-id=${thread.id} data-resolved=${resolved ? 'true' : 'false'} onClick=${onClick}>
+        <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}</div>
+        ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
+        <div class="v2-thread-text">${thread.text || ''}</div>
+        ${(replyCount + takeCount) > 0
+          ? html`<div class="v2-thread-counts">${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} · ${takeCount} take${takeCount === 1 ? '' : 's'}</div>`
+          : null}
+      </button>
+    `;
+  }
+
+  function ThreadsPanel({ threads, files, replies, takes, resolutions, onThreadClick }) {
+    const filesById = useMemo(() => {
+      const map = {};
+      files.forEach(file => { map[file.id] = file; });
+      return map;
+    }, [files]);
+
+    const grouped = useMemo(() => groupThreadsByFile(threads, files), [threads, files]);
+
+    if (!threads.length) {
+      return html`
+        <aside class="v2-threads-panel">
+          <h2>Threads</h2>
+          <p class="v2-threads-empty">no threads yet</p>
+        </aside>
+      `;
+    }
+    return html`
+      <aside class="v2-threads-panel">
+        <h2>Threads (${threads.length})</h2>
+        ${grouped.map(({ fileId, items }) => html`
+          <section class="v2-thread-group" key=${fileId}>
+            <div class="v2-thread-group-path">${(filesById[fileId] && filesById[fileId].path) || fileId}</div>
+            ${items.map(thread => html`
+              <${ThreadCard}
+                key=${thread.id}
+                thread=${thread}
+                file=${filesById[thread.fileId]}
+                replyCount=${(replies[thread.id] || []).length}
+                takeCount=${(takes[thread.id] || []).length}
+                resolved=${Boolean(resolutions[thread.id])}
+                onClick=${() => onThreadClick(thread)}
+              />
+            `)}
+          </section>
+        `)}
+      </aside>
+    `;
+  }
+
+  function groupThreadsByFile(threads, files) {
+    const order = files.map(f => f.id);
+    const buckets = {};
+    threads.forEach(thread => {
+      const key = thread.fileId || (files[0] ? files[0].id : '');
+      if (!buckets[key]) buckets[key] = [];
+      buckets[key].push(thread);
+    });
+    Object.keys(buckets).forEach(key => {
+      buckets[key].sort((a, b) => (a.anchorStart - b.anchorStart) || (a.anchorEnd - b.anchorEnd));
+    });
+    const seen = new Set();
+    const result = [];
+    order.forEach(id => {
+      if (buckets[id]) { result.push({ fileId: id, items: buckets[id] }); seen.add(id); }
+    });
+    Object.keys(buckets).forEach(id => {
+      if (!seen.has(id)) result.push({ fileId: id, items: buckets[id] });
+    });
+    return result;
+  }
+
+  function scrollToAnchor(fileId, anchorIdx) {
+    const el = document.querySelector(`[data-file-id="${cssEscape(fileId)}"] [data-anchor-idx="${anchorIdx}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('v2-anchor-flash');
+    setTimeout(() => el.classList.remove('v2-anchor-flash'), 800);
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, ch => `\\${ch}`);
+  }
+
+  function anchorElementFor(node) {
+    let el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+    while (el && !(el.dataset && el.dataset.anchorIdx)) el = el.parentElement;
+    return el;
+  }
+
+  function currentSelectionAnchors() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const startEl = anchorElementFor(range.startContainer);
+    const endEl = anchorElementFor(range.endContainer);
+    if (!startEl || !endEl) return null;
+    const startArticle = startEl.closest('[data-file-id]');
+    const endArticle = endEl.closest('[data-file-id]');
+    if (!startArticle || startArticle !== endArticle) return null;
+    const snippet = sel.toString().trim();
+    if (!snippet) return null;
+    const rect = range.getBoundingClientRect();
+    if (!rect || (rect.width === 0 && rect.height === 0)) return null;
+    return {
+      fileId: startArticle.getAttribute('data-file-id'),
+      anchorStart: parseInt(startEl.getAttribute('data-anchor-idx'), 10),
+      anchorEnd: parseInt(endEl.getAttribute('data-anchor-idx'), 10),
+      snippet,
+      rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+    };
+  }
+
+  async function apiJson(path, { method = 'POST', body } = {}) {
+    const options = { method, headers: { Accept: 'application/json' } };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, options);
+    const text = await response.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch { data = text; }
+    }
+    if (!response.ok) {
+      const message = data && data.error && data.error.message
+        ? data.error.message
+        : `${method} ${path} returned ${response.status}`;
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
+  function clearWindowSelection() {
+    const sel = window.getSelection();
+    if (sel && sel.removeAllRanges) sel.removeAllRanges();
+  }
+
+  function SelectionPopup({ anchors, onCreate }) {
+    if (!anchors) return null;
+    const top = Math.max(8, anchors.rect.top - 36);
+    const left = Math.min(window.innerWidth - 120, Math.max(8, anchors.rect.left));
+    return html`
+      <button
+        class="v2-selection-popup"
+        style=${`top: ${top}px; left: ${left}px;`}
+        onMouseDown=${e => e.preventDefault()}
+        onClick=${() => onCreate(anchors)}
+      >
+        💬 Comment
+      </button>
+    `;
+  }
+
+  function NewThreadEditor({ anchors, files, onSubmit, onCancel }) {
+    const [text, setText] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState(null);
+    const textareaRef = useRef(null);
+
+    useEffect(() => {
+      if (textareaRef.current) textareaRef.current.focus();
+    }, []);
+
+    if (!anchors) return null;
+    const file = files.find(f => f.id === anchors.fileId);
+    const top = window.scrollY + anchors.rect.bottom + 8;
+    const left = window.scrollX + Math.max(8, anchors.rect.left);
+
+    async function handleSubmit() {
+      const trimmed = text.trim();
+      if (!trimmed || submitting) return;
+      setSubmitting(true);
+      setError(null);
+      try {
+        await onSubmit({
+          fileId: anchors.fileId,
+          anchorStart: anchors.anchorStart,
+          anchorEnd: anchors.anchorEnd,
+          snippet: anchors.snippet,
+          text: trimmed,
+        });
+      } catch (err) {
+        setError(err && err.message ? err.message : 'failed to post comment');
+        setSubmitting(false);
+      }
+    }
+
+    return html`
+      <div
+        class="v2-new-thread-editor"
+        style=${`top: ${top}px; left: ${left}px;`}
+        onMouseDown=${e => e.stopPropagation()}
+      >
+        <div class="v2-editor-snippet">${(file && file.path) || anchors.fileId} · #${anchors.anchorStart}${anchors.anchorEnd !== anchors.anchorStart ? `-${anchors.anchorEnd}` : ''}: ${anchors.snippet}</div>
+        <textarea
+          ref=${textareaRef}
+          value=${text}
+          placeholder="Leave a comment…"
+          onInput=${e => setText(e.target.value)}
+          onKeyDown=${e => {
+            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+            else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
+          }}
+        ></textarea>
+        ${error ? html`<div class="v2-editor-error">${error}</div>` : null}
+        <div class="v2-editor-buttons">
+          <button onClick=${onCancel} disabled=${submitting}>Cancel</button>
+          <button class="primary" onClick=${handleSubmit} disabled=${submitting || !text.trim()}>
+            ${submitting ? 'Posting…' : 'Post'}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function App() {
+    const [activeFileId, setActiveFileId] = useState(initialFiles[0] ? initialFiles[0].id : null);
+    const [threads, setThreads] = useState(initialThreads);
+    const [replies, setReplies] = useState(initialReplies);
+    const [takes, setTakes] = useState(initialTakes);
+    const [resolutions, setResolutions] = useState(initialResolutions);
+    const [popupAnchors, setPopupAnchors] = useState(null);
+    const [editorAnchors, setEditorAnchors] = useState(null);
+
+    useEffect(() => {
+      function handleSelectionChange() {
+        if (editorAnchors) return;
+        setPopupAnchors(currentSelectionAnchors());
+      }
+      document.addEventListener('selectionchange', handleSelectionChange);
+      return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, [editorAnchors]);
+
+    useEffect(() => startHeartbeat(), []);
+    useEffect(() => startEventStream({
+      onThreadCreated: thread => setThreads(prev => upsertById(prev, thread)),
+      onThreadDeleted: payload => {
+        const id = payload && payload.threadId;
+        if (id == null) return;
+        setThreads(prev => prev.filter(t => t.id !== id));
+        setReplies(prev => removeKey(prev, id));
+        setTakes(prev => removeKey(prev, id));
+        setResolutions(prev => removeKey(prev, id));
+      },
+      onThreadResolved: payload => {
+        const id = payload && payload.threadId;
+        const resolution = payload && payload.resolution;
+        if (id == null || !resolution) return;
+        setResolutions(prev => ({ ...prev, [id]: resolution }));
+      },
+      onThreadUnresolved: payload => {
+        const id = payload && payload.threadId;
+        if (id == null) return;
+        setResolutions(prev => removeKey(prev, id));
+      },
+      onReplyAdded: reply => {
+        if (!reply || reply.threadId == null) return;
+        setReplies(prev => appendByKey(prev, reply.threadId, reply));
+      },
+      onTakeAdded: take => {
+        if (!take || take.threadId == null) return;
+        setTakes(prev => appendByKey(prev, take.threadId, take));
+      },
+    }), []);
+
+    function openEditor(anchors) {
+      setEditorAnchors(anchors);
+      setPopupAnchors(null);
+    }
+
+    function closeEditor() {
+      setEditorAnchors(null);
+      clearWindowSelection();
+    }
+
+    async function submitNewThread(payload) {
+      const tempId = `tmp-${Math.random().toString(36).slice(2)}`;
+      const optimistic = {
+        id: tempId,
+        fileId: payload.fileId,
+        anchorStart: payload.anchorStart,
+        anchorEnd: payload.anchorEnd,
+        snippet: payload.snippet,
+        text: payload.text,
+        kind: 'user',
+        createdAt: new Date().toISOString(),
+        __optimistic: true,
+      };
+      setThreads(prev => [...prev, optimistic]);
+      try {
+        const created = await apiJson('/api/threads', { method: 'POST', body: payload });
+        setThreads(prev => prev.map(t => (t.id === tempId
+          ? { ...optimistic, id: created.id, createdAt: created.createdAt, __optimistic: false }
+          : t)));
+        closeEditor();
+      } catch (err) {
+        setThreads(prev => prev.filter(t => t.id !== tempId));
+        throw err;
+      }
+    }
+
+    if (!initialFiles.length) {
+      return html`
+        <div class="v2-layout">
+          <${FileTree} files=${initialFiles} activeId=${null} onSelect=${() => {}} />
+          <main class="v2-content">
+            <p class="v2-banner">discuss v2 — no files loaded.</p>
+          </main>
+          <${ThreadsPanel} threads=${threads} files=${initialFiles} replies=${replies} takes=${takes} resolutions=${resolutions} onThreadClick=${() => {}} />
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="v2-layout">
+        <${FileTree} files=${initialFiles} activeId=${activeFileId} onSelect=${setActiveFileId} />
+        <main class="v2-content">
+          <p class="v2-banner">
+            discuss v2 (in progress) · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
+            <a href="/">switch to v1</a>
+          </p>
+          ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
+        </main>
+        <${ThreadsPanel}
+          threads=${threads}
+          files=${initialFiles}
+          replies=${replies}
+          takes=${takes}
+          resolutions=${resolutions}
+          onThreadClick=${thread => scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart)}
+        />
+      </div>
+      ${!editorAnchors
+        ? html`<${SelectionPopup} anchors=${popupAnchors} onCreate=${openEditor} />`
+        : null}
+      <${NewThreadEditor}
+        anchors=${editorAnchors}
+        files=${initialFiles}
+        onSubmit=${submitNewThread}
+        onCancel=${closeEditor}
+      />
+    `;
+  }
+
+  function upsertById(list, item) {
+    if (!item || item.id == null) return list;
+    const idx = list.findIndex(existing => existing.id === item.id);
+    if (idx === -1) return [...list, item];
+    const next = list.slice();
+    next[idx] = item;
+    return next;
+  }
+
+  function appendByKey(map, key, item) {
+    const existing = Array.isArray(map[key]) ? map[key] : [];
+    if (item && item.id != null && existing.some(e => e && e.id === item.id)) return map;
+    return { ...map, [key]: [...existing, item] };
+  }
+
+  function removeKey(map, key) {
+    if (!Object.prototype.hasOwnProperty.call(map, key)) return map;
+    const next = { ...map };
+    delete next[key];
+    return next;
+  }
+
+  let heartbeatTimer = null;
+  function startHeartbeat() {
+    sendHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    return () => {
+      if (heartbeatTimer != null) clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    };
+  }
+  async function sendHeartbeat() {
+    try {
+      await fetch('/api/heartbeat', { method: 'POST' });
+    } catch (err) {
+      console.debug('discuss v2 heartbeat failed:', err && err.message);
+    }
+  }
+
+  let eventSource = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+  function startEventStream(handlers) {
+    openEventStream(handlers || {});
+    return () => {
+      if (eventSource) eventSource.close();
+      eventSource = null;
+      if (reconnectTimer != null) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+  }
+  function openEventStream(handlers) {
+    try {
+      eventSource = new EventSource('/api/events');
+    } catch (err) {
+      console.warn('discuss v2 SSE failed to open:', err && err.message);
+      scheduleReconnect(handlers);
+      return;
+    }
+    SSE_EVENT_KINDS.forEach(kind => {
+      eventSource.addEventListener(kind, evt => {
+        let payload = null;
+        try { payload = JSON.parse(evt.data); } catch (err) { return; }
+        dispatchSseEvent(handlers, kind, payload);
+      });
+    });
+    eventSource.onopen = () => { reconnectAttempts = 0; };
+    eventSource.onerror = () => {
+      if (eventSource) eventSource.close();
+      eventSource = null;
+      scheduleReconnect(handlers);
+    };
+  }
+  function dispatchSseEvent(handlers, kind, payload) {
+    switch (kind) {
+      case 'thread.created':
+        if (handlers.onThreadCreated) handlers.onThreadCreated(payload);
+        return;
+      case 'thread.deleted':
+        if (handlers.onThreadDeleted) handlers.onThreadDeleted(payload);
+        return;
+      case 'thread.resolved':
+        if (handlers.onThreadResolved) handlers.onThreadResolved(payload);
+        return;
+      case 'thread.unresolved':
+        if (handlers.onThreadUnresolved) handlers.onThreadUnresolved(payload);
+        return;
+      case 'reply.added':
+        if (handlers.onReplyAdded) handlers.onReplyAdded(payload);
+        return;
+      case 'take.added':
+        if (handlers.onTakeAdded) handlers.onTakeAdded(payload);
+        return;
+      default:
+        return;
+    }
+  }
+  function scheduleReconnect(handlers) {
+    if (reconnectTimer != null) return;
+    const delay = Math.min(
+      SSE_RECONNECT_MAX_MS,
+      SSE_RECONNECT_MIN_MS * Math.pow(2, reconnectAttempts),
+    );
+    reconnectAttempts += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      openEventStream(handlers);
+    }, delay);
+  }
+
+  render(html`<${App} />`, document.getElementById('app'));
+})();
+  </script>
+</body>
+</html>
