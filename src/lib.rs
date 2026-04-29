@@ -175,7 +175,16 @@ async fn run_diff_session<F>(diff_args: cli::DiffArgs, config: &Config, shutdown
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let diff_output = diff::run_git_diff(diff_args.unstaged, &diff_args.args)?;
+    let limit_bytes = diff_args
+        .max_diff_bytes
+        .or(config.max_diff_bytes)
+        .unwrap_or(diff::DEFAULT_DIFF_SIZE_LIMIT_BYTES);
+    let limit_bytes = if limit_bytes == 0 {
+        usize::MAX
+    } else {
+        limit_bytes
+    };
+    let diff_output = diff::run_git_diff(diff_args.unstaged, &diff_args.args, limit_bytes)?;
 
     if diff_output.files.is_empty() {
         return Err(DiscussError::DiffError {

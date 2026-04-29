@@ -2,7 +2,7 @@ use std::process::Command;
 
 use crate::error::{DiscussError, Result};
 
-pub const DIFF_SIZE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
+pub const DEFAULT_DIFF_SIZE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct DiffOutput {
@@ -16,7 +16,7 @@ pub struct DiffFile {
     pub content: String,
 }
 
-pub fn run_git_diff(unstaged: bool, extra: &[String]) -> Result<DiffOutput> {
+pub fn run_git_diff(unstaged: bool, extra: &[String], limit_bytes: usize) -> Result<DiffOutput> {
     let mut git_args: Vec<String> =
         vec!["diff".into(), "--no-color".into(), "--no-ext-diff".into()];
     if extra.is_empty() && !unstaged {
@@ -43,12 +43,12 @@ pub fn run_git_diff(unstaged: bool, extra: &[String]) -> Result<DiffOutput> {
         return Err(DiscussError::DiffError { message });
     }
 
-    if output.stdout.len() > DIFF_SIZE_LIMIT_BYTES {
+    if output.stdout.len() > limit_bytes {
         return Err(DiscussError::DiffError {
             message: format!(
-                "diff is {} bytes, which exceeds the {} MB limit. Narrow the range (e.g. fewer commits, a path filter, or smaller -U context).",
+                "diff is {} bytes, which exceeds the {} byte limit. Narrow the range (e.g. fewer commits, a path filter, or smaller -U context), or raise the cap via --max-diff-bytes / max_diff_bytes in discuss.config.toml.",
                 output.stdout.len(),
-                DIFF_SIZE_LIMIT_BYTES / (1024 * 1024)
+                limit_bytes
             ),
         });
     }
@@ -140,7 +140,7 @@ index 0000..89ab
     }
 
     #[test]
-    fn diff_size_limit_is_five_megabytes() {
-        assert_eq!(DIFF_SIZE_LIMIT_BYTES, 5 * 1024 * 1024);
+    fn default_diff_size_limit_is_five_megabytes() {
+        assert_eq!(DEFAULT_DIFF_SIZE_LIMIT_BYTES, 5 * 1024 * 1024);
     }
 }

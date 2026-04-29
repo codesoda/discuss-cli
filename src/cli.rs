@@ -81,6 +81,13 @@ pub struct DiffArgs {
     pub unstaged: bool,
 
     #[arg(
+        long,
+        value_name = "BYTES",
+        help = "Override the diff size cap (default 5 MB). Use 0 to disable the cap."
+    )]
+    pub max_diff_bytes: Option<usize>,
+
+    #[arg(
         value_name = "ARG",
         trailing_var_arg = true,
         allow_hyphen_values = true,
@@ -256,6 +263,19 @@ mod tests {
             Some(Commands::Diff(diff_args)) => {
                 assert!(!diff_args.unstaged);
                 assert_eq!(diff_args.args, vec!["HEAD~3..HEAD".to_string()]);
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_max_diff_bytes_override() {
+        let args = Args::try_parse_from(["discuss", "diff", "--max-diff-bytes", "1048576"])
+            .expect("max-diff-bytes parses");
+        match args.command {
+            Some(Commands::Diff(diff_args)) => {
+                assert_eq!(diff_args.max_diff_bytes, Some(1_048_576));
+                assert!(!diff_args.unstaged);
             }
             _ => panic!("expected Diff command"),
         }
