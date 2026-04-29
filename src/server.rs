@@ -34,8 +34,8 @@ use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
-    Draft, File, FileId, FileKind, FileMeta, LineRange, Reply, Resolution, SharedState, Source,
-    State, StateSnapshot, Take, Thread, ThreadId, ThreadKind, default_file_id,
+    Draft, File, FileId, FileKind, FileMeta, LineRange, NewThreadDraftKey, Reply, Resolution,
+    SharedState, Source, State, StateSnapshot, Take, Thread, ThreadId, ThreadKind, default_file_id,
 };
 use crate::transcript::build_transcript_with_source;
 use crate::{Config, DiscussError, Result, render, template};
@@ -519,6 +519,8 @@ struct ResolveThreadRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpsertNewThreadDraftRequest {
+    #[serde(default)]
+    file_id: Option<FileId>,
     anchor_start: usize,
     anchor_end: usize,
     text: String,
@@ -527,6 +529,8 @@ struct UpsertNewThreadDraftRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClearNewThreadDraftRequest {
+    #[serde(default)]
+    file_id: Option<FileId>,
     anchor_start: usize,
     anchor_end: usize,
 }
@@ -548,6 +552,7 @@ struct ClearFollowupDraftRequest {
 #[serde(rename_all = "camelCase")]
 struct NewThreadDraftResponse {
     scope: &'static str,
+    file_id: FileId,
     anchor_start: usize,
     anchor_end: usize,
     text: String,
@@ -558,6 +563,7 @@ struct NewThreadDraftResponse {
 #[serde(rename_all = "camelCase")]
 struct NewThreadDraftCleared {
     scope: &'static str,
+    file_id: FileId,
     anchor_start: usize,
     anchor_end: usize,
 }
@@ -1096,10 +1102,16 @@ async fn post_api_drafts_new_thread(
         }
     };
 
+    let file_id = match resolve_file_id(&app_state, request.file_id.clone()) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
+
     if request.text.trim().is_empty() {
         return clear_new_thread_draft(
             &app_state,
             ClearNewThreadDraftRequest {
+                file_id: Some(file_id),
                 anchor_start: request.anchor_start,
                 anchor_end: request.anchor_end,
             },
@@ -1111,13 +1123,12 @@ async fn post_api_drafts_new_thread(
         text: request.text,
         updated_at,
     };
+    let key = NewThreadDraftKey::new(file_id.clone(), request.anchor_start, request.anchor_end);
 
     if app_state
         .state
         .write()
-        .map(|mut state| {
-            state.upsert_new_thread_draft(request.anchor_start, request.anchor_end, draft.clone())
-        })
+        .map(|mut state| state.upsert_new_thread_draft(key, draft.clone()))
         .is_err()
     {
         return api_error_response(
@@ -1130,6 +1141,7 @@ async fn post_api_drafts_new_thread(
 
     let response = NewThreadDraftResponse {
         scope: "newThread",
+        file_id,
         anchor_start: request.anchor_start,
         anchor_end: request.anchor_end,
         text: draft.text,
@@ -1173,10 +1185,15 @@ async fn delete_api_drafts_new_thread(
 }
 
 fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequest) -> Response {
+    let file_id = match resolve_file_id(app_state, request.file_id.clone()) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
+    let key = NewThreadDraftKey::new(file_id.clone(), request.anchor_start, request.anchor_end);
     if app_state
         .state
         .write()
-        .map(|mut state| state.clear_new_thread_draft(request.anchor_start, request.anchor_end))
+        .map(|mut state| state.clear_new_thread_draft(&key))
         .is_err()
     {
         return api_error_response(
@@ -1189,6 +1206,7 @@ fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequ
 
     let cleared = NewThreadDraftCleared {
         scope: "newThread",
+        file_id,
         anchor_start: request.anchor_start,
         anchor_end: request.anchor_end,
     };

@@ -257,6 +257,16 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_keys_new_thread_drafts_by_file_id_and_anchor_range() {
+        let template = discuss_v2_html();
+        assert!(template.contains("function newThreadDraftKey(fileId, anchorStart, anchorEnd)"));
+        assert!(template.contains("function parseLegacyOrFileScopedKey"));
+        assert!(template.contains("body: { fileId, anchorStart, anchorEnd, text }"));
+        assert!(template.contains("body: { fileId, anchorStart, anchorEnd }"));
+        assert!(template.contains("payload.fileId, payload.anchorStart, payload.anchorEnd"));
+    }
+
+    #[test]
     fn discuss_v2_template_auto_saves_drafts_through_rest_with_sse_sync() {
         let template = discuss_v2_html();
         assert!(template.contains("function useDraftAutoSave"));

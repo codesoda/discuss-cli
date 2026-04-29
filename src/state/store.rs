@@ -4,7 +4,9 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Draft, Drafts, FileMeta, Reply, Resolution, Take, Thread, ThreadId};
+use super::{
+    Draft, Drafts, FileMeta, NewThreadDraftKey, Reply, Resolution, Take, Thread, ThreadId,
+};
 
 pub type SharedState = Arc<RwLock<State>>;
 
@@ -99,20 +101,13 @@ impl State {
         self.resolutions.remove(thread_id);
     }
 
-    pub fn upsert_new_thread_draft(
-        &mut self,
-        anchor_start: usize,
-        anchor_end: usize,
-        draft: Draft,
-    ) -> Draft {
-        self.drafts
-            .new_thread
-            .insert((anchor_start, anchor_end), draft.clone());
+    pub fn upsert_new_thread_draft(&mut self, key: NewThreadDraftKey, draft: Draft) -> Draft {
+        self.drafts.new_thread.insert(key, draft.clone());
         draft
     }
 
-    pub fn clear_new_thread_draft(&mut self, anchor_start: usize, anchor_end: usize) {
-        self.drafts.new_thread.remove(&(anchor_start, anchor_end));
+    pub fn clear_new_thread_draft(&mut self, key: &NewThreadDraftKey) {
+        self.drafts.new_thread.remove(key);
     }
 
     pub fn upsert_followup_draft(&mut self, thread_id: ThreadId, draft: Draft) -> Draft {
@@ -287,16 +282,14 @@ mod tests {
         let thread_id = ThreadId("u-1".to_string());
         state.add_thread(thread("u-1", 1));
 
-        let new_thread_draft = state.upsert_new_thread_draft(3, 5, draft("new thread"));
+        let key = NewThreadDraftKey::new(default_file_id(), 3, 5);
+        let new_thread_draft = state.upsert_new_thread_draft(key.clone(), draft("new thread"));
         let followup_draft = state.upsert_followup_draft(thread_id.clone(), draft("followup"));
 
-        assert_eq!(
-            state.snapshot().drafts.new_thread[&(3, 5)],
-            new_thread_draft
-        );
+        assert_eq!(state.snapshot().drafts.new_thread[&key], new_thread_draft);
         assert_eq!(state.snapshot().drafts.followup[&thread_id], followup_draft);
 
-        state.clear_new_thread_draft(3, 5);
+        state.clear_new_thread_draft(&key);
         state.clear_followup_draft(&thread_id);
 
         let snapshot = state.snapshot();

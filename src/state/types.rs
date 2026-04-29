@@ -116,8 +116,25 @@ pub struct Resolution {
 #[serde(rename_all = "camelCase")]
 pub struct Drafts {
     #[serde(with = "anchor_range_keys")]
-    pub new_thread: HashMap<(usize, usize), Draft>,
+    pub new_thread: HashMap<NewThreadDraftKey, Draft>,
     pub followup: HashMap<ThreadId, Draft>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct NewThreadDraftKey {
+    pub file_id: FileId,
+    pub anchor_start: usize,
+    pub anchor_end: usize,
+}
+
+impl NewThreadDraftKey {
+    pub fn new(file_id: FileId, anchor_start: usize, anchor_end: usize) -> Self {
+        Self {
+            file_id,
+            anchor_start,
+            anchor_end,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -134,10 +151,10 @@ mod anchor_range_keys {
     use serde::de::{self, Deserializer};
     use serde::ser::{SerializeMap, Serializer};
 
-    use super::Draft;
+    use super::{Draft, FileId, NewThreadDraftKey, default_file_id};
 
     pub fn serialize<S>(
-        drafts: &HashMap<(usize, usize), Draft>,
+        drafts: &HashMap<NewThreadDraftKey, Draft>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -145,14 +162,19 @@ mod anchor_range_keys {
     {
         let mut map = serializer.serialize_map(Some(drafts.len()))?;
 
-        for ((anchor_start, anchor_end), draft) in drafts {
-            map.serialize_entry(&format!("{anchor_start}-{anchor_end}"), draft)?;
+        for (key, draft) in drafts {
+            map.serialize_entry(
+                &format!("{}|{}-{}", key.file_id.0, key.anchor_start, key.anchor_end),
+                draft,
+            )?;
         }
 
         map.end()
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<(usize, usize), Draft>, D::Error>
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<HashMap<NewThreadDraftKey, Draft>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -166,12 +188,19 @@ mod anchor_range_keys {
         Ok(drafts)
     }
 
-    fn parse_anchor_range_key<E>(key: &str) -> Result<(usize, usize), E>
+    fn parse_anchor_range_key<E>(key: &str) -> Result<NewThreadDraftKey, E>
     where
         E: de::Error,
     {
-        let (anchor_start, anchor_end) = key.split_once('-').ok_or_else(|| {
-            E::custom(format!("expected draft key {key:?} to look like start-end"))
+        let (file_id, range) = match key.split_once('|') {
+            Some((file_id, range)) => (FileId(file_id.to_string()), range),
+            None => (default_file_id(), key),
+        };
+
+        let (anchor_start, anchor_end) = range.split_once('-').ok_or_else(|| {
+            E::custom(format!(
+                "expected draft key {key:?} to look like fileId|start-end"
+            ))
         })?;
 
         let anchor_start = anchor_start.parse().map_err(|error| {
@@ -185,7 +214,11 @@ mod anchor_range_keys {
             ))
         })?;
 
-        Ok((anchor_start, anchor_end))
+        Ok(NewThreadDraftKey {
+            file_id,
+            anchor_start,
+            anchor_end,
+        })
     }
 }
 
@@ -391,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn drafts_round_trip_with_anchor_range_and_thread_id_keys() {
+    fn drafts_round_trip_with_file_scoped_anchor_keys_and_thread_id_keys() {
         let mut drafts = Drafts::default();
         let draft = Draft {
             text: "New thread draft".to_string(),
@@ -402,16 +435,17 @@ mod tests {
             updated_at: timestamp(),
         };
 
-        drafts.new_thread.insert((3, 5), draft.clone());
+        let key = NewThreadDraftKey::new(FileId("f-2".to_string()), 3, 5);
+        drafts.new_thread.insert(key.clone(), draft.clone());
         drafts
             .followup
             .insert(ThreadId("u-abc".to_string()), followup.clone());
 
         let value = serde_json::to_value(&drafts).expect("serialize drafts");
 
-        assert_eq!(value["newThread"]["3-5"]["text"], draft.text);
+        assert_eq!(value["newThread"]["f-2|3-5"]["text"], draft.text);
         assert_eq!(
-            value["newThread"]["3-5"]["updatedAt"],
+            value["newThread"]["f-2|3-5"]["updatedAt"],
             "2026-04-23T02:30:00Z"
         );
         assert_eq!(value["followup"]["u-abc"]["text"], followup.text);
@@ -420,6 +454,17 @@ mod tests {
 
         let round_tripped: Drafts = serde_json::from_value(value).expect("deserialize drafts");
         assert_eq!(round_tripped, drafts);
+    }
+
+    #[test]
+    fn drafts_deserialize_legacy_anchor_range_key_into_default_file() {
+        let payload = serde_json::json!({
+            "newThread": {"3-5": {"text": "legacy", "updatedAt": "2026-04-23T02:30:00Z"}},
+            "followup": {},
+        });
+        let drafts: Drafts = serde_json::from_value(payload).expect("legacy key parses");
+        let expected_key = NewThreadDraftKey::new(default_file_id(), 3, 5);
+        assert_eq!(drafts.new_thread[&expected_key].text, "legacy");
     }
 
     #[test]

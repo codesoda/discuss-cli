@@ -200,7 +200,13 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     if (raw.newThread && typeof raw.newThread === 'object') {
       Object.entries(raw.newThread).forEach(([key, draft]) => {
         if (!draft || typeof draft !== 'object') return;
-        out.newThread[key] = {
+        const parsed = parseLegacyOrFileScopedKey(key);
+        if (!parsed) return;
+        const normalizedKey = newThreadDraftKey(parsed.fileId, parsed.anchorStart, parsed.anchorEnd);
+        out.newThread[normalizedKey] = {
+          fileId: parsed.fileId,
+          anchorStart: parsed.anchorStart,
+          anchorEnd: parsed.anchorEnd,
           text: draft.text || '',
           updatedAt: draft.updatedAt || draft.savedAt || null,
         };
@@ -216,6 +222,23 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       });
     }
     return out;
+  }
+
+  function parseLegacyOrFileScopedKey(key) {
+    if (typeof key !== 'string') return null;
+    const pipe = key.indexOf('|');
+    let fileId = 'f-1';
+    let range = key;
+    if (pipe >= 0) {
+      fileId = key.slice(0, pipe) || 'f-1';
+      range = key.slice(pipe + 1);
+    }
+    const dash = range.indexOf('-');
+    if (dash < 0) return null;
+    const anchorStart = parseInt(range.slice(0, dash), 10);
+    const anchorEnd = parseInt(range.slice(dash + 1), 10);
+    if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return null;
+    return { fileId, anchorStart, anchorEnd };
   }
 
   const THEME_STORAGE_KEY = 'discuss-theme';
@@ -925,8 +948,8 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     if (sel && sel.removeAllRanges) sel.removeAllRanges();
   }
 
-  function newThreadDraftKey(anchorStart, anchorEnd) {
-    return `${anchorStart}-${anchorEnd}`;
+  function newThreadDraftKey(fileId, anchorStart, anchorEnd) {
+    return `${fileId || ''}|${anchorStart}-${anchorEnd}`;
   }
 
   function useDraftAutoSave({ value, key, save, clear, delayMs = 500 }) {
@@ -986,7 +1009,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState(null);
     const textareaRef = useRef(null);
-    const draftKey = anchors ? newThreadDraftKey(anchors.anchorStart, anchors.anchorEnd) : null;
+    const draftKey = anchors ? newThreadDraftKey(anchors.fileId, anchors.anchorStart, anchors.anchorEnd) : null;
 
     useEffect(() => {
       if (textareaRef.current) textareaRef.current.focus();
@@ -995,8 +1018,8 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const draftStatus = useDraftAutoSave({
       value: text,
       key: draftKey,
-      save: t => onSaveDraft(anchors.anchorStart, anchors.anchorEnd, t),
-      clear: () => onClearDraft(anchors.anchorStart, anchors.anchorEnd),
+      save: t => onSaveDraft(anchors.fileId, anchors.anchorStart, anchors.anchorEnd, t),
+      clear: () => onClearDraft(anchors.fileId, anchors.anchorStart, anchors.anchorEnd),
     });
 
     if (!anchors) return null;
@@ -1132,10 +1155,10 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       onDraftUpdated: payload => {
         if (!payload || !payload.scope) return;
         if (payload.scope === 'newThread') {
-          const key = newThreadDraftKey(payload.anchorStart, payload.anchorEnd);
+          const key = newThreadDraftKey(payload.fileId, payload.anchorStart, payload.anchorEnd);
           setDrafts(prev => ({
             ...prev,
-            newThread: { ...prev.newThread, [key]: { text: payload.text || '', updatedAt: payload.updatedAt || null } },
+            newThread: { ...prev.newThread, [key]: { fileId: payload.fileId, anchorStart: payload.anchorStart, anchorEnd: payload.anchorEnd, text: payload.text || '', updatedAt: payload.updatedAt || null } },
           }));
         } else if (payload.scope === 'followup' && payload.threadId != null) {
           setDrafts(prev => ({
@@ -1147,7 +1170,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       onDraftCleared: payload => {
         if (!payload || !payload.scope) return;
         if (payload.scope === 'newThread') {
-          const key = newThreadDraftKey(payload.anchorStart, payload.anchorEnd);
+          const key = newThreadDraftKey(payload.fileId, payload.anchorStart, payload.anchorEnd);
           setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
         } else if (payload.scope === 'followup' && payload.threadId != null) {
           setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, payload.threadId) }));
@@ -1166,24 +1189,24 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       clearWindowSelection();
     }
 
-    function saveNewThreadDraft(anchorStart, anchorEnd, text) {
-      const key = newThreadDraftKey(anchorStart, anchorEnd);
+    function saveNewThreadDraft(fileId, anchorStart, anchorEnd, text) {
+      const key = newThreadDraftKey(fileId, anchorStart, anchorEnd);
       setDrafts(prev => ({
         ...prev,
-        newThread: { ...prev.newThread, [key]: { text, updatedAt: new Date().toISOString() } },
+        newThread: { ...prev.newThread, [key]: { fileId, anchorStart, anchorEnd, text, updatedAt: new Date().toISOString() } },
       }));
       return apiJson('/api/drafts/new-thread', {
         method: 'POST',
-        body: { anchorStart, anchorEnd, text },
+        body: { fileId, anchorStart, anchorEnd, text },
       });
     }
 
-    function clearNewThreadDraft(anchorStart, anchorEnd) {
-      const key = newThreadDraftKey(anchorStart, anchorEnd);
+    function clearNewThreadDraft(fileId, anchorStart, anchorEnd) {
+      const key = newThreadDraftKey(fileId, anchorStart, anchorEnd);
       setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
       return apiJson('/api/drafts/new-thread', {
         method: 'DELETE',
-        body: { anchorStart, anchorEnd },
+        body: { fileId, anchorStart, anchorEnd },
       });
     }
 
@@ -1225,7 +1248,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         setThreads(prev => prev.map(t => (t.id === tempId
           ? { ...optimistic, id: created.id, createdAt: created.createdAt, __optimistic: false }
           : t)));
-        clearNewThreadDraft(payload.anchorStart, payload.anchorEnd).catch(() => {});
+        clearNewThreadDraft(payload.fileId, payload.anchorStart, payload.anchorEnd).catch(() => {});
         closeEditor();
       } catch (err) {
         setThreads(prev => prev.filter(t => t.id !== tempId));
@@ -1368,7 +1391,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     };
 
     const editorDraftKey = editorAnchors
-      ? newThreadDraftKey(editorAnchors.anchorStart, editorAnchors.anchorEnd)
+      ? newThreadDraftKey(editorAnchors.fileId, editorAnchors.anchorStart, editorAnchors.anchorEnd)
       : null;
     const editorDraftText = editorDraftKey && drafts.newThread[editorDraftKey]
       ? drafts.newThread[editorDraftKey].text
