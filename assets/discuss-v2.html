@@ -72,6 +72,9 @@
     .v2-thread-buttons a:hover { opacity: 1; text-decoration: underline; }
     .v2-thread-error { color: #d22; font-size: 0.78rem; }
     .v2-thread-resolution { font-size: 0.78rem; opacity: 0.75; padding: 0.3rem 0.5rem; background: rgba(127,127,127,0.1); border-radius: 4px; }
+    .v2-draft-status { font-size: 0.7rem; opacity: 0.55; font-style: italic; }
+    .v2-draft-status[data-status="error"] { color: #d22; opacity: 0.85; font-style: normal; }
+    .v2-editor-buttons .v2-draft-status { margin-right: auto; }
   </style>
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
@@ -124,6 +127,31 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   const initialReplies = (initial.replies && typeof initial.replies === 'object') ? initial.replies : {};
   const initialTakes = (initial.takes && typeof initial.takes === 'object') ? initial.takes : {};
   const initialResolutions = (initial.resolutions && typeof initial.resolutions === 'object') ? initial.resolutions : {};
+  const initialDrafts = normalizeDrafts(initial.drafts);
+
+  function normalizeDrafts(raw) {
+    const out = { newThread: {}, followup: {} };
+    if (!raw || typeof raw !== 'object') return out;
+    if (raw.newThread && typeof raw.newThread === 'object') {
+      Object.entries(raw.newThread).forEach(([key, draft]) => {
+        if (!draft || typeof draft !== 'object') return;
+        out.newThread[key] = {
+          text: draft.text || '',
+          updatedAt: draft.updatedAt || draft.savedAt || null,
+        };
+      });
+    }
+    if (raw.followup && typeof raw.followup === 'object') {
+      Object.entries(raw.followup).forEach(([threadId, draft]) => {
+        if (!draft || typeof draft !== 'object') return;
+        out.followup[threadId] = {
+          text: draft.text || '',
+          updatedAt: draft.updatedAt || draft.savedAt || null,
+        };
+      });
+    }
+    return out;
+  }
 
   function FileTree({ files, activeId, onSelect }) {
     if (!files.length) {
@@ -213,21 +241,33 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   }
 
   function ThreadCard({
-    thread, file, replyList, takeList, resolution, expanded,
+    thread, file, replyList, takeList, resolution, replyDraftText, expanded,
     onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+    onSaveFollowupDraft, onClearFollowupDraft,
   }) {
-    const [replyText, setReplyText] = useState('');
+    const [replyText, setReplyText] = useState(replyDraftText || '');
     const [busy, setBusy] = useState(null);
     const [error, setError] = useState(null);
     const replyRef = useRef(null);
+
+    useEffect(() => {
+      if (expanded) setReplyText(replyDraftText || '');
+    }, [expanded, thread.id]);
 
     useEffect(() => {
       if (expanded && replyRef.current) replyRef.current.focus();
     }, [expanded]);
 
     useEffect(() => {
-      if (!expanded) { setReplyText(''); setError(null); setBusy(null); }
+      if (!expanded) { setError(null); setBusy(null); }
     }, [expanded]);
+
+    const replyDraftStatus = useDraftAutoSave({
+      value: expanded ? replyText : '',
+      key: expanded ? `followup:${thread.id}` : null,
+      save: t => onSaveFollowupDraft(thread.id, t),
+      clear: () => onClearFollowupDraft(thread.id),
+    });
 
     const path = file ? file.path : thread.fileId;
     const replies = replyList || [];
@@ -321,6 +361,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
             <button class="primary" disabled=${!replyText.trim() || busy != null} onClick=${handleReply}>
               ${busy === 'reply' ? 'Posting…' : 'Reply'}
             </button>
+            <span class="v2-draft-status" data-status=${replyDraftStatus}>${draftStatusLabel(replyDraftStatus)}</span>
             ${resolved
               ? html`<button disabled=${busy != null} onClick=${handleUnresolve}>${busy === 'unresolve' ? 'Reopening…' : 'Reopen'}</button>`
               : html`<button disabled=${busy != null} onClick=${handleResolve}>${busy === 'resolve' ? 'Resolving…' : 'Resolve'}</button>`}
@@ -337,8 +378,9 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   }
 
   function ThreadsPanel({
-    threads, files, replies, takes, resolutions,
+    threads, files, replies, takes, resolutions, drafts,
     selectedThreadId, onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+    onSaveFollowupDraft, onClearFollowupDraft,
   }) {
     const filesById = useMemo(() => {
       const map = {};
@@ -370,6 +412,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
                 replyList=${replies[thread.id]}
                 takeList=${takes[thread.id]}
                 resolution=${resolutions[thread.id] || null}
+                replyDraftText=${(drafts && drafts[thread.id] && drafts[thread.id].text) || ''}
                 expanded=${selectedThreadId === thread.id}
                 onSelect=${onSelect}
                 onCollapse=${onCollapse}
@@ -378,6 +421,8 @@ window.__DISCUSS_RENDERED_FILES__ = {};
                 onUnresolve=${onUnresolve}
                 onDelete=${onDelete}
                 onScrollTo=${onScrollTo}
+                onSaveFollowupDraft=${onSaveFollowupDraft}
+                onClearFollowupDraft=${onClearFollowupDraft}
               />
             `)}
           </section>
@@ -478,6 +523,45 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     if (sel && sel.removeAllRanges) sel.removeAllRanges();
   }
 
+  function newThreadDraftKey(anchorStart, anchorEnd) {
+    return `${anchorStart}-${anchorEnd}`;
+  }
+
+  function useDraftAutoSave({ value, key, save, clear, delayMs = 500 }) {
+    const lastSentRef = useRef(null);
+    const [status, setStatus] = useState('idle');
+
+    useEffect(() => {
+      lastSentRef.current = null;
+      setStatus('idle');
+    }, [key]);
+
+    useEffect(() => {
+      const trimmed = value.trim();
+      if (lastSentRef.current == null) {
+        lastSentRef.current = trimmed;
+        return;
+      }
+      if (lastSentRef.current === trimmed) return;
+      const handle = setTimeout(() => {
+        const promise = trimmed ? save(value) : clear();
+        if (!promise || typeof promise.then !== 'function') {
+          lastSentRef.current = trimmed;
+          setStatus(trimmed ? 'saved' : 'idle');
+          return;
+        }
+        setStatus('saving');
+        promise.then(
+          () => { lastSentRef.current = trimmed; setStatus(trimmed ? 'saved' : 'idle'); },
+          () => { setStatus('error'); },
+        );
+      }, delayMs);
+      return () => clearTimeout(handle);
+    }, [value, key]);
+
+    return status;
+  }
+
   function SelectionPopup({ anchors, onCreate }) {
     if (!anchors) return null;
     const top = Math.max(8, anchors.rect.top - 36);
@@ -494,15 +578,24 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     `;
   }
 
-  function NewThreadEditor({ anchors, files, onSubmit, onCancel }) {
-    const [text, setText] = useState('');
+  function NewThreadEditor({ anchors, files, draftText, onSubmit, onCancel, onSaveDraft, onClearDraft }) {
+    const initial = draftText || '';
+    const [text, setText] = useState(initial);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState(null);
     const textareaRef = useRef(null);
+    const draftKey = anchors ? newThreadDraftKey(anchors.anchorStart, anchors.anchorEnd) : null;
 
     useEffect(() => {
       if (textareaRef.current) textareaRef.current.focus();
     }, []);
+
+    const draftStatus = useDraftAutoSave({
+      value: text,
+      key: draftKey,
+      save: t => onSaveDraft(anchors.anchorStart, anchors.anchorEnd, t),
+      clear: () => onClearDraft(anchors.anchorStart, anchors.anchorEnd),
+    });
 
     if (!anchors) return null;
     const file = files.find(f => f.id === anchors.fileId);
@@ -547,6 +640,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         ></textarea>
         ${error ? html`<div class="v2-editor-error">${error}</div>` : null}
         <div class="v2-editor-buttons">
+          <span class="v2-draft-status" data-status=${draftStatus}>${draftStatusLabel(draftStatus)}</span>
           <button onClick=${onCancel} disabled=${submitting}>Cancel</button>
           <button class="primary" onClick=${handleSubmit} disabled=${submitting || !text.trim()}>
             ${submitting ? 'Posting…' : 'Post'}
@@ -554,6 +648,13 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         </div>
       </div>
     `;
+  }
+
+  function draftStatusLabel(status) {
+    if (status === 'saving') return 'saving…';
+    if (status === 'saved') return 'draft saved';
+    if (status === 'error') return 'draft save failed';
+    return '';
   }
 
   function App() {
@@ -565,6 +666,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const [popupAnchors, setPopupAnchors] = useState(null);
     const [editorAnchors, setEditorAnchors] = useState(null);
     const [selectedThreadId, setSelectedThreadId] = useState(null);
+    const [drafts, setDrafts] = useState(initialDrafts);
 
     useEffect(() => {
       function handleSelectionChange() {
@@ -585,6 +687,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         setReplies(prev => removeKey(prev, id));
         setTakes(prev => removeKey(prev, id));
         setResolutions(prev => removeKey(prev, id));
+        setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, id) }));
       },
       onThreadResolved: payload => {
         const id = payload && payload.threadId;
@@ -605,6 +708,30 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         if (!take || take.threadId == null) return;
         setTakes(prev => appendByKey(prev, take.threadId, take));
       },
+      onDraftUpdated: payload => {
+        if (!payload || !payload.scope) return;
+        if (payload.scope === 'newThread') {
+          const key = newThreadDraftKey(payload.anchorStart, payload.anchorEnd);
+          setDrafts(prev => ({
+            ...prev,
+            newThread: { ...prev.newThread, [key]: { text: payload.text || '', updatedAt: payload.updatedAt || null } },
+          }));
+        } else if (payload.scope === 'followup' && payload.threadId != null) {
+          setDrafts(prev => ({
+            ...prev,
+            followup: { ...prev.followup, [payload.threadId]: { text: payload.text || '', updatedAt: payload.updatedAt || null } },
+          }));
+        }
+      },
+      onDraftCleared: payload => {
+        if (!payload || !payload.scope) return;
+        if (payload.scope === 'newThread') {
+          const key = newThreadDraftKey(payload.anchorStart, payload.anchorEnd);
+          setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
+        } else if (payload.scope === 'followup' && payload.threadId != null) {
+          setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, payload.threadId) }));
+        }
+      },
     }), []);
 
     function openEditor(anchors) {
@@ -615,6 +742,46 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     function closeEditor() {
       setEditorAnchors(null);
       clearWindowSelection();
+    }
+
+    function saveNewThreadDraft(anchorStart, anchorEnd, text) {
+      const key = newThreadDraftKey(anchorStart, anchorEnd);
+      setDrafts(prev => ({
+        ...prev,
+        newThread: { ...prev.newThread, [key]: { text, updatedAt: new Date().toISOString() } },
+      }));
+      return apiJson('/api/drafts/new-thread', {
+        method: 'POST',
+        body: { anchorStart, anchorEnd, text },
+      });
+    }
+
+    function clearNewThreadDraft(anchorStart, anchorEnd) {
+      const key = newThreadDraftKey(anchorStart, anchorEnd);
+      setDrafts(prev => ({ ...prev, newThread: removeKey(prev.newThread, key) }));
+      return apiJson('/api/drafts/new-thread', {
+        method: 'DELETE',
+        body: { anchorStart, anchorEnd },
+      });
+    }
+
+    function saveFollowupDraft(threadId, text) {
+      setDrafts(prev => ({
+        ...prev,
+        followup: { ...prev.followup, [threadId]: { text, updatedAt: new Date().toISOString() } },
+      }));
+      return apiJson('/api/drafts/followup', {
+        method: 'POST',
+        body: { threadId, text },
+      });
+    }
+
+    function clearFollowupDraft(threadId) {
+      setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, threadId) }));
+      return apiJson('/api/drafts/followup', {
+        method: 'DELETE',
+        body: { threadId },
+      });
     }
 
     async function submitNewThread(payload) {
@@ -636,6 +803,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         setThreads(prev => prev.map(t => (t.id === tempId
           ? { ...optimistic, id: created.id, createdAt: created.createdAt, __optimistic: false }
           : t)));
+        clearNewThreadDraft(payload.anchorStart, payload.anchorEnd).catch(() => {});
         closeEditor();
       } catch (err) {
         setThreads(prev => prev.filter(t => t.id !== tempId));
@@ -662,6 +830,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
           const list = (prev[threadId] || []).map(r => (r.id === tempId ? { ...created, __optimistic: false } : r));
           return { ...prev, [threadId]: list };
         });
+        clearFollowupDraft(threadId).catch(() => {});
       } catch (err) {
         setReplies(prev => {
           const list = (prev[threadId] || []).filter(r => r.id !== tempId);
@@ -733,6 +902,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       replies,
       takes,
       resolutions,
+      drafts: drafts.followup,
       selectedThreadId,
       onSelect: setSelectedThreadId,
       onCollapse: () => setSelectedThreadId(null),
@@ -741,7 +911,16 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       onUnresolve: unresolveThread,
       onDelete: deleteThread,
       onScrollTo: handleScrollTo,
+      onSaveFollowupDraft: saveFollowupDraft,
+      onClearFollowupDraft: clearFollowupDraft,
     };
+
+    const editorDraftKey = editorAnchors
+      ? newThreadDraftKey(editorAnchors.anchorStart, editorAnchors.anchorEnd)
+      : null;
+    const editorDraftText = editorDraftKey && drafts.newThread[editorDraftKey]
+      ? drafts.newThread[editorDraftKey].text
+      : '';
 
     if (!initialFiles.length) {
       return html`
@@ -773,8 +952,11 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       <${NewThreadEditor}
         anchors=${editorAnchors}
         files=${initialFiles}
+        draftText=${editorDraftText}
         onSubmit=${submitNewThread}
         onCancel=${closeEditor}
+        onSaveDraft=${saveNewThreadDraft}
+        onClearDraft=${clearNewThreadDraft}
       />
     `;
   }
@@ -871,6 +1053,12 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         return;
       case 'take.added':
         if (handlers.onTakeAdded) handlers.onTakeAdded(payload);
+        return;
+      case 'draft.updated':
+        if (handlers.onDraftUpdated) handlers.onDraftUpdated(payload);
+        return;
+      case 'draft.cleared':
+        if (handlers.onDraftCleared) handlers.onDraftCleared(payload);
         return;
       default:
         return;

@@ -157,4 +157,23 @@ mod tests {
         assert!(template.contains("v2-thread-timeline"));
         assert!(template.contains("v2-thread-actions"));
     }
+
+    #[test]
+    fn discuss_v2_template_auto_saves_drafts_through_rest_with_sse_sync() {
+        let template = discuss_v2_html();
+        assert!(template.contains("function useDraftAutoSave"));
+        assert!(template.contains("function newThreadDraftKey"));
+        assert!(template.contains("function normalizeDrafts"));
+        assert!(template.contains("function saveNewThreadDraft"));
+        assert!(template.contains("function clearNewThreadDraft"));
+        assert!(template.contains("function saveFollowupDraft"));
+        assert!(template.contains("function clearFollowupDraft"));
+        assert!(template.contains("/api/drafts/new-thread"));
+        assert!(template.contains("/api/drafts/followup"));
+        assert!(template.contains("'draft.updated'"));
+        assert!(template.contains("'draft.cleared'"));
+        assert!(template.contains("onDraftUpdated"));
+        assert!(template.contains("onDraftCleared"));
+        assert!(template.contains("v2-draft-status"));
+    }
 }
