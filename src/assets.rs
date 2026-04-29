@@ -159,6 +159,17 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_hides_file_tree_when_single_file_and_shows_thread_badges() {
+        let template = discuss_v2_html();
+        assert!(template.contains("data-single-file"));
+        assert!(template.contains("data-section-file-id"));
+        assert!(template.contains("threadCounts"));
+        assert!(template.contains("v2-tree-badge"));
+        assert!(template.contains("function handleSelectFile"));
+        assert!(template.contains("scrollIntoView"));
+    }
+
+    #[test]
     fn discuss_v2_template_supports_three_mode_theme_toggle_with_storage() {
         let template = discuss_v2_html();
         assert!(template.contains("THEME_STORAGE_KEY"));

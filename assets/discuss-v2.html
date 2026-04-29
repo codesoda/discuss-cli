@@ -14,16 +14,24 @@
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; }
     .v2-layout { display: grid; grid-template-columns: var(--tree-w) 1fr var(--threads-w); min-height: 100vh; }
+    .v2-layout[data-single-file="true"] { grid-template-columns: 1fr var(--threads-w); }
+    .v2-layout[data-single-file="true"] .v2-tree { display: none; }
     .v2-tree, .v2-threads-panel { border-right: 1px solid rgba(127,127,127,0.25); padding: 1rem 0.75rem; font-size: 0.9rem; overflow-y: auto; max-height: 100vh; }
     .v2-threads-panel { border-right: none; border-left: 1px solid rgba(127,127,127,0.25); }
     .v2-tree h2, .v2-threads-panel h2 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.55; margin: 0 0 0.5rem 0.25rem; }
     .v2-tree ul { list-style: none; padding: 0; margin: 0; }
-    .v2-tree li { padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer; }
+    .v2-tree li { padding: 0.25rem 0.4rem; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; }
     .v2-tree li:hover { background: rgba(127,127,127,0.12); }
     .v2-tree li.active { background: rgba(127,127,127,0.2); font-weight: 600; }
-    .v2-tree li .v2-tree-kind { font-size: 0.7rem; opacity: 0.55; margin-left: 0.4rem; }
+    .v2-tree li .v2-tree-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .v2-tree li .v2-tree-kind { font-size: 0.7rem; opacity: 0.55; }
     .v2-tree li.tree-empty { opacity: 0.55; cursor: default; padding: 0.25rem 0.4rem; }
     .v2-tree li.tree-empty:hover { background: transparent; }
+    .v2-tree-badges { display: inline-flex; gap: 0.25rem; }
+    .v2-tree-badge { font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 999px; line-height: 1.4; min-width: 1.25rem; text-align: center; }
+    .v2-tree-badge.total { background: rgba(127,127,127,0.18); }
+    .v2-tree-badge.open { background: rgba(29,111,216,0.18); color: #1d6fd8; font-weight: 600; }
+    html[data-theme="dark"] .v2-tree-badge.open { color: #5fa6ff; background: rgba(95,166,255,0.18); }
     .v2-content { padding: 2rem 2.5rem; max-width: 920px; }
     .v2-banner { padding: 0.6rem 0.8rem; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; opacity: 0.8; font-size: 0.8rem; margin-bottom: 1.5rem; }
     .v2-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
@@ -262,7 +270,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     `;
   }
 
-  function FileTree({ files, activeId, onSelect }) {
+  function FileTree({ files, activeId, threadCounts, onSelect }) {
     if (!files.length) {
       return html`
         <nav class="v2-tree">
@@ -275,16 +283,28 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       <nav class="v2-tree">
         <h2>Files</h2>
         <ul>
-          ${files.map(file => html`
+          ${files.map(file => {
+            const counts = (threadCounts && threadCounts[file.id]) || { open: 0, total: 0 };
+            return html`
             <li
               key=${file.id}
               class=${file.id === activeId ? 'active' : ''}
               onClick=${() => onSelect(file.id)}
+              title=${`${file.path} · ${counts.total} thread${counts.total === 1 ? '' : 's'}`}
             >
-              ${file.path}
+              <span class="v2-tree-path">${file.path}</span>
               <span class="v2-tree-kind">${file.kind}</span>
+              ${counts.total > 0 ? html`
+                <span class="v2-tree-badges">
+                  ${counts.open > 0
+                    ? html`<span class="v2-tree-badge open" title=${`${counts.open} open`}>${counts.open}</span>`
+                    : null}
+                  <span class="v2-tree-badge total" title=${`${counts.total} total`}>${counts.total}</span>
+                </span>
+              ` : null}
             </li>
-          `)}
+          `;
+          })}
         </ul>
       </nav>
     `;
@@ -384,7 +404,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
 
   function FileSection({ file }) {
     return html`
-      <section class="v2-section">
+      <section class="v2-section" data-section-file-id=${file.id}>
         <div class="v2-section-header">${file.path} · ${file.kind}</div>
         ${file.kind === 'diff'
           ? html`<${DiffFile} fileId=${file.id} content=${file.content || ''} />`
@@ -1087,6 +1107,23 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart);
     }
 
+    const threadCounts = useMemo(() => {
+      const counts = {};
+      threads.forEach(thread => {
+        const key = thread.fileId || (initialFiles[0] && initialFiles[0].id) || '';
+        if (!counts[key]) counts[key] = { open: 0, total: 0 };
+        counts[key].total += 1;
+        if (!resolutions[thread.id]) counts[key].open += 1;
+      });
+      return counts;
+    }, [threads, resolutions]);
+
+    function handleSelectFile(fileId) {
+      setActiveFileId(fileId);
+      const section = document.querySelector(`section[data-section-file-id="${cssEscape(fileId)}"]`);
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
     async function submitDone() {
       if (doneBusy || reviewComplete) return;
       setDoneBusy(true);
@@ -1138,12 +1175,20 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       `;
     }
 
+    const singleFile = initialFiles.length === 1;
     return html`
-      <div class="v2-layout">
-        <${FileTree} files=${initialFiles} activeId=${activeFileId} onSelect=${setActiveFileId} />
+      <div class="v2-layout" data-single-file=${singleFile ? 'true' : 'false'}>
+        ${singleFile
+          ? null
+          : html`<${FileTree}
+              files=${initialFiles}
+              activeId=${activeFileId}
+              threadCounts=${threadCounts}
+              onSelect=${handleSelectFile}
+            />`}
         <main class="v2-content">
           <p class="v2-banner">
-            discuss v2 (in progress) · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
+            discuss v2 (in progress) · ${initialFiles.length} file${initialFiles.length === 1 ? '' : 's'} · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
             <a href="/">switch to v1</a>
             <${ThemeToggle} />
           </p>
