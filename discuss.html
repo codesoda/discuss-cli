@@ -174,6 +174,19 @@
   header .toggle:hover { background: var(--accent-hover); }
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
+  header .header-icon-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: background 0.12s, color 0.12s;
+  }
+  header .header-icon-link:hover { background: var(--accent-hover); color: var(--ink); }
+  html[data-theme="dark"] header .header-icon-link:hover { background: var(--accent-soft); color: var(--ink); }
   header .theme-menu { position: relative; display: inline-flex; }
   header .theme-toggle {
     font: inherit;
@@ -285,15 +298,26 @@
     display: grid;
     grid-template-columns: var(--left-w) var(--divider-w) 1fr;
     min-height: 100%;
+    align-items: start;
+    background: linear-gradient(
+      to right,
+      var(--card) 0,
+      var(--card) var(--left-w),
+      var(--line-strong) var(--left-w),
+      var(--line-strong) calc(var(--left-w) + var(--divider-w)),
+      var(--bg) calc(var(--left-w) + var(--divider-w)),
+      var(--bg) 100%
+    );
   }
+  #divider { align-self: stretch; }
   .pane-left, .pane-right { min-width: 0; }
   .pane-left {
-    padding: 28px var(--left-gutter) 180px 36px;
+    padding: 28px var(--left-gutter) 80px 36px;
     background: var(--card);
     border-right: 1px solid var(--line);
   }
   .pane-right {
-    padding: 28px 24px 180px 24px;
+    padding: 28px 24px 80px 24px;
     background: var(--bg);
     position: relative;
   }
@@ -397,6 +421,90 @@
     color: var(--muted);
     font-weight: 600;
     margin-top: 12px;
+  }
+
+  /* --- Heading minimap (left-edge document outline) --- */
+  .heading-minimap {
+    position: fixed;
+    top: calc(var(--header-h) + 36px);
+    left: 2px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 8px 8px 8px 6px;
+    width: 22px;
+    max-height: calc(100vh - var(--header-h) - 72px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    transition: width 0.18s ease, background 0.18s ease;
+    scrollbar-width: none;
+  }
+  .heading-minimap::-webkit-scrollbar { display: none; }
+  .heading-minimap::before {
+    content: "";
+    position: absolute;
+    inset: -8px -12px;
+    background: rgba(255, 255, 255, 0.32);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
+    transition: opacity 0.18s ease;
+    -webkit-mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+    mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+  }
+  html[data-theme="dark"] .heading-minimap::before { background: rgba(40, 40, 40, 0.32); }
+  .heading-minimap:hover { width: 220px; }
+  .heading-minimap:hover::before { opacity: 1; }
+  .hm-bar {
+    display: block;
+    flex: 0 0 auto;
+    height: 5px;
+    width: 12px;
+    border: 0;
+    padding: 0;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.22);
+    cursor: pointer;
+    transition: height 0.18s ease, width 0.18s ease, background 0.12s ease, margin-left 0.18s ease, margin-top 0.12s ease, margin-bottom 0.12s ease;
+  }
+  html[data-theme="dark"] .hm-bar { background: rgba(255,255,255,0.22); }
+  .hm-bar[data-level="1"] { margin-left: 0; }
+  .hm-bar[data-level="2"] { margin-left: 6px; }
+  .hm-bar[data-level="3"] { margin-left: 12px; }
+  .hm-bar[data-level="4"] { margin-left: 18px; }
+  .heading-minimap:hover .hm-bar {
+    height: 7px;
+    width: var(--hm-w-expanded, 180px);
+  }
+  .heading-minimap:hover .hm-bar:hover {
+    background: var(--ink);
+    height: 14px;
+    margin-top: -3.5px;
+    margin-bottom: -3.5px;
+    z-index: 1;
+  }
+  .hm-bar.is-active { background: var(--accent); }
+  .heading-minimap:hover .hm-bar.is-active { background: var(--accent); }
+  .heading-minimap:hover .hm-bar.is-active:hover { background: var(--ink); }
+  .hm-tooltip {
+    position: fixed;
+    display: none;
+    background: var(--ink);
+    color: var(--bg);
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 5px 9px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 60;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
   }
 
   #doc-content [data-anchor-idx] {
@@ -967,6 +1075,9 @@
   <h1>Contextual Discussion</h1>
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
+  <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
+  </a>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
@@ -2012,6 +2123,118 @@
   }
   assignAnchorIndices();
 
+  // ---------- Heading minimap (left-edge document outline) ----------
+  function buildHeadingMinimap() {
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+    document.querySelectorAll('.heading-minimap, .hm-tooltip').forEach(el => el.remove());
+
+    const headings = Array.from(doc.querySelectorAll('h1, h2, h3, h4'))
+      .map(el => ({
+        el,
+        level: parseInt(el.tagName.substring(1), 10),
+        text: (el.textContent || '').trim(),
+      }))
+      .filter(h => h.text.length > 0);
+    if (headings.length < 2) return;
+
+    const nav = document.createElement('nav');
+    nav.className = 'heading-minimap';
+    nav.setAttribute('aria-label', 'Document outline');
+
+    const tooltip = document.createElement('span');
+    tooltip.className = 'hm-tooltip';
+    document.body.appendChild(tooltip);
+
+    const workspace = document.querySelector('.workspace');
+
+    // Bar widths proportional to heading text length: longest text
+    // anchors to the right edge of the minimap's inner content area;
+    // shorter texts shrink proportionally. Indent (per level) shifts
+    // the bar's start, so width = (target right edge) - (level indent).
+    const longestTextLen = Math.max(...headings.map(h => h.text.length));
+    const containerInnerWidth = 206; // .heading-minimap:hover is 220px wide minus 14px horizontal padding
+    const indentForLevel = lvl => (lvl - 1) * 6;
+
+    const bars = [];
+    headings.forEach(h => {
+      const bar = document.createElement('button');
+      bar.type = 'button';
+      bar.className = 'hm-bar';
+      bar.setAttribute('data-level', String(h.level));
+      bar.setAttribute('aria-label', h.text);
+      bar.title = h.text; // accessibility fallback
+
+      const targetRight = (h.text.length / longestTextLen) * containerInnerWidth;
+      const width = Math.max(12, targetRight - indentForLevel(h.level));
+      bar.style.setProperty('--hm-w-expanded', width + 'px');
+
+      bar.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        if (workspace) {
+          const elTop = h.el.getBoundingClientRect().top;
+          const wsTop = workspace.getBoundingClientRect().top;
+          const target = workspace.scrollTop + (elTop - wsTop) - 16;
+          workspace.scrollTo({ top: target, behavior: 'smooth' });
+        } else {
+          h.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+
+      bar.addEventListener('mouseenter', () => {
+        tooltip.textContent = h.text;
+        const rect = bar.getBoundingClientRect();
+        tooltip.style.display = 'block';
+        // Measure after display so we know height
+        const tipH = tooltip.offsetHeight || 22;
+        tooltip.style.left = (rect.right + 8) + 'px';
+        tooltip.style.top = (rect.top + rect.height / 2 - tipH / 2) + 'px';
+      });
+      bar.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+
+      nav.appendChild(bar);
+      bars.push(bar);
+    });
+
+    document.body.appendChild(nav);
+
+    // Highlight the first heading visible in the viewport (or the most
+    // recently scrolled-past heading if none are currently visible).
+    let activeRafQueued = false;
+    function updateActiveHeading() {
+      activeRafQueued = false;
+      if (!workspace) return;
+      const wsRect = workspace.getBoundingClientRect();
+      const wsHeight = wsRect.height;
+      let firstVisible = -1;
+      let lastPassed = -1;
+      for (let i = 0; i < headings.length; i++) {
+        const top = headings[i].el.getBoundingClientRect().top - wsRect.top;
+        if (top < 0) {
+          lastPassed = i;
+        } else if (top <= wsHeight) {
+          firstVisible = i;
+          break;
+        } else {
+          break;
+        }
+      }
+      const activeIdx = firstVisible !== -1 ? firstVisible : lastPassed;
+      bars.forEach((b, i) => b.classList.toggle('is-active', i === activeIdx));
+    }
+    function scheduleActiveUpdate() {
+      if (activeRafQueued) return;
+      activeRafQueued = true;
+      requestAnimationFrame(updateActiveHeading);
+    }
+    if (workspace) workspace.addEventListener('scroll', scheduleActiveUpdate, { passive: true });
+    window.addEventListener('resize', scheduleActiveUpdate, { passive: true });
+    updateActiveHeading();
+  }
+  buildHeadingMinimap();
+
   function getAnchorElByIdx(idx) {
     return document.querySelector(`#doc-content [data-anchor-idx="${idx}"]`);
   }
@@ -2933,9 +3156,16 @@
     return anchor.getBoundingClientRect().top - paneRightRect.top;
   }
   function reposition() {
+    // Match pane-right's content area to pane-left's so the grid doesn't
+    // stretch pane-left past its content. paneLeft.scrollHeight includes
+    // pane-left's own vertical padding; subtract pane-right's vertical
+    // padding so the rendered heights line up.
+    const cs = getComputedStyle(paneRight);
+    const pRightVPad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const baseTarget = paneLeft.scrollHeight - paneRight.offsetTop - pRightVPad;
     const open = Array.from(threadsHost.querySelectorAll('.thread.open'));
     if (!open.length) {
-      threadsHost.style.minHeight = (paneLeft.scrollHeight - paneRight.offsetTop + 100) + 'px';
+      threadsHost.style.minHeight = Math.max(0, baseTarget) + 'px';
       return;
     }
     open.sort((a, b) =>
@@ -2950,7 +3180,7 @@
       thread.style.top = top + 'px';
       prevBottom = top + thread.offsetHeight;
     });
-    threadsHost.style.minHeight = Math.max(prevBottom + 100, paneLeft.scrollHeight - paneRight.offsetTop + 100) + 'px';
+    threadsHost.style.minHeight = Math.max(prevBottom + 20, baseTarget) + 'px';
   }
   function scheduleReposition() {
     requestAnimationFrame(() => requestAnimationFrame(reposition));
