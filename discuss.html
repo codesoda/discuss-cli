@@ -504,6 +504,14 @@
     margin-bottom: 4px;
   }
   #thread-tooltip .tt-quote { font-style: italic; color: #fcdca9; }
+  #thread-tooltip .tt-extra { margin-top: 4px; font-size: 10.5px; opacity: 0.7; }
+  #thread-tooltip.shown { display: block; }
+  .followup.hidden { display: none; }
+  .empty-state.hidden { display: none; }
+  /* Meta-status segments. The header subtitle interpolates these spans
+     into the running comma-separated string of session counts. */
+  .meta-stat-draft { color: #0d9488; }
+  .meta-stat-pending { color: var(--pending-dark); }
 
   #selection-popup {
     position: fixed;
@@ -596,6 +604,14 @@
   .thread-close:hover,
   .thread-delete:hover { color: #c62828; }
   .thread-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+  .thread-sub.placeholder { font-style: italic; color: var(--pending-dark); }
+  .thread-decision {
+    background: var(--decision);
+    border-left: 3px solid var(--decision-border);
+    padding: 7px 10px;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+  }
 
   .thread-body > * + * { margin-top: 8px; }
   .thread-quote {
@@ -1945,10 +1961,10 @@
     const hasTake = typeof t.take === 'string' && t.take.trim().length > 0;
     const hasDecision = typeof t.decision === 'string' && t.decision.trim().length > 0;
     const takeBlock = !hasTake && !hasDecision
-      ? `<div class="thread-sub" style="font-style:italic;color:var(--pending-dark);">Take &amp; decision — pending.</div>`
-      : `${t.pending ? '<div class="thread-sub" style="font-style:italic;color:var(--pending-dark);">Initial take — reply below to steer.</div>' : ''}
+      ? `<div class="thread-sub placeholder">Take &amp; decision — pending.</div>`
+      : `${t.pending ? '<div class="thread-sub placeholder">Initial take — reply below to steer.</div>' : ''}
          ${hasTake ? `<div class="section-mini-label">Take</div><div class="thread-take">${t.take}</div>` : ''}
-         ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision" style="background:var(--decision);border-left:3px solid var(--decision-border);padding:7px 10px;border-radius:0 4px 4px 0;font-size:13px;">${escapeHtml(t.decision)}</div>` : ''}`;
+         ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision">${escapeHtml(t.decision)}</div>` : ''}`;
 
     const headIndex = t.index != null ? `Comment ${t.index}` : 'Comment';
     el.innerHTML = `
@@ -2274,7 +2290,7 @@
         </div>
       `;
       banner.classList.add('shown');
-      followup.style.display = 'none';
+      followup.classList.add('hidden');
       threadEl.classList.add('resolved');
       async function unresolve() {
         clearMutationError(banner);
@@ -2309,7 +2325,7 @@
     } else {
       banner.innerHTML = '';
       banner.classList.remove('shown');
-      followup.style.display = '';
+      followup.classList.remove('hidden');
       threadEl.classList.remove('resolved');
     }
   }
@@ -2399,7 +2415,7 @@
     const openWalkedThrough = openPrep.filter(t => !t.pending).length;
     const draftCount = countLiveDrafts(state);
     const draftSeg = draftCount
-      ? `<span style="color:#0d9488;">${draftCount} draft${draftCount > 1 ? 's' : ''}</span>`
+      ? `<span class="meta-stat-draft">${draftCount} draft${draftCount > 1 ? 's' : ''}</span>`
       : null;
     const segments = [];
     if (totalThreads === 0) {
@@ -2408,7 +2424,7 @@
     } else {
       segments.push(`<b>${resolvedCount} of ${totalThreads}</b> resolved`);
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
-      if (openPending) segments.push(`<span style="color:var(--pending-dark);">${openPending} pending discussion</span>`);
+      if (openPending) segments.push(`<span class="meta-stat-pending">${openPending} pending discussion</span>`);
       if (draftSeg) segments.push(draftSeg);
       segments.push('click a marker to open');
     }
@@ -2467,7 +2483,7 @@
 
   function updateEmptyState() {
     const anyOpen = document.querySelectorAll('.thread.open').length > 0;
-    emptyState.style.display = anyOpen ? 'none' : 'block';
+    emptyState.classList.toggle('hidden', anyOpen);
   }
 
   function renderAllThreads() {
@@ -2672,8 +2688,8 @@
       const preview = text.slice(0, 200);
       tooltip.innerHTML = `<div class="tt-kind">Draft · in progress</div>`
         + `<div class="tt-quote">"${escapeHtml(preview)}${text.length > 200 ? '…' : ''}"</div>`
-        + `<div style="margin-top:4px; font-size:10.5px; opacity:0.7;">Click to resume</div>`;
-      tooltip.style.display = 'block';
+        + `<div class="tt-extra">Click to resume</div>`;
+      tooltip.classList.add('shown');
       positionTooltip(marker);
       return;
     }
@@ -2700,8 +2716,8 @@
     const noteCount = comments.length;
     const countSuffix = noteCount ? ` · ${noteCount} note${noteCount > 1 ? 's' : ''}` : '';
     const latestSuffix = ` · latest: ${latestContributorForThread(state, tid, prep)}`;
-    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}${escapeHtml(latestSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div style="margin-top:4px; font-size:10.5px; opacity:0.7;">${escapeHtml(extra)}</div>`;
-    tooltip.style.display = 'block';
+    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}${escapeHtml(latestSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div class="tt-extra">${escapeHtml(extra)}</div>`;
+    tooltip.classList.add('shown');
     positionTooltip(marker);
   }
   function positionTooltip(marker) {
@@ -2715,7 +2731,7 @@
     tooltip.style.left = x + 'px';
     tooltip.style.top = y + 'px';
   }
-  function hideTooltip() { tooltip.style.display = 'none'; }
+  function hideTooltip() { tooltip.classList.remove('shown'); }
 
   document.addEventListener('mouseover', (e) => {
     const marker = e.target.closest('.thread-marker');
