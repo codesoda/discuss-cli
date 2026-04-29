@@ -514,6 +514,60 @@
     background: rgba(0, 0, 0, 0.12);
   }
   html[data-theme="dark"] #thread-tooltip .tt-quote { color: rgba(0, 0, 0, 0.6); }
+
+  /* Toasts: surface incoming agent takes when the matching thread is closed,
+     so the user notices a reply without scanning the doc. Cap at one visible
+     to avoid stacking noise during a multi-thread review. */
+  #toast-host {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    background: var(--ink);
+    color: var(--bg);
+    padding: 10px 14px;
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 320px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+  }
+  .toast.shown { opacity: 1; transform: translateY(0); }
+  .toast .toast-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: 0 0 auto;
+  }
+  .toast .toast-body { flex: 1; }
+  .toast .toast-title { font-weight: 600; margin-bottom: 2px; }
+  .toast .toast-sub { font-size: 11.5px; opacity: 0.7; }
+  .toast .toast-close {
+    background: transparent;
+    color: inherit;
+    border: 0;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  .toast .toast-close:hover { opacity: 1; }
   .followup.hidden { display: none; }
   .empty-state.hidden { display: none; }
   /* Meta-status segments. The header subtitle interpolates these spans
@@ -1022,6 +1076,7 @@
 
 <div id="selection-popup">💬 Comment</div>
 <div id="thread-tooltip"></div>
+<div id="toast-host"></div>
 
 <!-- ==================== PREPOPULATED THREADS ==================== -->
 <!-- Replace with your own seed data, or leave as [] for a blank review. -->
@@ -1589,6 +1644,80 @@
     state.takes[take.threadId] = upsertRawComment(state.takes[take.threadId], take);
     setCurrentState(state);
     refreshThreadFromState(take.threadId);
+
+    // If the user can't already see the take, surface a toast so they
+    // notice the agent replied without scanning the doc.
+    const threadEl = document.querySelector(`.thread[data-thread-id="${take.threadId}"]`);
+    if (threadEl && !threadEl.classList.contains('open')) {
+      showTakeToast(take.threadId, take.text);
+    }
+  }
+
+  // ---------- Toasts ----------
+  let activeToast = null;
+  const toastQueue = [];
+  function showTakeToast(threadId, text) {
+    toastQueue.push({ threadId, text });
+    drainToastQueue();
+  }
+  function drainToastQueue() {
+    if (activeToast || !toastQueue.length) return;
+    const next = toastQueue.shift();
+    renderToast(next.threadId, next.text);
+  }
+  function renderToast(threadId, text) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+    const threadEl = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+    const start = threadEl ? threadEl.getAttribute('data-anchor-start') : null;
+    const end = threadEl ? threadEl.getAttribute('data-anchor-end') : null;
+    const lineStart = threadEl ? threadEl.getAttribute('data-line-start') : null;
+    const lineEnd = threadEl ? threadEl.getAttribute('data-line-end') : null;
+    let anchorLabel = '';
+    if (start) {
+      anchorLabel = (start === end) ? `#${start}` : `#${start}–${end}`;
+      if (lineStart && lineEnd) {
+        anchorLabel += (lineStart === lineEnd) ? `, line ${lineStart}` : `, lines ${lineStart}–${lineEnd}`;
+      }
+    }
+    const preview = (text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `
+      <span class="toast-dot"></span>
+      <div class="toast-body">
+        <div class="toast-title">Agent replied${anchorLabel ? ' on ' + escapeHtml(anchorLabel) : ''}</div>
+        <div class="toast-sub">${escapeHtml(preview)}${(text || '').length > 120 ? '…' : ''}</div>
+      </div>
+      <button class="toast-close" type="button" aria-label="Dismiss">×</button>
+    `;
+    host.appendChild(toast);
+    activeToast = toast;
+    requestAnimationFrame(() => toast.classList.add('shown'));
+    let dismissed = false;
+    function dismiss() {
+      if (dismissed) return;
+      dismissed = true;
+      clearTimeout(timer);
+      toast.classList.remove('shown');
+      setTimeout(() => {
+        toast.remove();
+        if (activeToast === toast) activeToast = null;
+        drainToastQueue();
+      }, 200);
+    }
+    toast.querySelector('.toast-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismiss();
+    });
+    toast.addEventListener('click', () => {
+      const target = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+      if (target) {
+        openThread(target);
+      }
+      dismiss();
+    });
+    const timer = setTimeout(dismiss, 6000);
   }
 
   function applyThreadResolvedEvent(payload) {
