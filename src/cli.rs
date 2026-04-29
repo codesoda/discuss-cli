@@ -61,6 +61,32 @@ pub enum Commands {
 Updates are explicit-only: discuss never checks for updates automatically, so no env opt-out is needed."
     )]
     Update(UpdateArgs),
+
+    #[command(
+        about = "Review a git diff in the browser.",
+        long_about = "Review a git diff in the browser.\n\n\
+Defaults to the staged diff (git diff --cached). Pass --unstaged for the working tree, or pass\n\
+<range> arguments through to `git diff` (e.g. HEAD~3..HEAD or main...feature)."
+    )]
+    Diff(DiffArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DiffArgs {
+    #[arg(
+        long,
+        conflicts_with = "args",
+        help = "Show the working tree diff (git diff) instead of the staged diff (git diff --cached)."
+    )]
+    pub unstaged: bool,
+
+    #[arg(
+        value_name = "ARG",
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Additional arguments forwarded to `git diff` (e.g. HEAD~3..HEAD)."
+    )]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -192,6 +218,54 @@ mod tests {
             .expect_err("port 0 should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_default_staged_scope() {
+        let args = Args::try_parse_from(["discuss", "diff"]).expect("diff should parse");
+
+        match args.command {
+            Some(Commands::Diff(diff_args)) => {
+                assert!(!diff_args.unstaged);
+                assert!(diff_args.args.is_empty());
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_unstaged_flag() {
+        let args =
+            Args::try_parse_from(["discuss", "diff", "--unstaged"]).expect("unstaged parses");
+
+        match args.command {
+            Some(Commands::Diff(diff_args)) => {
+                assert!(diff_args.unstaged);
+                assert!(diff_args.args.is_empty());
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_range_argument() {
+        let args =
+            Args::try_parse_from(["discuss", "diff", "HEAD~3..HEAD"]).expect("range arg parses");
+
+        match args.command {
+            Some(Commands::Diff(diff_args)) => {
+                assert!(!diff_args.unstaged);
+                assert_eq!(diff_args.args, vec!["HEAD~3..HEAD".to_string()]);
+            }
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn rejects_diff_unstaged_with_range_argument() {
+        let error = Args::try_parse_from(["discuss", "diff", "--unstaged", "HEAD~3..HEAD"])
+            .expect_err("unstaged + range should conflict");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

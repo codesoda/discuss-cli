@@ -14,6 +14,7 @@ use crate::state::{File, FileId, FileKind, Source};
 pub mod assets;
 pub mod cli;
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod events;
 pub mod exit;
@@ -83,6 +84,9 @@ where
             }
 
             Ok(())
+        }
+        Some(cli::Commands::Diff(diff_args)) => {
+            run_diff_session(diff_args, &config, shutdown).await
         }
         None => {
             let inputs = resolve_inputs(files)?
@@ -163,6 +167,85 @@ where
             .await
         }
     }
+}
+
+async fn run_diff_session<F>(diff_args: cli::DiffArgs, config: &Config, shutdown: F) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let diff_output = diff::run_git_diff(diff_args.unstaged, &diff_args.args)?;
+
+    if diff_output.files.is_empty() {
+        return Err(DiscussError::DiffError {
+            message: "no changes to review".to_string(),
+        });
+    }
+
+    let files_count = diff_output.files.len();
+    let session_source_label = format!("git {}", diff_output.git_args.join(" "));
+    let port = config.port.unwrap_or(DEFAULT_PORT);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let auto_open = config.auto_open;
+    let git_args_clone = diff_output.git_args.clone();
+
+    let source = Source {
+        files: diff_output
+            .files
+            .into_iter()
+            .enumerate()
+            .map(|(idx, file)| File {
+                id: FileId(format!("f-{}", idx + 1)),
+                path: file.path,
+                kind: FileKind::Diff,
+                content: file.content,
+            })
+            .collect(),
+    };
+
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let emitter = app_state.emitter.clone();
+
+    server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {
+        let url = launch::loopback_url(listening_addr);
+        let started_at = Utc::now();
+
+        if let Err(error) = emitter.emit(&Event {
+            kind: EventKind::SessionStarted,
+            at: started_at,
+            payload: serde_json::json!({
+                "url": url.clone(),
+                "mode": "diff",
+                "source_file": session_source_label,
+                "files_count": files_count,
+                "git_args": git_args_clone,
+                "started_at": started_at.to_rfc3339(),
+            }),
+        }) {
+            tracing::warn!(
+                %url,
+                error = %error,
+                "failed to emit session.started event"
+            );
+        }
+
+        let launcher = launch::SystemBrowserLauncher;
+        let mut stderr = io::stderr();
+
+        if let Err(error) = launch::announce_listening(&mut stderr, &launcher, &url, auto_open) {
+            tracing::warn!(
+                %url,
+                error = %error,
+                "failed to write listening URL to stderr"
+            );
+        }
+    })
+    .await
 }
 
 #[derive(Debug)]

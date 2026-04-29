@@ -17,7 +17,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         | DiscussError::RenderError { .. }
         | DiscussError::LoggingInitError { .. }
         | DiscussError::UpdateCheckError { .. }
-        | DiscussError::UpdateError { .. } => EXIT_GENERIC_FAILURE,
+        | DiscussError::UpdateError { .. }
+        | DiscussError::DiffError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
 
