@@ -38,6 +38,18 @@
     .v2-tree-controls label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; opacity: 0.8; cursor: pointer; }
     .v2-tree-controls label input { margin: 0; }
     .v2-tree-empty-message { font-size: 0.75rem; opacity: 0.55; padding: 0.25rem 0.4rem; font-style: italic; }
+    .v2-diff { display: flex; flex-direction: column; gap: 0.6rem; }
+    .v2-diff-header { display: flex; align-items: center; gap: 0.6rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; padding: 0.4rem 0.6rem; background: rgba(127,127,127,0.08); border: 1px solid rgba(127,127,127,0.2); border-radius: 6px; }
+    .v2-diff-path { font-weight: 600; }
+    .v2-diff-status { font-size: 0.7rem; padding: 0.05rem 0.45rem; border-radius: 999px; background: rgba(127,127,127,0.18); text-transform: uppercase; letter-spacing: 0.04em; }
+    .v2-diff-counts { margin-left: auto; display: inline-flex; gap: 0.5rem; font-size: 0.75rem; }
+    .v2-diff-add { color: #2e7d32; }
+    .v2-diff-del { color: #c33; }
+    html[data-theme="dark"] .v2-diff-add { color: #6dd178; }
+    html[data-theme="dark"] .v2-diff-del { color: #ff8a8a; }
+    .v2-diff-hunk { margin: 0; padding: 0; background: rgba(127,127,127,0.06); border: 1px solid rgba(127,127,127,0.18); border-radius: 6px; overflow: hidden; }
+    .v2-diff-hunk .v2-diff-hunk-header { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.7; padding: 0.35rem 0.6rem; background: rgba(127,127,127,0.1); border-bottom: 1px solid rgba(127,127,127,0.18); }
+    .v2-diff-hunk code { display: block; padding: 0.6rem 0.75rem; overflow-x: auto; }
     .v2-content { padding: 2rem 2.5rem; max-width: 920px; }
     .v2-banner { padding: 0.6rem 0.8rem; border: 1px solid rgba(127,127,127,0.35); border-radius: 6px; opacity: 0.8; font-size: 0.8rem; margin-bottom: 1.5rem; }
     .v2-banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
@@ -376,14 +388,149 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     `;
   }
 
-  function DiffFile({ fileId, content }) {
-    const preRef = useRef(null);
+  function DiffFile({ fileId, content, path }) {
+    const articleRef = useRef(null);
+    const parsed = useMemo(() => parseDiffFile(content || '', path), [content, path]);
+
     useEffect(() => {
-      if (preRef.current) highlightWithPrism(preRef.current);
-    }, [fileId, content]);
+      if (!articleRef.current) return;
+      Array.from(articleRef.current.querySelectorAll('[data-hunk-idx]')).forEach((el, idx) => {
+        el.setAttribute('data-anchor-idx', String(idx + 1));
+      });
+      highlightWithPrism(articleRef.current);
+    }, [fileId, content, path]);
+
+    if (parsed.binary) {
+      return html`
+        <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+          <header class="v2-diff-header" data-anchor-idx="1">
+            <span class="v2-diff-path">${path || fileId}</span>
+            <span class="v2-diff-status">binary</span>
+          </header>
+          <p class="v2-empty">binary file changed (no preview)</p>
+        </article>
+      `;
+    }
+
+    if (!parsed.hunks.length) {
+      return html`
+        <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+          <header class="v2-diff-header" data-anchor-idx="1">
+            <span class="v2-diff-path">${path || fileId}</span>
+            ${parsed.status ? html`<span class="v2-diff-status">${parsed.status}</span>` : null}
+          </header>
+          <p class="v2-empty">${parsed.headerOnly ? 'header-only diff (no hunks)' : '(empty diff)'}</p>
+        </article>
+      `;
+    }
+
+    const lang = parsed.language;
+    const langClass = lang ? `language-diff-${lang}` : 'language-diff';
     return html`
-      <pre ref=${preRef} class="v2-doc language-diff diff-highlight" data-file-id=${fileId}><code class="language-diff">${content || '(empty diff)'}</code></pre>
+      <article class="v2-doc v2-diff" data-file-id=${fileId} ref=${articleRef}>
+        <header class="v2-diff-header">
+          <span class="v2-diff-path">${path || fileId}</span>
+          ${parsed.status ? html`<span class="v2-diff-status">${parsed.status}</span>` : null}
+          <span class="v2-diff-counts">
+            <span class="v2-diff-add">+${parsed.additions}</span>
+            <span class="v2-diff-del">-${parsed.deletions}</span>
+          </span>
+        </header>
+        ${parsed.hunks.map((hunk, idx) => html`
+          <pre
+            key=${idx}
+            class=${`v2-diff-hunk ${langClass} diff-highlight`}
+            data-hunk-idx=${idx + 1}
+          ><div class="v2-diff-hunk-header">${hunk.header}</div><code class=${langClass}>${hunk.body}</code></pre>
+        `)}
+      </article>
     `;
+  }
+
+  const DIFF_LANGUAGE_BY_EXT = {
+    rs: 'rust',
+    ts: 'typescript',
+    tsx: 'tsx',
+    js: 'javascript',
+    jsx: 'jsx',
+    py: 'python',
+    go: 'go',
+    rb: 'ruby',
+    java: 'java',
+    kt: 'kotlin',
+    swift: 'swift',
+    c: 'c',
+    h: 'c',
+    cc: 'cpp',
+    cpp: 'cpp',
+    hpp: 'cpp',
+    cs: 'csharp',
+    php: 'php',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    json: 'json',
+    md: 'markdown',
+    html: 'markup',
+    xml: 'markup',
+    css: 'css',
+    scss: 'scss',
+    sql: 'sql',
+  };
+
+  function languageFromPath(path) {
+    if (!path) return null;
+    const dot = path.lastIndexOf('.');
+    if (dot < 0) return null;
+    const ext = path.slice(dot + 1).toLowerCase();
+    return DIFF_LANGUAGE_BY_EXT[ext] || null;
+  }
+
+  function parseDiffFile(content, path) {
+    const lines = content.split(/\r?\n/);
+    let status = null;
+    let binary = false;
+    const hunks = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.startsWith('new file mode')) status = 'added';
+      else if (line.startsWith('deleted file mode')) status = 'deleted';
+      else if (line.startsWith('rename from')) status = status || 'renamed';
+      else if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) binary = true;
+      if (line.startsWith('@@')) {
+        const header = line;
+        const bodyLines = [];
+        i += 1;
+        while (i < lines.length && !lines[i].startsWith('@@') && !lines[i].startsWith('diff --git')) {
+          bodyLines.push(lines[i]);
+          i += 1;
+        }
+        hunks.push({ header, body: bodyLines.join('\n') });
+        continue;
+      }
+      i += 1;
+    }
+    let additions = 0;
+    let deletions = 0;
+    hunks.forEach(h => {
+      h.body.split('\n').forEach(l => {
+        if (l.startsWith('+') && !l.startsWith('+++')) additions += 1;
+        else if (l.startsWith('-') && !l.startsWith('---')) deletions += 1;
+      });
+    });
+    return {
+      hunks,
+      status,
+      binary,
+      headerOnly: hunks.length === 0 && !binary,
+      additions,
+      deletions,
+      language: languageFromPath(path),
+    };
   }
 
   function highlightWithPrism(root) {
@@ -447,7 +594,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       <section class="v2-section" data-section-file-id=${file.id}>
         <div class="v2-section-header">${file.path} · ${file.kind}</div>
         ${file.kind === 'diff'
-          ? html`<${DiffFile} fileId=${file.id} content=${file.content || ''} />`
+          ? html`<${DiffFile} fileId=${file.id} content=${file.content || ''} path=${file.path} />`
           : html`<${MarkdownFile} fileId=${file.id} />`}
       </section>
     `;

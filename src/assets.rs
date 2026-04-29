@@ -170,6 +170,21 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_renders_diff_files_per_hunk_with_language_class() {
+        let template = discuss_v2_html();
+        assert!(template.contains("function parseDiffFile"));
+        assert!(template.contains("function languageFromPath"));
+        assert!(template.contains("DIFF_LANGUAGE_BY_EXT"));
+        assert!(template.contains("v2-diff-hunk"));
+        assert!(template.contains("v2-diff-header"));
+        assert!(template.contains("data-hunk-idx"));
+        assert!(template.contains("language-diff-${lang}"));
+        assert!(template.contains("v2-diff-add"));
+        assert!(template.contains("v2-diff-del"));
+        assert!(template.contains("Binary files"));
+    }
+
+    #[test]
     fn discuss_v2_template_supports_file_tree_filter_and_open_only_toggle() {
         let template = discuss_v2_html();
         assert!(template.contains("v2-tree-controls"));
@@ -216,7 +231,7 @@ mod tests {
         assert!(template.contains("prism-diff-highlight.min.js"));
         assert!(template.contains("function highlightWithPrism"));
         assert!(template.contains("Prism.highlightAllUnder"));
-        assert!(template.contains("language-diff diff-highlight"));
+        assert!(template.contains("diff-highlight"));
     }
 
     #[test]
