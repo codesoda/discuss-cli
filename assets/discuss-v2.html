@@ -51,6 +51,27 @@
     .v2-new-thread-editor button { font: inherit; padding: 0.35rem 0.75rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.45); background: transparent; cursor: pointer; color: inherit; }
     .v2-new-thread-editor button.primary { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
     .v2-new-thread-editor button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .v2-thread-card[data-expanded="true"] { background: rgba(127,127,127,0.08); cursor: default; }
+    .v2-thread-card[data-expanded="true"]:hover { background: rgba(127,127,127,0.08); }
+    .v2-thread-timeline { margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid rgba(127,127,127,0.2); display: flex; flex-direction: column; gap: 0.45rem; }
+    .v2-thread-comment { font-size: 0.82rem; line-height: 1.4; }
+    .v2-thread-comment .v2-comment-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; opacity: 0.55; margin-bottom: 0.15rem; }
+    .v2-thread-comment[data-kind="take"] .v2-comment-meta { color: #b06; }
+    .v2-thread-comment[data-kind="take"] .v2-comment-meta::before { content: '🤖 '; }
+    .v2-thread-actions { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; }
+    .v2-thread-actions textarea { font: inherit; padding: 0.4rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); resize: vertical; min-height: 3em; background: transparent; color: inherit; }
+    .v2-thread-actions textarea:focus { outline: 2px solid rgba(80,140,255,0.5); outline-offset: 1px; }
+    .v2-thread-buttons { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+    .v2-thread-buttons .spacer { flex: 1; }
+    .v2-thread-buttons button { font: inherit; padding: 0.25rem 0.6rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.45); background: transparent; cursor: pointer; color: inherit; font-size: 0.78rem; }
+    .v2-thread-buttons button.primary { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
+    .v2-thread-buttons button.danger { color: #c33; border-color: rgba(204,51,51,0.5); }
+    .v2-thread-buttons button.danger:hover { background: rgba(204,51,51,0.1); }
+    .v2-thread-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .v2-thread-buttons a { font-size: 0.78rem; opacity: 0.7; text-decoration: none; }
+    .v2-thread-buttons a:hover { opacity: 1; text-decoration: underline; }
+    .v2-thread-error { color: #d22; font-size: 0.78rem; }
+    .v2-thread-resolution { font-size: 0.78rem; opacity: 0.75; padding: 0.3rem 0.5rem; background: rgba(127,127,127,0.1); border-radius: 4px; }
   </style>
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
@@ -173,21 +194,152 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     `;
   }
 
-  function ThreadCard({ thread, file, replyCount, takeCount, resolved, onClick }) {
-    const path = file ? file.path : thread.fileId;
+  function timestampOf(item) {
+    if (!item) return 0;
+    const raw = item.createdAt || item.addedAt;
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function ThreadComment({ comment, kind }) {
+    if (!comment) return null;
     return html`
-      <button class="v2-thread-card" data-thread-id=${thread.id} data-resolved=${resolved ? 'true' : 'false'} onClick=${onClick}>
-        <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}</div>
-        ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
-        <div class="v2-thread-text">${thread.text || ''}</div>
-        ${(replyCount + takeCount) > 0
-          ? html`<div class="v2-thread-counts">${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} · ${takeCount} take${takeCount === 1 ? '' : 's'}</div>`
-          : null}
-      </button>
+      <div class="v2-thread-comment" data-kind=${kind}>
+        <div class="v2-comment-meta">${kind === 'take' ? 'agent take' : 'reply'}</div>
+        <div>${comment.text || ''}</div>
+      </div>
     `;
   }
 
-  function ThreadsPanel({ threads, files, replies, takes, resolutions, onThreadClick }) {
+  function ThreadCard({
+    thread, file, replyList, takeList, resolution, expanded,
+    onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+  }) {
+    const [replyText, setReplyText] = useState('');
+    const [busy, setBusy] = useState(null);
+    const [error, setError] = useState(null);
+    const replyRef = useRef(null);
+
+    useEffect(() => {
+      if (expanded && replyRef.current) replyRef.current.focus();
+    }, [expanded]);
+
+    useEffect(() => {
+      if (!expanded) { setReplyText(''); setError(null); setBusy(null); }
+    }, [expanded]);
+
+    const path = file ? file.path : thread.fileId;
+    const replies = replyList || [];
+    const takes = takeList || [];
+    const resolved = Boolean(resolution);
+    const replyCount = replies.length;
+    const takeCount = takes.length;
+    const optimistic = thread.__optimistic === true;
+
+    async function runMutation(kind, perform) {
+      if (busy) return;
+      setBusy(kind);
+      setError(null);
+      try { await perform(); }
+      catch (err) { setError(err && err.message ? err.message : `${kind} failed`); }
+      finally { setBusy(null); }
+    }
+
+    function handleReply() {
+      const text = replyText.trim();
+      if (!text) return;
+      runMutation('reply', async () => {
+        await onReply(thread.id, text);
+        setReplyText('');
+      });
+    }
+
+    function handleResolve() {
+      runMutation('resolve', () => onResolve(thread.id));
+    }
+
+    function handleUnresolve() {
+      runMutation('unresolve', () => onUnresolve(thread.id));
+    }
+
+    function handleDelete() {
+      if (!window.confirm('Delete this thread?')) return;
+      runMutation('delete', () => onDelete(thread.id));
+    }
+
+    if (!expanded) {
+      return html`
+        <button
+          class="v2-thread-card"
+          data-thread-id=${thread.id}
+          data-resolved=${resolved ? 'true' : 'false'}
+          data-expanded="false"
+          disabled=${optimistic}
+          onClick=${optimistic ? null : () => onSelect(thread.id)}
+        >
+          <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}${optimistic ? ' · posting…' : ''}</div>
+          ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
+          <div class="v2-thread-text">${thread.text || ''}</div>
+          ${(replyCount + takeCount) > 0
+            ? html`<div class="v2-thread-counts">${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} · ${takeCount} take${takeCount === 1 ? '' : 's'}</div>`
+            : null}
+        </button>
+      `;
+    }
+
+    const timeline = [
+      ...replies.map(r => ({ kind: 'reply', item: r })),
+      ...takes.map(t => ({ kind: 'take', item: t })),
+    ].sort((a, b) => timestampOf(a.item) - timestampOf(b.item));
+
+    return html`
+      <div class="v2-thread-card" data-thread-id=${thread.id} data-resolved=${resolved ? 'true' : 'false'} data-expanded="true">
+        <div class="v2-thread-meta">${path} · #${thread.anchorStart}${thread.anchorEnd !== thread.anchorStart ? `-${thread.anchorEnd}` : ''}${resolved ? ' · resolved' : ''}</div>
+        ${thread.snippet ? html`<div class="v2-thread-snippet">${thread.snippet}</div>` : null}
+        <div class="v2-thread-text">${thread.text || ''}</div>
+        ${resolved && resolution.decision
+          ? html`<div class="v2-thread-resolution">resolved: ${resolution.decision}</div>`
+          : null}
+        ${timeline.length
+          ? html`<div class="v2-thread-timeline">${timeline.map((entry, idx) => html`<${ThreadComment} key=${(entry.item && entry.item.id) || idx} comment=${entry.item} kind=${entry.kind} />`)}</div>`
+          : null}
+        <div class="v2-thread-actions">
+          <textarea
+            ref=${replyRef}
+            value=${replyText}
+            placeholder="Reply…"
+            disabled=${busy === 'reply'}
+            onInput=${e => setReplyText(e.target.value)}
+            onKeyDown=${e => {
+              if (e.key === 'Escape') { e.preventDefault(); onCollapse(); }
+              else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleReply(); }
+            }}
+          ></textarea>
+          ${error ? html`<div class="v2-thread-error">${error}</div>` : null}
+          <div class="v2-thread-buttons">
+            <button class="primary" disabled=${!replyText.trim() || busy != null} onClick=${handleReply}>
+              ${busy === 'reply' ? 'Posting…' : 'Reply'}
+            </button>
+            ${resolved
+              ? html`<button disabled=${busy != null} onClick=${handleUnresolve}>${busy === 'unresolve' ? 'Reopening…' : 'Reopen'}</button>`
+              : html`<button disabled=${busy != null} onClick=${handleResolve}>${busy === 'resolve' ? 'Resolving…' : 'Resolve'}</button>`}
+            ${thread.kind !== 'prepopulated'
+              ? html`<button class="danger" disabled=${busy != null} onClick=${handleDelete}>${busy === 'delete' ? 'Deleting…' : 'Delete'}</button>`
+              : null}
+            <span class="spacer"></span>
+            <a href="javascript:void(0)" onClick=${() => onScrollTo(thread)}>go to anchor →</a>
+            <button onClick=${onCollapse}>Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ThreadsPanel({
+    threads, files, replies, takes, resolutions,
+    selectedThreadId, onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
+  }) {
     const filesById = useMemo(() => {
       const map = {};
       files.forEach(file => { map[file.id] = file; });
@@ -215,10 +367,17 @@ window.__DISCUSS_RENDERED_FILES__ = {};
                 key=${thread.id}
                 thread=${thread}
                 file=${filesById[thread.fileId]}
-                replyCount=${(replies[thread.id] || []).length}
-                takeCount=${(takes[thread.id] || []).length}
-                resolved=${Boolean(resolutions[thread.id])}
-                onClick=${() => onThreadClick(thread)}
+                replyList=${replies[thread.id]}
+                takeList=${takes[thread.id]}
+                resolution=${resolutions[thread.id] || null}
+                expanded=${selectedThreadId === thread.id}
+                onSelect=${onSelect}
+                onCollapse=${onCollapse}
+                onReply=${onReply}
+                onResolve=${onResolve}
+                onUnresolve=${onUnresolve}
+                onDelete=${onDelete}
+                onScrollTo=${onScrollTo}
               />
             `)}
           </section>
@@ -405,6 +564,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const [resolutions, setResolutions] = useState(initialResolutions);
     const [popupAnchors, setPopupAnchors] = useState(null);
     const [editorAnchors, setEditorAnchors] = useState(null);
+    const [selectedThreadId, setSelectedThreadId] = useState(null);
 
     useEffect(() => {
       function handleSelectionChange() {
@@ -483,6 +643,106 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       }
     }
 
+    async function postReply(threadId, text) {
+      const tempId = `tmp-${Math.random().toString(36).slice(2)}`;
+      const optimistic = {
+        id: tempId,
+        threadId,
+        text,
+        createdAt: new Date().toISOString(),
+        __optimistic: true,
+      };
+      setReplies(prev => appendByKey(prev, threadId, optimistic));
+      try {
+        const created = await apiJson(`/api/threads/${encodeURIComponent(threadId)}/replies`, {
+          method: 'POST',
+          body: { text },
+        });
+        setReplies(prev => {
+          const list = (prev[threadId] || []).map(r => (r.id === tempId ? { ...created, __optimistic: false } : r));
+          return { ...prev, [threadId]: list };
+        });
+      } catch (err) {
+        setReplies(prev => {
+          const list = (prev[threadId] || []).filter(r => r.id !== tempId);
+          return { ...prev, [threadId]: list };
+        });
+        throw err;
+      }
+    }
+
+    async function resolveThread(threadId) {
+      const previous = resolutions[threadId] || null;
+      const optimistic = { decision: null, resolvedAt: new Date().toISOString(), __optimistic: true };
+      setResolutions(prev => ({ ...prev, [threadId]: optimistic }));
+      try {
+        const resolution = await apiJson(`/api/threads/${encodeURIComponent(threadId)}/resolve`, {
+          method: 'POST',
+          body: {},
+        });
+        setResolutions(prev => ({ ...prev, [threadId]: resolution }));
+      } catch (err) {
+        setResolutions(prev => {
+          const next = { ...prev };
+          if (previous) next[threadId] = previous; else delete next[threadId];
+          return next;
+        });
+        throw err;
+      }
+    }
+
+    async function unresolveThread(threadId) {
+      const previous = resolutions[threadId] || null;
+      setResolutions(prev => removeKey(prev, threadId));
+      try {
+        await apiJson(`/api/threads/${encodeURIComponent(threadId)}/unresolve`, { method: 'POST' });
+      } catch (err) {
+        if (previous) setResolutions(prev => ({ ...prev, [threadId]: previous }));
+        throw err;
+      }
+    }
+
+    async function deleteThread(threadId) {
+      const previousThread = threads.find(t => t.id === threadId) || null;
+      const previousReplies = replies[threadId] || null;
+      const previousTakes = takes[threadId] || null;
+      const previousResolution = resolutions[threadId] || null;
+      setThreads(prev => prev.filter(t => t.id !== threadId));
+      setReplies(prev => removeKey(prev, threadId));
+      setTakes(prev => removeKey(prev, threadId));
+      setResolutions(prev => removeKey(prev, threadId));
+      if (selectedThreadId === threadId) setSelectedThreadId(null);
+      try {
+        await apiJson(`/api/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+      } catch (err) {
+        if (previousThread) setThreads(prev => upsertById(prev, previousThread));
+        if (previousReplies) setReplies(prev => ({ ...prev, [threadId]: previousReplies }));
+        if (previousTakes) setTakes(prev => ({ ...prev, [threadId]: previousTakes }));
+        if (previousResolution) setResolutions(prev => ({ ...prev, [threadId]: previousResolution }));
+        throw err;
+      }
+    }
+
+    function handleScrollTo(thread) {
+      scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart);
+    }
+
+    const threadsPanelProps = {
+      threads,
+      files: initialFiles,
+      replies,
+      takes,
+      resolutions,
+      selectedThreadId,
+      onSelect: setSelectedThreadId,
+      onCollapse: () => setSelectedThreadId(null),
+      onReply: postReply,
+      onResolve: resolveThread,
+      onUnresolve: unresolveThread,
+      onDelete: deleteThread,
+      onScrollTo: handleScrollTo,
+    };
+
     if (!initialFiles.length) {
       return html`
         <div class="v2-layout">
@@ -490,7 +750,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
           <main class="v2-content">
             <p class="v2-banner">discuss v2 — no files loaded.</p>
           </main>
-          <${ThreadsPanel} threads=${threads} files=${initialFiles} replies=${replies} takes=${takes} resolutions=${resolutions} onThreadClick=${() => {}} />
+          <${ThreadsPanel} ...${threadsPanelProps} />
         </div>
       `;
     }
@@ -505,14 +765,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
           </p>
           ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
         </main>
-        <${ThreadsPanel}
-          threads=${threads}
-          files=${initialFiles}
-          replies=${replies}
-          takes=${takes}
-          resolutions=${resolutions}
-          onThreadClick=${thread => scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart)}
-        />
+        <${ThreadsPanel} ...${threadsPanelProps} />
       </div>
       ${!editorAnchors
         ? html`<${SelectionPopup} anchors=${popupAnchors} onCreate=${openEditor} />`

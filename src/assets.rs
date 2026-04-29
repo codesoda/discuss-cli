@@ -141,4 +141,20 @@ mod tests {
         assert!(template.contains("__optimistic: true"));
         assert!(template.contains("setThreads(prev => prev.filter(t => t.id !== tempId))"));
     }
+
+    #[test]
+    fn discuss_v2_template_supports_thread_replies_resolve_unresolve_delete() {
+        let template = discuss_v2_html();
+        assert!(template.contains("async function postReply"));
+        assert!(template.contains("async function resolveThread"));
+        assert!(template.contains("async function unresolveThread"));
+        assert!(template.contains("async function deleteThread"));
+        assert!(template.contains("/replies"));
+        assert!(template.contains("/resolve"));
+        assert!(template.contains("/unresolve"));
+        assert!(template.contains("method: 'DELETE'"));
+        assert!(template.contains("function ThreadComment"));
+        assert!(template.contains("v2-thread-timeline"));
+        assert!(template.contains("v2-thread-actions"));
+    }
 }
