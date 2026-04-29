@@ -159,6 +159,19 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_wires_done_flow_with_banner_and_review_lock() {
+        let template = discuss_v2_html();
+        assert!(template.contains("async function submitDone"));
+        assert!(template.contains("apiJson('/api/done')"));
+        assert!(template.contains("setReviewComplete"));
+        assert!(template.contains("v2-done-bar"));
+        assert!(template.contains("v2-done-banner"));
+        assert!(template.contains("review-complete"));
+        assert!(template.contains("function stopHeartbeat"));
+        assert!(template.contains("function stopEventStream"));
+    }
+
+    #[test]
     fn discuss_v2_template_auto_saves_drafts_through_rest_with_sse_sync() {
         let template = discuss_v2_html();
         assert!(template.contains("function useDraftAutoSave"));

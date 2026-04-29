@@ -75,6 +75,20 @@
     .v2-draft-status { font-size: 0.7rem; opacity: 0.55; font-style: italic; }
     .v2-draft-status[data-status="error"] { color: #d22; opacity: 0.85; font-style: normal; }
     .v2-editor-buttons .v2-draft-status { margin-right: auto; }
+    .v2-done-bar { display: flex; align-items: center; gap: 0.6rem; margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px dashed rgba(127,127,127,0.3); }
+    .v2-done-bar button { font: inherit; padding: 0.45rem 0.9rem; border-radius: 5px; border: 1px solid #1d6fd8; background: #1d6fd8; color: #fff; cursor: pointer; }
+    .v2-done-bar button:hover { background: #185fbf; }
+    .v2-done-bar button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .v2-done-bar button.ok { background: #2e7d32; border-color: #2e7d32; }
+    .v2-done-error { color: #d22; font-size: 0.8rem; }
+    .v2-done-banner { display: none; position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%); padding: 0.6rem 1rem; background: rgba(46,125,50,0.95); color: #fff; border-radius: 6px; font-size: 0.85rem; box-shadow: 0 6px 18px rgba(0,0,0,0.25); z-index: 1100; }
+    .v2-done-banner[data-shown="true"] { display: block; }
+    .review-complete .v2-doc { opacity: 0.9; }
+    .review-complete .v2-thread-card .v2-thread-actions,
+    .review-complete .v2-thread-card[data-expanded="false"] { pointer-events: none; }
+    .review-complete .v2-thread-card button,
+    .review-complete .v2-thread-card textarea { pointer-events: none; opacity: 0.55; }
+    .review-complete .v2-tree li { pointer-events: none; }
   </style>
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
@@ -667,18 +681,37 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const [editorAnchors, setEditorAnchors] = useState(null);
     const [selectedThreadId, setSelectedThreadId] = useState(null);
     const [drafts, setDrafts] = useState(initialDrafts);
+    const [reviewComplete, setReviewComplete] = useState(false);
+    const [doneBusy, setDoneBusy] = useState(false);
+    const [doneError, setDoneError] = useState(null);
 
     useEffect(() => {
       function handleSelectionChange() {
-        if (editorAnchors) return;
+        if (editorAnchors || reviewComplete) return;
         setPopupAnchors(currentSelectionAnchors());
       }
       document.addEventListener('selectionchange', handleSelectionChange);
       return () => document.removeEventListener('selectionchange', handleSelectionChange);
-    }, [editorAnchors]);
+    }, [editorAnchors, reviewComplete]);
 
-    useEffect(() => startHeartbeat(), []);
-    useEffect(() => startEventStream({
+    useEffect(() => {
+      if (reviewComplete) {
+        document.body.classList.add('review-complete');
+        stopHeartbeat();
+        stopEventStream();
+        setPopupAnchors(null);
+        setEditorAnchors(null);
+        setSelectedThreadId(null);
+      }
+    }, [reviewComplete]);
+
+    useEffect(() => {
+      if (reviewComplete) return undefined;
+      return startHeartbeat();
+    }, [reviewComplete]);
+    useEffect(() => {
+      if (reviewComplete) return undefined;
+      return startEventStream({
       onThreadCreated: thread => setThreads(prev => upsertById(prev, thread)),
       onThreadDeleted: payload => {
         const id = payload && payload.threadId;
@@ -732,7 +765,8 @@ window.__DISCUSS_RENDERED_FILES__ = {};
           setDrafts(prev => ({ ...prev, followup: removeKey(prev.followup, payload.threadId) }));
         }
       },
-    }), []);
+    });
+    }, [reviewComplete]);
 
     function openEditor(anchors) {
       setEditorAnchors(anchors);
@@ -896,6 +930,19 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       scrollToAnchor(thread.fileId || (initialFiles[0] && initialFiles[0].id), thread.anchorStart);
     }
 
+    async function submitDone() {
+      if (doneBusy || reviewComplete) return;
+      setDoneBusy(true);
+      setDoneError(null);
+      try {
+        await apiJson('/api/done');
+        setReviewComplete(true);
+      } catch (err) {
+        setDoneError(err && err.message ? err.message : "couldn't finish — retry?");
+        setDoneBusy(false);
+      }
+    }
+
     const threadsPanelProps = {
       threads,
       files: initialFiles,
@@ -943,21 +990,38 @@ window.__DISCUSS_RENDERED_FILES__ = {};
             <a href="/">switch to v1</a>
           </p>
           ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
+          <div class="v2-done-bar" id="v2-done-bar">
+            <button
+              id="v2-done-button"
+              class=${reviewComplete ? 'ok' : ''}
+              disabled=${doneBusy || reviewComplete}
+              title="Finish the review and send the transcript to the agent"
+              onClick=${submitDone}
+            >
+              ${reviewComplete ? 'Done ✓' : doneBusy ? 'Sending…' : 'Done — send to chat'}
+            </button>
+            ${doneError ? html`<span class="v2-done-error">${doneError}</span>` : null}
+          </div>
         </main>
         <${ThreadsPanel} ...${threadsPanelProps} />
       </div>
-      ${!editorAnchors
+      ${!editorAnchors && !reviewComplete
         ? html`<${SelectionPopup} anchors=${popupAnchors} onCreate=${openEditor} />`
         : null}
-      <${NewThreadEditor}
-        anchors=${editorAnchors}
-        files=${initialFiles}
-        draftText=${editorDraftText}
-        onSubmit=${submitNewThread}
-        onCancel=${closeEditor}
-        onSaveDraft=${saveNewThreadDraft}
-        onClearDraft=${clearNewThreadDraft}
-      />
+      ${!reviewComplete
+        ? html`<${NewThreadEditor}
+            anchors=${editorAnchors}
+            files=${initialFiles}
+            draftText=${editorDraftText}
+            onSubmit=${submitNewThread}
+            onCancel=${closeEditor}
+            onSaveDraft=${saveNewThreadDraft}
+            onClearDraft=${clearNewThreadDraft}
+          />`
+        : null}
+      <div class="v2-done-banner" data-shown=${reviewComplete ? 'true' : 'false'} role="status" aria-live="polite">
+        Review complete — you can close this tab.
+      </div>
     `;
   }
 
@@ -987,10 +1051,11 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   function startHeartbeat() {
     sendHeartbeat();
     heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    return () => {
-      if (heartbeatTimer != null) clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    };
+    return stopHeartbeat;
+  }
+  function stopHeartbeat() {
+    if (heartbeatTimer != null) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
   async function sendHeartbeat() {
     try {
@@ -1005,12 +1070,13 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   let reconnectTimer = null;
   function startEventStream(handlers) {
     openEventStream(handlers || {});
-    return () => {
-      if (eventSource) eventSource.close();
-      eventSource = null;
-      if (reconnectTimer != null) clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    };
+    return stopEventStream;
+  }
+  function stopEventStream() {
+    if (eventSource) eventSource.close();
+    eventSource = null;
+    if (reconnectTimer != null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
   function openEventStream(handlers) {
     try {
