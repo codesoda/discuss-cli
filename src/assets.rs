@@ -159,10 +159,23 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_lazy_loads_mermaid_for_markdown_blocks() {
+        let template = discuss_v2_html();
+        assert!(template.contains("function loadMermaid"));
+        assert!(template.contains("function renderMermaidUnder"));
+        assert!(template.contains("/assets/mermaid.min.js"));
+        assert!(template.contains("pre > code.language-mermaid"));
+        assert!(template.contains("data-mermaid-rendered"));
+        assert!(template.contains("renderMermaidUnder(articleRef.current)"));
+    }
+
+    #[test]
     fn discuss_v2_template_loads_prism_with_diff_plugin_and_highlights_files() {
         let template = discuss_v2_html();
         assert!(template.contains("https://unpkg.com/prismjs@1.30.0/themes/prism.min.css"));
-        assert!(template.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css"));
+        assert!(
+            template.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css")
+        );
         assert!(template.contains("prism-diff-highlight.min.css"));
         assert!(template.contains("https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"));
         assert!(template.contains("prism-autoloader.min.js"));

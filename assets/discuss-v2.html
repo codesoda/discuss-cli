@@ -219,6 +219,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
         child.setAttribute('data-anchor-idx', String(idx + 1));
       });
       highlightWithPrism(articleRef.current);
+      renderMermaidUnder(articleRef.current);
     }, [fileId, renderedHtml]);
 
     if (renderedHtml == null) {
@@ -249,6 +250,55 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     try { window.Prism.highlightAllUnder(root); } catch (err) {
       console.debug('discuss v2 prism highlight failed:', err && err.message);
     }
+  }
+
+  let mermaidPromise = null;
+  let mermaidCounter = 0;
+  function loadMermaid() {
+    if (mermaidPromise) return mermaidPromise;
+    mermaidPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = window.__DISCUSS_MERMAID_SRC__ || '/assets/mermaid.min.js';
+      script.async = true;
+      script.onload = () => {
+        const mermaid = window.mermaid && (window.mermaid.mermaidAPI || window.mermaid);
+        if (!mermaid || typeof mermaid.render !== 'function') {
+          reject(new Error('mermaid loaded but missing render API'));
+          return;
+        }
+        if (typeof mermaid.initialize === 'function') {
+          mermaid.initialize({ startOnLoad: false });
+        }
+        resolve(mermaid);
+      };
+      script.onerror = () => reject(new Error('failed to load mermaid script'));
+      document.head.appendChild(script);
+    });
+    return mermaidPromise;
+  }
+  function renderMermaidUnder(root) {
+    if (!root) return;
+    const blocks = Array.from(root.querySelectorAll('pre > code.language-mermaid'));
+    const pending = blocks.filter(code => !(code.parentElement && code.parentElement.dataset.mermaidRendered === 'true'));
+    if (!pending.length) return;
+    loadMermaid().then(mermaid => {
+      pending.forEach(code => {
+        const pre = code.parentElement;
+        if (!pre || pre.dataset.mermaidRendered === 'true') return;
+        const source = code.textContent || '';
+        const id = `discuss-v2-mermaid-${mermaidCounter++}`;
+        try {
+          mermaid.render(id, source, svg => {
+            pre.innerHTML = svg;
+            pre.setAttribute('data-mermaid-rendered', 'true');
+          }, pre);
+        } catch (err) {
+          console.debug('discuss v2 mermaid render failed:', err && err.message);
+        }
+      });
+    }).catch(err => {
+      console.debug('discuss v2 mermaid load failed:', err && err.message);
+    });
   }
 
   function FileSection({ file }) {
