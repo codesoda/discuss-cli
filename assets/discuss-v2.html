@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>discuss</title>
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism.min.css" data-prism-theme="light">
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css" data-prism-theme="dark" disabled>
+  <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
   <style>
     :root { color-scheme: light dark; --tree-w: 220px; --threads-w: 320px; }
     * { box-sizing: border-box; }
@@ -93,6 +96,17 @@
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
   <script src="/assets/htm.umd.js"></script>
+  <script>
+(function () {
+    var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.querySelectorAll('link[data-prism-theme]').forEach(function (link) {
+      link.disabled = (link.dataset.prismTheme === 'dark') ? !prefersDark : prefersDark;
+    });
+  })();
+  </script>
+  <script src="https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"></script>
+  <script src="https://unpkg.com/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <script src="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
 </head>
 <body>
   <div id="app"></div>
@@ -204,6 +218,7 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       Array.from(articleRef.current.children).forEach((child, idx) => {
         child.setAttribute('data-anchor-idx', String(idx + 1));
       });
+      highlightWithPrism(articleRef.current);
     }, [fileId, renderedHtml]);
 
     if (renderedHtml == null) {
@@ -220,9 +235,20 @@ window.__DISCUSS_RENDERED_FILES__ = {};
   }
 
   function DiffFile({ fileId, content }) {
+    const preRef = useRef(null);
+    useEffect(() => {
+      if (preRef.current) highlightWithPrism(preRef.current);
+    }, [fileId, content]);
     return html`
-      <pre class="v2-doc" data-file-id=${fileId}><code>${content || '(empty diff)'}</code></pre>
+      <pre ref=${preRef} class="v2-doc language-diff diff-highlight" data-file-id=${fileId}><code class="language-diff">${content || '(empty diff)'}</code></pre>
     `;
+  }
+
+  function highlightWithPrism(root) {
+    if (!root || !window.Prism || typeof window.Prism.highlightAllUnder !== 'function') return;
+    try { window.Prism.highlightAllUnder(root); } catch (err) {
+      console.debug('discuss v2 prism highlight failed:', err && err.message);
+    }
   }
 
   function FileSection({ file }) {

@@ -159,6 +159,20 @@ mod tests {
     }
 
     #[test]
+    fn discuss_v2_template_loads_prism_with_diff_plugin_and_highlights_files() {
+        let template = discuss_v2_html();
+        assert!(template.contains("https://unpkg.com/prismjs@1.30.0/themes/prism.min.css"));
+        assert!(template.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css"));
+        assert!(template.contains("prism-diff-highlight.min.css"));
+        assert!(template.contains("https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"));
+        assert!(template.contains("prism-autoloader.min.js"));
+        assert!(template.contains("prism-diff-highlight.min.js"));
+        assert!(template.contains("function highlightWithPrism"));
+        assert!(template.contains("Prism.highlightAllUnder"));
+        assert!(template.contains("language-diff diff-highlight"));
+    }
+
+    #[test]
     fn discuss_v2_template_wires_done_flow_with_banner_and_review_lock() {
         let template = discuss_v2_html();
         assert!(template.contains("async function submitDone"));
