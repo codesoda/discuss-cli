@@ -3314,6 +3314,7 @@
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
+    if (e.target.closest('#toast-host')) return;
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
