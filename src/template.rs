@@ -182,6 +182,54 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_wires_prism_for_syntax_highlighting() {
+        let page = render_page("<p>Doc</p>", "{}");
+
+        assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism.min.css"));
+        assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css"));
+        assert!(page.contains(
+            "https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css"
+        ));
+        assert!(page.contains(
+            "https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css"
+        ));
+        assert!(page.contains("https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"));
+        assert!(page.contains(
+            "https://unpkg.com/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"
+        ));
+        assert!(page.contains("Prism.plugins.autoloader.languages_path"));
+        assert!(page.contains("window.Prism.manual = true"));
+        assert!(page.contains("function highlightCodeBlocks()"));
+        assert!(page.contains("Prism.highlightAllUnder(document.getElementById('doc-content'))"));
+        assert!(page.contains("pre.classList.add('line-numbers')"));
+    }
+
+    #[test]
+    fn bundled_template_includes_theme_toggle_with_system_default() {
+        let page = render_page("<p>Doc</p>", "{}");
+
+        assert!(page.contains(r#"id="theme-toggle""#));
+        assert!(page.contains("theme-icon-system"));
+        assert!(page.contains("theme-icon-light"));
+        assert!(page.contains("theme-icon-dark"));
+        assert!(page.contains("function applyThemeMode(mode)"));
+        assert!(page.contains("function initThemeToggle()"));
+        assert!(page.contains("'discuss-theme'"));
+        assert!(page.contains("'(prefers-color-scheme: dark)'"));
+        assert!(page.contains(r#"html[data-theme="dark"]"#));
+        assert!(page.contains("link[data-prism-theme]"));
+
+        let bootstrap_script = page
+            .find("id=\"discuss-theme-bootstrap\"")
+            .expect("pre-paint theme bootstrap script should be present");
+        let body_open = page.find("<body>").expect("body open");
+        assert!(
+            bootstrap_script < body_open,
+            "theme bootstrap must run before body paint",
+        );
+    }
+
+    #[test]
     fn injects_mermaid_shim_before_main_script() {
         let page = render_page(
             "<pre><code class=\"language-mermaid\">flowchart TD</code></pre>",
@@ -216,8 +264,15 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        assert!(!page.contains("localStorage"));
-        assert!(!page.contains("STORAGE_KEY"));
+        for (offset, _) in page.match_indices("localStorage") {
+            let window_end = (offset + 80).min(page.len());
+            let context = &page[offset..window_end];
+            assert!(
+                context.contains("discuss-theme") || context.contains("THEME_STORAGE_KEY"),
+                "localStorage may only persist the theme preference; saw: {context}",
+            );
+        }
+        assert!(!page.contains("STORAGE_KEY = 'discuss-state'"));
     }
 
     #[test]

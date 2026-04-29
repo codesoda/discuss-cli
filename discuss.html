@@ -45,6 +45,33 @@
 <head>
 <meta charset="utf-8">
 <title>Contextual Discussion Template</title>
+
+<!--
+  Prism syntax highlighting (loaded from unpkg).
+  To bump Prism, search-replace the version in every URL on this page.
+  Grammars beyond the directly-linked plugins load on demand via the autoloader.
+-->
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism.min.css" data-prism-theme="light">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css" data-prism-theme="dark">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css">
+<link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
+
+<!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
+<script id="discuss-theme-bootstrap">
+(function () {
+  var stored = null;
+  try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
+  var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+  var root = document.documentElement;
+  root.dataset.theme = effective;
+  root.dataset.themeMode = mode;
+  document.querySelectorAll('link[data-prism-theme]').forEach(function (link) {
+    link.disabled = (link.dataset.prismTheme !== effective);
+  });
+})();
+</script>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -80,6 +107,35 @@
     --left-gutter: 44px;
     --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
+  html[data-theme="dark"] {
+    --bg: #1a1a1a;
+    --card: #252525;
+    --ink: #e8e8e6;
+    --muted: #a8a8a4;
+    --accent: #5a9bff;
+    --accent-soft: rgba(90, 155, 255, 0.18);
+    --accent-hover: rgba(90, 155, 255, 0.10);
+    --accent-dashed: rgba(90, 155, 255, 0.45);
+    --accent-range: rgba(90, 155, 255, 0.18);
+    --line: #3a3a38;
+    --line-strong: #4c4c48;
+    --quote: #3a3210;
+    --quote-border: #8a7838;
+    --context: #2a2a28;
+    --decision: #1f3526;
+    --decision-border: #4a8862;
+    --callout: #1a2a3f;
+    --callout-border: #3a6aa8;
+    --user-note: #3a1f29;
+    --user-note-border: #8a4a5f;
+    --pending: #3a3210;
+    --pending-border: #6a5a30;
+    --pending-dark: #c8a85a;
+    --pre-bg: #2d2d2c;
+    --marker-blue: #5a9bff;
+    --marker-yellow: #f0c860;
+    --marker-pink: #e87a9c;
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   body {
@@ -110,13 +166,82 @@
     font-size: 12px;
     padding: 6px 12px;
     border: 1px solid var(--line-strong);
-    background: white;
+    background: var(--card);
     color: var(--ink);
     border-radius: 6px;
     cursor: pointer;
   }
-  header .toggle:hover { background: #f5f5f5; }
+  header .toggle:hover { background: var(--accent-hover); }
+  html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
+  header .header-icon-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: background 0.12s, color 0.12s;
+  }
+  header .header-icon-link:hover { background: var(--accent-hover); color: var(--ink); }
+  html[data-theme="dark"] header .header-icon-link:hover { background: var(--accent-soft); color: var(--ink); }
+  header .theme-menu { position: relative; display: inline-flex; }
+  header .theme-toggle {
+    font: inherit;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    color: var(--muted);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  header .theme-toggle:hover { background: var(--accent-hover); color: var(--ink); }
+  header .theme-toggle.open { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+  header .theme-toggle .theme-icon { width: 18px; height: 18px; }
+  header .theme-toggle .theme-icon[hidden] { display: none; }
+  header .theme-menu-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 140px;
+    padding: 4px;
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 110;
+  }
+  header .theme-menu-list[hidden] { display: none; }
+  header .theme-menu-item {
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    padding: 6px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  header .theme-menu-item:hover { background: var(--accent-hover); }
+  header .theme-menu-item.active { background: var(--accent-soft); color: var(--ink); }
+  header .theme-menu-item .theme-icon { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
+  header .theme-menu-item.active .theme-icon { color: var(--accent); }
+  header .theme-menu-item .check { margin-left: auto; color: var(--accent); width: 14px; height: 14px; }
+  header .theme-menu-item:not(.active) .check { visibility: hidden; }
   #copy-all {
     font: inherit;
     padding: 7px 14px;
@@ -173,15 +298,26 @@
     display: grid;
     grid-template-columns: var(--left-w) var(--divider-w) 1fr;
     min-height: 100%;
+    align-items: start;
+    background: linear-gradient(
+      to right,
+      var(--card) 0,
+      var(--card) var(--left-w),
+      var(--line-strong) var(--left-w),
+      var(--line-strong) calc(var(--left-w) + var(--divider-w)),
+      var(--bg) calc(var(--left-w) + var(--divider-w)),
+      var(--bg) 100%
+    );
   }
+  #divider { align-self: stretch; }
   .pane-left, .pane-right { min-width: 0; }
   .pane-left {
-    padding: 28px var(--left-gutter) 180px 36px;
+    padding: 28px var(--left-gutter) 80px 36px;
     background: var(--card);
     border-right: 1px solid var(--line);
   }
   .pane-right {
-    padding: 28px 24px 180px 24px;
+    padding: 28px 24px 80px 24px;
     background: var(--bg);
     position: relative;
   }
@@ -235,6 +371,11 @@
     line-height: 1.45;
     margin: 10px 0;
   }
+  /* Prism's line-numbers plugin positions a gutter at left: -3.8em and expects
+     pre to carry padding-left: 3.8em so the gutter sits inside the pre. Our
+     id-scoped padding above wins on specificity, so we have to restate the
+     left padding under the same id-scope when line-numbers is on. */
+  #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
   #doc-content blockquote {
     margin: 10px 0;
@@ -280,6 +421,90 @@
     color: var(--muted);
     font-weight: 600;
     margin-top: 12px;
+  }
+
+  /* --- Heading minimap (left-edge document outline) --- */
+  .heading-minimap {
+    position: fixed;
+    top: calc(var(--header-h) + 36px);
+    left: 2px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 8px 8px 8px 6px;
+    width: 22px;
+    max-height: calc(100vh - var(--header-h) - 72px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    transition: width 0.18s ease, background 0.18s ease;
+    scrollbar-width: none;
+  }
+  .heading-minimap::-webkit-scrollbar { display: none; }
+  .heading-minimap::before {
+    content: "";
+    position: absolute;
+    inset: -8px -12px;
+    background: rgba(255, 255, 255, 0.32);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
+    transition: opacity 0.18s ease;
+    -webkit-mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+    mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+  }
+  html[data-theme="dark"] .heading-minimap::before { background: rgba(40, 40, 40, 0.32); }
+  .heading-minimap:hover { width: 220px; }
+  .heading-minimap:hover::before { opacity: 1; }
+  .hm-bar {
+    display: block;
+    flex: 0 0 auto;
+    height: 5px;
+    width: 12px;
+    border: 0;
+    padding: 0;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.22);
+    cursor: pointer;
+    transition: height 0.18s ease, width 0.18s ease, background 0.12s ease, margin-left 0.18s ease, margin-top 0.12s ease, margin-bottom 0.12s ease;
+  }
+  html[data-theme="dark"] .hm-bar { background: rgba(255,255,255,0.22); }
+  .hm-bar[data-level="1"] { margin-left: 0; }
+  .hm-bar[data-level="2"] { margin-left: 6px; }
+  .hm-bar[data-level="3"] { margin-left: 12px; }
+  .hm-bar[data-level="4"] { margin-left: 18px; }
+  .heading-minimap:hover .hm-bar {
+    height: 7px;
+    width: var(--hm-w-expanded, 180px);
+  }
+  .heading-minimap:hover .hm-bar:hover {
+    background: var(--ink);
+    height: 14px;
+    margin-top: -3.5px;
+    margin-bottom: -3.5px;
+    z-index: 1;
+  }
+  .hm-bar.is-active { background: var(--accent); }
+  .heading-minimap:hover .hm-bar.is-active { background: var(--accent); }
+  .heading-minimap:hover .hm-bar.is-active:hover { background: var(--ink); }
+  .hm-tooltip {
+    position: fixed;
+    display: none;
+    background: var(--ink);
+    color: var(--bg);
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 5px 9px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 60;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
   }
 
   #doc-content [data-anchor-idx] {
@@ -387,12 +612,87 @@
     margin-bottom: 4px;
   }
   #thread-tooltip .tt-quote { font-style: italic; color: #fcdca9; }
+  #thread-tooltip .tt-extra { margin-top: 4px; font-size: 10.5px; opacity: 0.7; }
+  #thread-tooltip.shown { display: block; }
+  /* Dark mode: --ink is near-white, so white tooltip text would vanish.
+     Flip text to var(--bg) (dark) and re-tone the inner chip/quote so
+     they contrast with a light tooltip background instead of a dark one. */
+  html[data-theme="dark"] #thread-tooltip { color: var(--bg); }
+  html[data-theme="dark"] #thread-tooltip .tt-kind {
+    background: rgba(0, 0, 0, 0.12);
+  }
+  html[data-theme="dark"] #thread-tooltip .tt-quote { color: rgba(0, 0, 0, 0.6); }
+
+  /* Toasts: surface incoming agent takes when the matching thread is closed,
+     so the user notices a reply without scanning the doc. Cap at one visible
+     to avoid stacking noise during a multi-thread review. */
+  #toast-host {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    background: var(--ink);
+    color: var(--bg);
+    padding: 10px 14px;
+    border-radius: 6px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 320px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s, transform 0.18s;
+  }
+  .toast.shown { opacity: 1; transform: translateY(0); }
+  .toast .toast-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex: 0 0 auto;
+  }
+  .toast .toast-body { flex: 1; }
+  .toast .toast-title { font-weight: 600; margin-bottom: 2px; }
+  .toast .toast-sub { font-size: 11.5px; opacity: 0.7; }
+  .toast .toast-close {
+    background: transparent;
+    color: inherit;
+    border: 0;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .toast:hover .toast-close { opacity: 0.6; }
+  .toast .toast-close:hover { opacity: 1; }
+  .followup.hidden { display: none; }
+  .empty-state.hidden { display: none; }
+  /* Clear button only matters once there's text to clear; hide it
+     otherwise so the action row isn't cluttered. */
+  .followup button.clear.hidden { display: none; }
+  /* Meta-status segments. The header subtitle interpolates these spans
+     into the running comma-separated string of session counts. */
+  .meta-stat-draft { color: #0d9488; }
+  .meta-stat-pending { color: var(--pending-dark); }
 
   #selection-popup {
     position: fixed;
     z-index: 200;
     background: var(--ink);
-    color: white;
+    color: var(--bg);
     padding: 5px 11px;
     border-radius: 16px;
     font-size: 12px;
@@ -401,8 +701,10 @@
     user-select: none;
     display: none;
     font-weight: 500;
+    transition: background 0.12s, color 0.12s;
   }
-  #selection-popup:hover { background: #000; }
+  #selection-popup.shown { display: block; }
+  #selection-popup:hover { background: var(--accent); color: white; }
 
   /* --- Right pane: threads --- */
   .pane-right .empty-state {
@@ -477,6 +779,14 @@
   .thread-close:hover,
   .thread-delete:hover { color: #c62828; }
   .thread-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+  .thread-sub.placeholder { font-style: italic; color: var(--pending-dark); }
+  .thread-decision {
+    background: var(--decision);
+    border-left: 3px solid var(--decision-border);
+    padding: 7px 10px;
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+  }
 
   .thread-body > * + * { margin-top: 8px; }
   .thread-quote {
@@ -633,6 +943,55 @@
     font-style: italic;
     margin-top: 4px;
   }
+  /* Line-range thread indicator: thin colored bar at the inside-right edge
+     of the line-numbers gutter for each line covered by a thread. We use
+     box-shadow rather than ::before so we don't override Prism's
+     `::before { content: counter(linenumber) }` that renders the line number. */
+  .line-numbers-rows > span.has-thread-line {
+    box-shadow: inset -3px 0 0 0 var(--marker-pink);
+  }
+  .line-numbers-rows > span.has-thread-line.thread-resolved-line {
+    box-shadow: inset -3px 0 0 0 rgba(46, 125, 50, 0.6);
+  }
+  /* Active draft on a single line: tint the gutter row so the user sees what
+     they're commenting on without the big block-level outline. */
+  .line-numbers-rows > span.draft-active-line {
+    background: var(--accent-soft);
+    box-shadow: inset -3px 0 0 0 var(--accent);
+  }
+  /* Open-thread highlight on a single line: yellow tint + accent border on the
+     gutter row(s) so the user sees which lines the open thread is about,
+     instead of painting the whole code block. */
+  .line-numbers-rows > span.thread-active-line {
+    background: rgba(255, 236, 139, 0.55);
+    box-shadow: inset -3px 0 0 0 var(--accent);
+  }
+  /* Click-to-comment per line: each Prism line-number row is a click target.
+     The whole row gets a hover background plus a 💬 affordance in the gutter. */
+  pre.line-numbers .line-numbers-rows {
+    pointer-events: auto;
+  }
+  pre.line-numbers .line-numbers-rows > span {
+    position: relative;
+    cursor: pointer;
+  }
+  pre.line-numbers .line-numbers-rows > span:hover {
+    background: var(--accent-soft);
+  }
+  pre.line-numbers .line-numbers-rows > span:hover::after {
+    content: '💬';
+    position: absolute;
+    left: calc(100% + 6px);
+    top: -2px;
+    font-size: 12px;
+    line-height: 1.2;
+    pointer-events: none;
+  }
+  /* When the row already has a thread bar, push the hover icon a touch right
+     so it sits past the indicator. */
+  pre.line-numbers .line-numbers-rows > span.has-thread-line:hover::after {
+    left: calc(100% + 10px);
+  }
   .thread-marker.is-resolved { background: #2e7d32 !important; color: white !important; }
 
   /* Draft marker (new-thread draft — user started typing a new comment
@@ -716,7 +1075,34 @@
   <h1>Contextual Discussion</h1>
   <span class="meta" id="meta-status">Loading…</span>
   <span class="spacer"></span>
+  <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
+  </a>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
+  <span class="theme-menu" id="theme-menu">
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
+      <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+      <svg class="theme-icon theme-icon-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
+      <svg class="theme-icon theme-icon-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
+    <div class="theme-menu-list" id="theme-menu-list" role="menu" aria-labelledby="theme-toggle" hidden>
+      <button class="theme-menu-item" data-mode="system" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+        <span>System</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+      <button class="theme-menu-item" data-mode="light" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="M4.93 4.93l1.41 1.41"></path><path d="M17.66 17.66l1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="M4.93 19.07l1.41-1.41"></path><path d="M17.66 6.34l1.41-1.41"></path></svg>
+        <span>Light</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+      <button class="theme-menu-item" data-mode="dark" role="menuitemradio" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        <span>Dark</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
+    </div>
+  </span>
   <span class="done-control" id="done-control">
     <button id="copy-all" title="Finish the review and send the transcript to the agent">Done — send to chat</button>
   </span>
@@ -806,11 +1192,29 @@
 
 <div id="selection-popup">💬 Comment</div>
 <div id="thread-tooltip"></div>
+<div id="toast-host"></div>
 
 <!-- ==================== PREPOPULATED THREADS ==================== -->
 <!-- Replace with your own seed data, or leave as [] for a blank review. -->
 <script type="application/json" id="prepopulated-threads">
 []
+</script>
+
+<!--
+  Prism: load core, autoloader (resolves grammars on demand), diff-highlight,
+  and line-numbers. We set Prism.manual = true so the page controls when
+  highlighting runs, instead of Prism auto-running on DOMContentLoaded.
+-->
+<script>window.Prism = window.Prism || {}; window.Prism.manual = true;</script>
+<script src="https://unpkg.com/prismjs@1.30.0/components/prism-core.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.js"></script>
+<script src="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.js"></script>
+<script>
+(function () {
+  if (!window.Prism || !Prism.plugins || !Prism.plugins.autoloader) return;
+  Prism.plugins.autoloader.languages_path = 'https://unpkg.com/prismjs@1.30.0/components/';
+})();
 </script>
 
 <script>
@@ -857,8 +1261,17 @@
         text: t.text || '',
         breadcrumb: t.breadcrumb || '',
         createdAt: t.createdAt || new Date().toISOString(),
+        lineRange: normalizeLineRange(t.lineRange),
       }))
       .filter(t => t.id && Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd));
+  }
+  function normalizeLineRange(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const start = parseInt(raw.start, 10);
+    const end = parseInt(raw.end, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    if (start < 1 || end < start) return null;
+    return { start, end };
   }
   function normalizeFollowups(rawFollowups, rawReplies, userThreads) {
     const followups = {};
@@ -1347,6 +1760,80 @@
     state.takes[take.threadId] = upsertRawComment(state.takes[take.threadId], take);
     setCurrentState(state);
     refreshThreadFromState(take.threadId);
+
+    // If the user can't already see the take, surface a toast so they
+    // notice the agent replied without scanning the doc.
+    const threadEl = document.querySelector(`.thread[data-thread-id="${take.threadId}"]`);
+    if (threadEl && !threadEl.classList.contains('open')) {
+      showTakeToast(take.threadId, take.text);
+    }
+  }
+
+  // ---------- Toasts ----------
+  let activeToast = null;
+  const toastQueue = [];
+  function showTakeToast(threadId, text) {
+    toastQueue.push({ threadId, text });
+    drainToastQueue();
+  }
+  function drainToastQueue() {
+    if (activeToast || !toastQueue.length) return;
+    const next = toastQueue.shift();
+    renderToast(next.threadId, next.text);
+  }
+  function renderToast(threadId, text) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+    const threadEl = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+    const start = threadEl ? threadEl.getAttribute('data-anchor-start') : null;
+    const end = threadEl ? threadEl.getAttribute('data-anchor-end') : null;
+    const lineStart = threadEl ? threadEl.getAttribute('data-line-start') : null;
+    const lineEnd = threadEl ? threadEl.getAttribute('data-line-end') : null;
+    let anchorLabel = '';
+    if (start) {
+      anchorLabel = (start === end) ? `#${start}` : `#${start}–${end}`;
+      if (lineStart && lineEnd) {
+        anchorLabel += (lineStart === lineEnd) ? `, line ${lineStart}` : `, lines ${lineStart}–${lineEnd}`;
+      }
+    }
+    const preview = (text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `
+      <span class="toast-dot"></span>
+      <div class="toast-body">
+        <div class="toast-title">Agent replied${anchorLabel ? ' on ' + escapeHtml(anchorLabel) : ''}</div>
+        <div class="toast-sub">${escapeHtml(preview)}${(text || '').length > 120 ? '…' : ''}</div>
+      </div>
+      <button class="toast-close" type="button" aria-label="Dismiss">×</button>
+    `;
+    host.appendChild(toast);
+    activeToast = toast;
+    requestAnimationFrame(() => toast.classList.add('shown'));
+    let dismissed = false;
+    function dismiss() {
+      if (dismissed) return;
+      dismissed = true;
+      clearTimeout(timer);
+      toast.classList.remove('shown');
+      setTimeout(() => {
+        toast.remove();
+        if (activeToast === toast) activeToast = null;
+        drainToastQueue();
+      }, 200);
+    }
+    toast.querySelector('.toast-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismiss();
+    });
+    toast.addEventListener('click', () => {
+      const target = document.querySelector(`.thread[data-thread-id="${threadId}"]`);
+      if (target) {
+        openThread(target);
+      }
+      dismiss();
+    });
+    const timer = setTimeout(dismiss, 6000);
   }
 
   function applyThreadResolvedEvent(payload) {
@@ -1636,6 +2123,118 @@
   }
   assignAnchorIndices();
 
+  // ---------- Heading minimap (left-edge document outline) ----------
+  function buildHeadingMinimap() {
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+    document.querySelectorAll('.heading-minimap, .hm-tooltip').forEach(el => el.remove());
+
+    const headings = Array.from(doc.querySelectorAll('h1, h2, h3, h4'))
+      .map(el => ({
+        el,
+        level: parseInt(el.tagName.substring(1), 10),
+        text: (el.textContent || '').trim(),
+      }))
+      .filter(h => h.text.length > 0);
+    if (headings.length < 2) return;
+
+    const nav = document.createElement('nav');
+    nav.className = 'heading-minimap';
+    nav.setAttribute('aria-label', 'Document outline');
+
+    const tooltip = document.createElement('span');
+    tooltip.className = 'hm-tooltip';
+    document.body.appendChild(tooltip);
+
+    const workspace = document.querySelector('.workspace');
+
+    // Bar widths proportional to heading text length: longest text
+    // anchors to the right edge of the minimap's inner content area;
+    // shorter texts shrink proportionally. Indent (per level) shifts
+    // the bar's start, so width = (target right edge) - (level indent).
+    const longestTextLen = Math.max(...headings.map(h => h.text.length));
+    const containerInnerWidth = 206; // .heading-minimap:hover is 220px wide minus 14px horizontal padding
+    const indentForLevel = lvl => (lvl - 1) * 6;
+
+    const bars = [];
+    headings.forEach(h => {
+      const bar = document.createElement('button');
+      bar.type = 'button';
+      bar.className = 'hm-bar';
+      bar.setAttribute('data-level', String(h.level));
+      bar.setAttribute('aria-label', h.text);
+      bar.title = h.text; // accessibility fallback
+
+      const targetRight = (h.text.length / longestTextLen) * containerInnerWidth;
+      const width = Math.max(12, targetRight - indentForLevel(h.level));
+      bar.style.setProperty('--hm-w-expanded', width + 'px');
+
+      bar.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        if (workspace) {
+          const elTop = h.el.getBoundingClientRect().top;
+          const wsTop = workspace.getBoundingClientRect().top;
+          const target = workspace.scrollTop + (elTop - wsTop) - 16;
+          workspace.scrollTo({ top: target, behavior: 'smooth' });
+        } else {
+          h.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+
+      bar.addEventListener('mouseenter', () => {
+        tooltip.textContent = h.text;
+        const rect = bar.getBoundingClientRect();
+        tooltip.style.display = 'block';
+        // Measure after display so we know height
+        const tipH = tooltip.offsetHeight || 22;
+        tooltip.style.left = (rect.right + 8) + 'px';
+        tooltip.style.top = (rect.top + rect.height / 2 - tipH / 2) + 'px';
+      });
+      bar.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+
+      nav.appendChild(bar);
+      bars.push(bar);
+    });
+
+    document.body.appendChild(nav);
+
+    // Highlight the first heading visible in the viewport (or the most
+    // recently scrolled-past heading if none are currently visible).
+    let activeRafQueued = false;
+    function updateActiveHeading() {
+      activeRafQueued = false;
+      if (!workspace) return;
+      const wsRect = workspace.getBoundingClientRect();
+      const wsHeight = wsRect.height;
+      let firstVisible = -1;
+      let lastPassed = -1;
+      for (let i = 0; i < headings.length; i++) {
+        const top = headings[i].el.getBoundingClientRect().top - wsRect.top;
+        if (top < 0) {
+          lastPassed = i;
+        } else if (top <= wsHeight) {
+          firstVisible = i;
+          break;
+        } else {
+          break;
+        }
+      }
+      const activeIdx = firstVisible !== -1 ? firstVisible : lastPassed;
+      bars.forEach((b, i) => b.classList.toggle('is-active', i === activeIdx));
+    }
+    function scheduleActiveUpdate() {
+      if (activeRafQueued) return;
+      activeRafQueued = true;
+      requestAnimationFrame(updateActiveHeading);
+    }
+    if (workspace) workspace.addEventListener('scroll', scheduleActiveUpdate, { passive: true });
+    window.addEventListener('resize', scheduleActiveUpdate, { passive: true });
+    updateActiveHeading();
+  }
+  buildHeadingMinimap();
+
   function getAnchorElByIdx(idx) {
     return document.querySelector(`#doc-content [data-anchor-idx="${idx}"]`);
   }
@@ -1644,14 +2243,24 @@
     const idx = parseInt(el.getAttribute('data-anchor-idx'));
     return [idx, idx];
   }
+  // Reading textContent directly would pick up the text inside any
+  // .thread-marker / .thread-marker-stack we've appended to the anchor
+  // (e.g. the teal "…" draft dot or the "•" saved-thread dot), polluting
+  // the captured snippet. Clone the node and strip those before reading.
+  function anchorPlainText(el) {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('.thread-marker, .thread-marker-stack').forEach(n => n.remove());
+    return (clone.textContent || '').trim();
+  }
   function snippetOfAnchor(anchorEl) {
-    return (anchorEl ? (anchorEl.textContent || '') : '').trim().replace(/\s+/g, ' ').slice(0, 140);
+    return anchorPlainText(anchorEl).replace(/\s+/g, ' ').slice(0, 140);
   }
   function snippetOfRange(startIdx, endIdx) {
     const parts = [];
     for (let i = startIdx; i <= endIdx; i++) {
       const el = getAnchorElByIdx(i);
-      if (el) parts.push((el.textContent || '').trim());
+      if (el) parts.push(anchorPlainText(el));
     }
     return parts.join(' / ').replace(/\s+/g, ' ').slice(0, 220);
   }
@@ -1717,10 +2326,10 @@
     const hasTake = typeof t.take === 'string' && t.take.trim().length > 0;
     const hasDecision = typeof t.decision === 'string' && t.decision.trim().length > 0;
     const takeBlock = !hasTake && !hasDecision
-      ? `<div class="thread-sub" style="font-style:italic;color:var(--pending-dark);">Take &amp; decision — pending.</div>`
-      : `${t.pending ? '<div class="thread-sub" style="font-style:italic;color:var(--pending-dark);">Initial take — reply below to steer.</div>' : ''}
+      ? `<div class="thread-sub placeholder">Take &amp; decision — pending.</div>`
+      : `${t.pending ? '<div class="thread-sub placeholder">Initial take — reply below to steer.</div>' : ''}
          ${hasTake ? `<div class="section-mini-label">Take</div><div class="thread-take">${t.take}</div>` : ''}
-         ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision" style="background:var(--decision);border-left:3px solid var(--decision-border);padding:7px 10px;border-radius:0 4px 4px 0;font-size:13px;">${escapeHtml(t.decision)}</div>` : ''}`;
+         ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision">${escapeHtml(t.decision)}</div>` : ''}`;
 
     const headIndex = t.index != null ? `Comment ${t.index}` : 'Comment';
     el.innerHTML = `
@@ -1762,7 +2371,14 @@
     el.setAttribute('data-thread-id', t.id);
     el.setAttribute('data-anchor-start', t.anchorStart);
     el.setAttribute('data-anchor-end', t.anchorEnd);
-    const rangeLabel = t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`;
+    if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
+      el.setAttribute('data-line-start', t.lineRange.start);
+      el.setAttribute('data-line-end', t.lineRange.end);
+    }
+    const lineLabel = t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)
+      ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
+      : '';
+    const rangeLabel = (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
     el.innerHTML = `
       <div class="thread-head">
         <span>Your thread</span>
@@ -1875,10 +2491,16 @@
     const clearBtn = threadEl.querySelector('.followup .clear');
     const resolveBtn = threadEl.querySelector('.followup .resolve');
 
+    function syncClearVisibility() {
+      if (!clearBtn) return;
+      clearBtn.classList.toggle('hidden', !ta.value.length);
+    }
+
     // Pre-fill from any existing follow-up draft so the user can resume
     // where they left off last time they opened this thread.
     const existingDraft = getFollowupDraft(loadState(), threadId);
     if (existingDraft && existingDraft.text) ta.value = existingDraft.text;
+    syncClearVisibility();
 
     async function save() {
       const text = ta.value.trim();
@@ -1892,6 +2514,7 @@
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
       ta.value = '';
+      syncClearVisibility();
       renderFollowups(threadEl, threadId);
       renderMarkers();
       reposition();
@@ -1924,6 +2547,7 @@
         console.error('Failed to save reply:', error);
         setCurrentState(previousState);
         ta.value = text;
+        syncClearVisibility();
         setFollowupDraft(threadId, text).catch(draftError => {
           console.error('Failed to restore follow-up draft after reply save failure:', draftError);
         });
@@ -1945,6 +2569,7 @@
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
       ta.value = '';
+      syncClearVisibility();
       renderResolution(threadEl, threadId);
       renderMarkers();
       renderMetaStatus();
@@ -1974,6 +2599,7 @@
         console.error('Failed to resolve thread:', error);
         setCurrentState(previousState);
         ta.value = decision;
+        syncClearVisibility();
         if (decision) {
           setFollowupDraft(threadId, decision).catch(draftError => {
             console.error('Failed to restore follow-up draft after resolve failure:', draftError);
@@ -1989,6 +2615,7 @@
     saveBtn.addEventListener('click', save);
     clearBtn.addEventListener('click', () => {
       ta.value = '';
+      syncClearVisibility();
       clearMutationError(followup);
       setFollowupDraft(threadId, '').catch(error => {
         console.error('Failed to clear follow-up draft:', error);
@@ -2002,6 +2629,7 @@
     });
     if (resolveBtn) resolveBtn.addEventListener('click', resolve);
     ta.addEventListener('input', () => {
+      syncClearVisibility();
       clearMutationError(followup);
       setFollowupDraft(threadId, ta.value).catch(error => {
         console.error('Failed to save follow-up draft:', error);
@@ -2039,7 +2667,7 @@
         </div>
       `;
       banner.classList.add('shown');
-      followup.style.display = 'none';
+      followup.classList.add('hidden');
       threadEl.classList.add('resolved');
       async function unresolve() {
         clearMutationError(banner);
@@ -2074,7 +2702,7 @@
     } else {
       banner.innerHTML = '';
       banner.classList.remove('shown');
-      followup.style.display = '';
+      followup.classList.remove('hidden');
       threadEl.classList.remove('resolved');
     }
   }
@@ -2122,9 +2750,26 @@
   function syncThreadActiveAnchors() {
     document.querySelectorAll('#doc-content [data-anchor-idx].thread-active')
       .forEach(el => el.classList.remove('thread-active'));
+    document.querySelectorAll('.line-numbers-rows > span.thread-active-line')
+      .forEach(span => span.classList.remove('thread-active-line'));
     document.querySelectorAll('.thread.open').forEach(thread => {
       const start = parseInt(thread.getAttribute('data-anchor-start'));
       const end = parseInt(thread.getAttribute('data-anchor-end'));
+      const lineStart = parseInt(thread.getAttribute('data-line-start'));
+      const lineEnd = parseInt(thread.getAttribute('data-line-end'));
+      // For line-anchored threads on a single code block, highlight only the
+      // affected gutter rows instead of painting the whole <pre>.
+      if (start === end && Number.isFinite(lineStart) && Number.isFinite(lineEnd)) {
+        const anchor = getAnchorElByIdx(start);
+        const pre = anchor && (anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre'));
+        const rows = pre && pre.querySelector('.line-numbers-rows');
+        if (rows) {
+          for (let i = lineStart - 1; i < lineEnd && i < rows.children.length; i++) {
+            rows.children[i].classList.add('thread-active-line');
+          }
+          return;
+        }
+      }
       for (let i = start; i <= end; i++) {
         const el = getAnchorElByIdx(i);
         if (el) el.classList.add('thread-active');
@@ -2147,7 +2792,7 @@
     const openWalkedThrough = openPrep.filter(t => !t.pending).length;
     const draftCount = countLiveDrafts(state);
     const draftSeg = draftCount
-      ? `<span style="color:#0d9488;">${draftCount} draft${draftCount > 1 ? 's' : ''}</span>`
+      ? `<span class="meta-stat-draft">${draftCount} draft${draftCount > 1 ? 's' : ''}</span>`
       : null;
     const segments = [];
     if (totalThreads === 0) {
@@ -2156,7 +2801,7 @@
     } else {
       segments.push(`<b>${resolvedCount} of ${totalThreads}</b> resolved`);
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
-      if (openPending) segments.push(`<span style="color:var(--pending-dark);">${openPending} pending discussion</span>`);
+      if (openPending) segments.push(`<span class="meta-stat-pending">${openPending} pending discussion</span>`);
       if (draftSeg) segments.push(draftSeg);
       segments.push('click a marker to open');
     }
@@ -2215,7 +2860,7 @@
 
   function updateEmptyState() {
     const anyOpen = document.querySelectorAll('.thread.open').length > 0;
-    emptyState.style.display = anyOpen ? 'none' : 'block';
+    emptyState.classList.toggle('hidden', anyOpen);
   }
 
   function renderAllThreads() {
@@ -2251,11 +2896,13 @@
 
     const state = loadState();
     const followupDrafts = state.drafts.followup || {};
+    const userThreadById = new Map((state.userThreads || []).map(t => [String(t.id), t]));
     byIdx.forEach((list, idx) => {
       const anchor = getAnchorElByIdx(idx);
       if (!anchor) return;
-      const stack = document.createElement('div');
-      stack.className = 'thread-marker-stack';
+      const pre = anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      let stack = null;
       list.forEach(thread => {
         const tid = thread.getAttribute('data-thread-id');
         const data = prepopulated.find(p => p.id === tid);
@@ -2268,37 +2915,131 @@
           + (hasDraftFollowup ? ' has-draft' : '');
         marker.setAttribute('data-thread-id', tid);
         marker.textContent = resolved ? '✓' : (data && data.index != null ? data.index : '•');
-        stack.appendChild(marker);
+        const userThread = userThreadById.get(tid);
+        const lineRange = userThread && userThread.lineRange;
+        const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
+        if (row) {
+          // Position the marker next to its anchored line in the gutter.
+          const wrapperRect = anchor.getBoundingClientRect();
+          const rowRect = row.getBoundingClientRect();
+          const top = rowRect.top - wrapperRect.top + (rowRect.height - 20) / 2;
+          marker.classList.add('aligned-to-line');
+          marker.style.top = top + 'px';
+          anchor.appendChild(marker);
+        } else {
+          if (!stack) {
+            stack = document.createElement('div');
+            stack.className = 'thread-marker-stack';
+          }
+          stack.appendChild(marker);
+        }
       });
-      anchor.appendChild(stack);
+      if (stack) anchor.appendChild(stack);
     });
 
     // Render new-thread draft markers (teal, dashed, "…"). These live
     // alongside thread markers on the same anchor if both exist.
+    //
+    // Two sources feed this:
+    //  1. Persisted drafts (state.drafts.newThread) — survive reload.
+    //  2. The currently-open editor (activeNewThreadDraft) — gives the user
+    //     a placeholder dot the moment they open the editor, before they've
+    //     typed anything. Cleared on cancel/click-off so the dot disappears.
     const newThreadDrafts = state.drafts.newThread || {};
+    const draftAnchors = new Map();
     Object.entries(newThreadDrafts).forEach(([key, draft]) => {
       if (!draft || !draft.text || !draft.text.trim()) return;
-      const anchor = getAnchorElByIdx(draft.anchorStart);
+      draftAnchors.set(key, {
+        key,
+        anchorStart: draft.anchorStart,
+        anchorEnd: draft.anchorEnd,
+      });
+    });
+    if (activeNewThreadDraft) {
+      const key = newThreadDraftKey(activeNewThreadDraft.anchorStart, activeNewThreadDraft.anchorEnd);
+      if (!draftAnchors.has(key)) {
+        draftAnchors.set(key, {
+          key,
+          anchorStart: activeNewThreadDraft.anchorStart,
+          anchorEnd: activeNewThreadDraft.anchorEnd,
+        });
+      }
+    }
+    draftAnchors.forEach(({ key, anchorStart, anchorEnd }) => {
+      const anchor = getAnchorElByIdx(anchorStart);
       if (!anchor) return;
       anchor.classList.add('has-thread');
-      let stack = anchor.querySelector('.thread-marker-stack');
-      if (!stack) {
-        stack = document.createElement('div');
-        stack.className = 'thread-marker-stack';
-        anchor.appendChild(stack);
-      }
       const marker = document.createElement('button');
       marker.className = 'thread-marker kind-draft';
       marker.setAttribute('data-draft-key', key);
-      marker.setAttribute('data-anchor-start', draft.anchorStart);
-      marker.setAttribute('data-anchor-end', draft.anchorEnd);
+      marker.setAttribute('data-anchor-start', anchorStart);
+      marker.setAttribute('data-anchor-end', anchorEnd);
       marker.textContent = '…';
-      stack.appendChild(marker);
+      // Drafts don't carry lineRange in persisted state, but if the editor
+      // for this exact anchor range is open we can read its lineRange from
+      // the in-memory cache and position the dot at the line.
+      const lineRange = (
+        activeNewThreadDraft
+        && activeNewThreadDraft.anchorStart === anchorStart
+        && activeNewThreadDraft.anchorEnd === anchorEnd
+      ) ? activeNewThreadDraft.lineRange : null;
+      const pre = lineRange
+        ? (anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre'))
+        : null;
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
+      if (row) {
+        const wrapperRect = anchor.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        const top = rowRect.top - wrapperRect.top + (rowRect.height - 20) / 2;
+        marker.classList.add('aligned-to-line');
+        marker.style.top = top + 'px';
+        anchor.appendChild(marker);
+      } else {
+        let stack = anchor.querySelector('.thread-marker-stack');
+        if (!stack) {
+          stack = document.createElement('div');
+          stack.className = 'thread-marker-stack';
+          anchor.appendChild(stack);
+        }
+        stack.appendChild(marker);
+      }
     });
+
+    // Render line-range gutter bars for code-block threads.
+    renderLineRangeIndicators(state);
 
     // Keep the header in sync — it surfaces draft count too.
     syncOpenThreadMarkerClasses();
     renderMetaStatus();
+  }
+
+  function renderLineRangeIndicators(state) {
+    document
+      .querySelectorAll('.line-numbers-rows > span.has-thread-line')
+      .forEach(span => {
+        span.classList.remove('has-thread-line', 'thread-resolved-line');
+      });
+    const userThreads = Array.isArray(state.userThreads) ? state.userThreads : [];
+    userThreads.forEach(thread => {
+      if (!thread.lineRange) return;
+      const anchorEl = getAnchorElByIdx(thread.anchorStart);
+      if (!anchorEl) return;
+      const pre = anchorEl.tagName === 'PRE' ? anchorEl : anchorEl.querySelector('pre');
+      if (!pre) return;
+      const rows = pre.querySelector('.line-numbers-rows');
+      if (!rows) return;
+      const spans = rows.children;
+      const resolved = !!(state.resolutions && state.resolutions[thread.id]);
+      const startIdx = Math.max(0, thread.lineRange.start - 1);
+      const endIdx = Math.min(spans.length, thread.lineRange.end);
+      for (let i = startIdx; i < endIdx; i++) {
+        const span = spans[i];
+        if (!span) continue;
+        span.classList.add('has-thread-line');
+        if (resolved) span.classList.add('thread-resolved-line');
+      }
+    });
   }
 
   function syncOpenThreadMarkerClasses() {
@@ -2324,8 +3065,8 @@
       const preview = text.slice(0, 200);
       tooltip.innerHTML = `<div class="tt-kind">Draft · in progress</div>`
         + `<div class="tt-quote">"${escapeHtml(preview)}${text.length > 200 ? '…' : ''}"</div>`
-        + `<div style="margin-top:4px; font-size:10.5px; opacity:0.7;">Click to resume</div>`;
-      tooltip.style.display = 'block';
+        + `<div class="tt-extra">Click to resume</div>`;
+      tooltip.classList.add('shown');
       positionTooltip(marker);
       return;
     }
@@ -2352,8 +3093,8 @@
     const noteCount = comments.length;
     const countSuffix = noteCount ? ` · ${noteCount} note${noteCount > 1 ? 's' : ''}` : '';
     const latestSuffix = ` · latest: ${latestContributorForThread(state, tid, prep)}`;
-    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}${escapeHtml(latestSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div style="margin-top:4px; font-size:10.5px; opacity:0.7;">${escapeHtml(extra)}</div>`;
-    tooltip.style.display = 'block';
+    tooltip.innerHTML = `<div class="tt-kind">${escapeHtml(kindLabel)}${escapeHtml(countSuffix)}${escapeHtml(latestSuffix)}</div><div class="tt-quote">"${escapeHtml(quote.slice(0, 200))}${quote.length > 200 ? '…' : ''}"</div><div class="tt-extra">${escapeHtml(extra)}</div>`;
+    tooltip.classList.add('shown');
     positionTooltip(marker);
   }
   function positionTooltip(marker) {
@@ -2367,7 +3108,7 @@
     tooltip.style.left = x + 'px';
     tooltip.style.top = y + 'px';
   }
-  function hideTooltip() { tooltip.style.display = 'none'; }
+  function hideTooltip() { tooltip.classList.remove('shown'); }
 
   document.addEventListener('mouseover', (e) => {
     const marker = e.target.closest('.thread-marker');
@@ -2401,10 +3142,30 @@
   });
 
   // ---------- Positioning ----------
+  function anchorTopForThread(threadEl, paneRightRect) {
+    const startIdx = threadEl.getAttribute('data-anchor-start');
+    const anchor = getAnchorElByIdx(startIdx);
+    if (!anchor) return null;
+    const lineStart = parseInt(threadEl.getAttribute('data-line-start'));
+    if (Number.isFinite(lineStart)) {
+      const pre = anchor.tagName === 'PRE' ? anchor : anchor.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = rows && rows.children[lineStart - 1];
+      if (row) return row.getBoundingClientRect().top - paneRightRect.top;
+    }
+    return anchor.getBoundingClientRect().top - paneRightRect.top;
+  }
   function reposition() {
+    // Match pane-right's content area to pane-left's so the grid doesn't
+    // stretch pane-left past its content. paneLeft.scrollHeight includes
+    // pane-left's own vertical padding; subtract pane-right's vertical
+    // padding so the rendered heights line up.
+    const cs = getComputedStyle(paneRight);
+    const pRightVPad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const baseTarget = paneLeft.scrollHeight - paneRight.offsetTop - pRightVPad;
     const open = Array.from(threadsHost.querySelectorAll('.thread.open'));
     if (!open.length) {
-      threadsHost.style.minHeight = (paneLeft.scrollHeight - paneRight.offsetTop + 100) + 'px';
+      threadsHost.style.minHeight = Math.max(0, baseTarget) + 'px';
       return;
     }
     open.sort((a, b) =>
@@ -2413,16 +3174,13 @@
     const gap = 10;
     let prevBottom = 0;
     open.forEach(thread => {
-      const startIdx = thread.getAttribute('data-anchor-start');
-      const anchor = getAnchorElByIdx(startIdx);
-      if (!anchor) return;
-      const anchorRect = anchor.getBoundingClientRect();
-      let top = anchorRect.top - paneRightRect.top;
+      let top = anchorTopForThread(thread, paneRightRect);
+      if (top == null) return;
       if (top < prevBottom + gap) top = prevBottom + gap;
       thread.style.top = top + 'px';
       prevBottom = top + thread.offsetHeight;
     });
-    threadsHost.style.minHeight = Math.max(prevBottom + 100, paneLeft.scrollHeight - paneRight.offsetTop + 100) + 'px';
+    threadsHost.style.minHeight = Math.max(prevBottom + 20, baseTarget) + 'px';
   }
   function scheduleReposition() {
     requestAnimationFrame(() => requestAnimationFrame(reposition));
@@ -2430,28 +3188,63 @@
 
   // ---------- New-thread editor ----------
   let newThreadEditor = null;
+  // Cached lineRange for the currently open editor so renderMarkers can
+  // place the teal draft dot at the line (drafts are persisted by anchor
+  // range only — line info lives in client memory until the thread saves).
+  let activeNewThreadDraft = null;
   function closeNewThreadEditor() {
     const hadEditor = !!newThreadEditor;
     if (newThreadEditor) { newThreadEditor.remove(); newThreadEditor = null; }
+    activeNewThreadDraft = null;
     document.querySelectorAll('#doc-content [data-anchor-idx].focused').forEach(el => el.classList.remove('focused'));
     document.querySelectorAll('#doc-content [data-anchor-idx].in-range').forEach(el => el.classList.remove('in-range'));
+    document.querySelectorAll('.line-numbers-rows > span.draft-active-line').forEach(span => span.classList.remove('draft-active-line'));
     // Re-render markers so a newly-stashed draft shows a teal marker in
     // the gutter, or a just-cleared draft disappears.
     if (hadEditor) renderMarkers();
   }
 
-  function openNewThreadEditor(startIdx, endIdx) {
+  function openNewThreadEditor(startIdx, endIdx, options) {
     closeNewThreadEditor();
-    for (let i = startIdx; i <= endIdx; i++) {
-      const el = getAnchorElByIdx(i);
-      if (el) el.classList.add(startIdx === endIdx ? 'focused' : 'in-range');
+    const lineRange = options && options.lineRange ? options.lineRange : null;
+    if (lineRange) {
+      // Line-range draft: highlight only the affected gutter rows, not the
+      // whole code block. The .pre-wrap anchor stays clean of .focused so the
+      // big blue outline doesn't cover the whole pre.
+      const wrapper = getAnchorElByIdx(startIdx);
+      const pre = wrapper && (wrapper.tagName === 'PRE' ? wrapper : wrapper.querySelector('pre'));
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      if (rows) {
+        for (let i = lineRange.start - 1; i < lineRange.end && i < rows.children.length; i++) {
+          rows.children[i].classList.add('draft-active-line');
+        }
+      }
+    } else {
+      for (let i = startIdx; i <= endIdx; i++) {
+        const el = getAnchorElByIdx(i);
+        if (el) el.classList.add(startIdx === endIdx ? 'focused' : 'in-range');
+      }
     }
     const anchorEl = getAnchorElByIdx(startIdx);
     if (!anchorEl) return;
 
+    // Stash the editor's anchor range (and lineRange when present) so
+    // renderMarkers can paint a placeholder draft dot the moment the editor
+    // opens. Cleared in closeNewThreadEditor so cancel/click-off makes the
+    // dot disappear.
+    activeNewThreadDraft = {
+      anchorStart: parseInt(startIdx, 10),
+      anchorEnd: parseInt(endIdx, 10),
+      lineRange: lineRange ? { ...lineRange } : null,
+    };
+    renderMarkers();
+
     const editor = document.createElement('div');
     editor.className = 'new-thread-editor';
-    const rangeLabel = startIdx === endIdx ? `#${startIdx}` : `#${startIdx}–${endIdx}`;
+    const lineLabel = lineRange
+      ? (lineRange.start === lineRange.end ? `, line ${lineRange.start}` : `, lines ${lineRange.start}–${lineRange.end}`)
+      : '';
+    const rangeLabel = (startIdx === endIdx ? `#${startIdx}` : `#${startIdx}–${endIdx}`) + lineLabel;
     const snippet = snippetOfRange(startIdx, endIdx);
     editor.innerHTML = `
       <div class="anchor-ref">${rangeLabel} · ${escapeHtml(snippet.slice(0, 140))}${snippet.length > 140 ? '…' : ''}</div>
@@ -2464,8 +3257,20 @@
     threadsHost.appendChild(editor);
 
     const paneRightRect = paneRight.getBoundingClientRect();
-    const anchorRect = anchorEl.getBoundingClientRect();
-    let top = anchorRect.top - paneRightRect.top;
+    // Anchor the editor card to the line row when lineRange is set, so it
+    // opens horizontally across from the line being commented on rather
+    // than at the top of the whole code block.
+    let top;
+    if (lineRange) {
+      const pre = anchorEl.tagName === 'PRE' ? anchorEl : anchorEl.querySelector('pre');
+      const rows = pre && pre.querySelector('.line-numbers-rows');
+      const row = rows && rows.children[lineRange.start - 1];
+      top = row
+        ? row.getBoundingClientRect().top - paneRightRect.top
+        : anchorEl.getBoundingClientRect().top - paneRightRect.top;
+    } else {
+      top = anchorEl.getBoundingClientRect().top - paneRightRect.top;
+    }
     const openThreads = Array.from(threadsHost.querySelectorAll('.thread.open'));
     openThreads.forEach(t => {
       const tTop = parseFloat(t.style.top || 0);
@@ -2514,6 +3319,7 @@
         snippet,
         text,
         createdAt,
+        lineRange: lineRange ? { ...lineRange } : null,
       });
       s.threads.push({
         id,
@@ -2524,6 +3330,7 @@
         breadcrumb: '',
         createdAt,
         kind: 'user',
+        ...(lineRange ? { lineRange: { ...lineRange } } : {}),
       });
       if (!s.followups[id]) s.followups[id] = [];
       s.followups[id].push({ text, addedAt: createdAt, kind: 'thread' });
@@ -2542,6 +3349,7 @@
             anchorEnd: parseInt(endIdx),
             snippet,
             text,
+            ...(lineRange ? { lineRange: { start: lineRange.start, end: lineRange.end } } : {}),
           },
         });
         let draftClearError = null;
@@ -2587,7 +3395,7 @@
         console.error('Failed to create thread:', error);
         setCurrentState(previousState);
         renderAllThreads();
-        openNewThreadEditor(startIdx, endIdx);
+        openNewThreadEditor(startIdx, endIdx, { lineRange });
         const restoredTextarea = newThreadEditor?.querySelector('textarea');
         if (restoredTextarea) {
           restoredTextarea.value = text;
@@ -2650,11 +3458,61 @@
     const lo = Math.min(startIdx, endIdx);
     const hi = Math.max(startIdx, endIdx);
     const rect = r.getBoundingClientRect();
-    return { startIdx: lo, endIdx: hi, rect };
+    const lineRange = lineRangeWithinPre(r, startEl, endEl);
+    return { startIdx: lo, endIdx: hi, rect, lineRange };
+  }
+
+  function lineRangeWithinPre(range, startAnchor, endAnchor) {
+    if (!startAnchor || startAnchor !== endAnchor) return null;
+    // Comrak wraps <pre> in <div class="pre-wrap" data-anchor-idx="N"> — that
+    // wrapper is what closestAnchor returns. Walk down to the actual <pre>.
+    const pre = startAnchor.tagName === 'PRE'
+      ? startAnchor
+      : startAnchor.querySelector('pre');
+    if (!pre) return null;
+    const code = pre.querySelector('code') || pre;
+    const startOffset = rangeOffsetWithin(code, range.startContainer, range.startOffset);
+    const endOffset = rangeOffsetWithin(code, range.endContainer, range.endOffset);
+    if (startOffset == null || endOffset == null) return null;
+    const codeText = code.textContent || '';
+    const lo = Math.min(startOffset, endOffset);
+    const hi = Math.max(startOffset, endOffset);
+    const startLine = lineNumberAt(codeText, lo);
+    let endLine = lineNumberAt(codeText, hi);
+    // Round to whole lines: if the selection ends right at the start of a line
+    // (offset just past a \n), the user clearly meant the previous line.
+    if (hi > lo && hi > 0 && codeText[hi - 1] === '\n') {
+      endLine = Math.max(startLine, endLine - 1);
+    }
+    if (endLine < startLine) return null;
+    return { start: startLine, end: endLine };
+  }
+
+  // Use Range.toString() over a clone bounded by the code element. This is
+  // robust against Prism's tokenized <span> tree, where naive textNode walks
+  // can desync with how Range computes offsets.
+  function rangeOffsetWithin(root, container, offset) {
+    if (root !== container && !root.contains(container)) return null;
+    try {
+      const prefix = document.createRange();
+      prefix.selectNodeContents(root);
+      prefix.setEnd(container, offset);
+      return prefix.toString().length;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function lineNumberAt(text, offset) {
+    let line = 1;
+    for (let i = 0; i < offset && i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) line++;
+    }
+    return line;
   }
   function updateSelectionPopup() {
     const info = selectionRange();
-    if (!info) { selectionPopup.style.display = 'none'; return; }
+    if (!info) { selectionPopup.classList.remove('shown'); return; }
     const { rect } = info;
     const popupW = 110;
     let x = rect.right - popupW - 6;
@@ -2663,9 +3521,16 @@
     if (x < 10) x = 10;
     selectionPopup.style.left = x + 'px';
     selectionPopup.style.top = y + 'px';
-    selectionPopup.style.display = 'block';
+    selectionPopup.classList.add('shown');
     selectionPopup.dataset.startIdx = info.startIdx;
     selectionPopup.dataset.endIdx = info.endIdx;
+    if (info.lineRange) {
+      selectionPopup.dataset.lineStart = String(info.lineRange.start);
+      selectionPopup.dataset.lineEnd = String(info.lineRange.end);
+    } else {
+      delete selectionPopup.dataset.lineStart;
+      delete selectionPopup.dataset.lineEnd;
+    }
   }
   document.addEventListener('selectionchange', () => setTimeout(updateSelectionPopup, 0));
   document.addEventListener('mouseup', () => setTimeout(updateSelectionPopup, 0));
@@ -2675,9 +3540,14 @@
     e.preventDefault();
     const startIdx = parseInt(selectionPopup.dataset.startIdx);
     const endIdx = parseInt(selectionPopup.dataset.endIdx);
-    selectionPopup.style.display = 'none';
+    const lineStart = parseInt(selectionPopup.dataset.lineStart);
+    const lineEnd = parseInt(selectionPopup.dataset.lineEnd);
+    const lineRange = Number.isFinite(lineStart) && Number.isFinite(lineEnd)
+      ? { start: lineStart, end: lineEnd }
+      : null;
+    selectionPopup.classList.remove('shown');
     window.getSelection()?.removeAllRanges?.();
-    openNewThreadEditor(startIdx, endIdx);
+    openNewThreadEditor(startIdx, endIdx, { lineRange });
   });
 
   // ---------- Click dispatch ----------
@@ -2689,6 +3559,7 @@
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
+    if (e.target.closest('#toast-host')) return;
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
@@ -2790,12 +3661,154 @@
   document.addEventListener('click', blockCompletedInteraction, true);
   document.addEventListener('input', blockCompletedInteraction, true);
 
+  // ---------- Click-to-comment per code line ----------
+  // The Prism line-numbers plugin renders one <span> per line inside
+  // .line-numbers-rows. We make those rows clickable so a single click on a
+  // line opens a new-thread editor anchored to that one line. Capture phase
+  // so we preempt the document-level "click on <pre>" handler that would
+  // otherwise create a whole-block thread.
+  document.addEventListener('click', (event) => {
+    const span = event.target.closest && event.target.closest('.line-numbers-rows > span');
+    if (!span) return;
+    const rows = span.parentElement;
+    // The anchor with data-anchor-idx is the <div class="pre-wrap"> wrapper
+    // around the <pre>, not the <pre> itself.
+    const wrapper = rows && rows.closest('[data-anchor-idx]');
+    if (!wrapper) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const blockIdx = parseInt(wrapper.getAttribute('data-anchor-idx'));
+    const lineNumber = Array.prototype.indexOf.call(rows.children, span) + 1;
+    if (!Number.isFinite(blockIdx) || lineNumber < 1) return;
+    if (!showAllBtn.classList.contains('on')) closeAllThreads();
+    openNewThreadEditor(blockIdx, blockIdx, {
+      lineRange: { start: lineNumber, end: lineNumber },
+    });
+  }, true);
+
+  // ---------- Theme toggle ----------
+  const THEME_STORAGE_KEY = 'discuss-theme';
+  const THEME_MODES = ['system', 'light', 'dark'];
+  const themeMediaQuery = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+  function effectiveThemeFor(mode) {
+    if (mode === 'system') {
+      return themeMediaQuery && themeMediaQuery.matches ? 'dark' : 'light';
+    }
+    return mode;
+  }
+  function currentThemeMode() {
+    const root = document.documentElement;
+    return THEME_MODES.includes(root.dataset.themeMode) ? root.dataset.themeMode : 'system';
+  }
+  function applyThemeMode(mode) {
+    const root = document.documentElement;
+    const effective = effectiveThemeFor(mode);
+    root.dataset.theme = effective;
+    root.dataset.themeMode = mode;
+    document.querySelectorAll('link[data-prism-theme]').forEach(link => {
+      link.disabled = (link.dataset.prismTheme !== effective);
+    });
+    // The button shows the current mode's icon (system / light / dark).
+    document.querySelectorAll('.theme-toggle .theme-icon').forEach(icon => {
+      icon.hidden = !icon.classList.contains('theme-icon-' + mode);
+    });
+    // The menu shows a checkmark next to the active option.
+    document.querySelectorAll('.theme-menu-item').forEach(item => {
+      const isActive = item.getAttribute('data-mode') === mode;
+      item.classList.toggle('active', isActive);
+      item.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    });
+  }
+  function initThemeToggle() {
+    const btn = document.getElementById('theme-toggle');
+    const list = document.getElementById('theme-menu-list');
+    if (!btn || !list) return;
+    applyThemeMode(currentThemeMode());
+
+    function openMenu() {
+      list.hidden = false;
+      btn.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+    }
+    function closeMenu() {
+      list.hidden = true;
+      btn.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (list.hidden) openMenu(); else closeMenu();
+    });
+    list.addEventListener('click', (event) => {
+      const item = event.target.closest('.theme-menu-item');
+      if (!item) return;
+      event.stopPropagation();
+      const mode = item.getAttribute('data-mode');
+      if (!THEME_MODES.includes(mode)) return;
+      try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+      applyThemeMode(mode);
+      closeMenu();
+      btn.focus();
+    });
+    document.addEventListener('click', (event) => {
+      if (list.hidden) return;
+      if (event.target.closest('#theme-menu')) return;
+      closeMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !list.hidden) {
+        closeMenu();
+        btn.focus();
+      }
+    });
+
+    if (themeMediaQuery) {
+      const onSystemChange = () => {
+        if (currentThemeMode() === 'system') applyThemeMode('system');
+      };
+      if (themeMediaQuery.addEventListener) {
+        themeMediaQuery.addEventListener('change', onSystemChange);
+      } else if (themeMediaQuery.addListener) {
+        themeMediaQuery.addListener(onSystemChange);
+      }
+    }
+  }
+
+  // ---------- Syntax highlighting ----------
+  function highlightCodeBlocks() {
+    if (!window.Prism) return;
+    document.querySelectorAll('#doc-content pre').forEach(pre => {
+      pre.classList.add('line-numbers');
+    });
+    Prism.highlightAllUnder(document.getElementById('doc-content'));
+  }
+  function attachPrismCompleteHook() {
+    if (!window.Prism || !Prism.hooks || !Prism.hooks.add) return;
+    if (window.__discussPrismHookAttached) return;
+    window.__discussPrismHookAttached = true;
+    Prism.hooks.add('complete', function (env) {
+      if (!env || !env.element) return;
+      const docContent = document.getElementById('doc-content');
+      if (!docContent || !docContent.contains(env.element)) return;
+      // Re-attach line-range gutter bars once the line-numbers plugin has
+      // produced the per-line spans inside this <pre>.
+      renderMarkers();
+    });
+  }
+
   // ---------- Init ----------
+  initThemeToggle();
+  attachPrismCompleteHook();
   hydrateState().then(() => {
+    highlightCodeBlocks();
     renderAllThreads();
     scheduleReposition();
     startEventStream();
     startHeartbeat();
+    setTimeout(scheduleReposition, 600);
+    setTimeout(scheduleReposition, 1500);
   });
   window.addEventListener('beforeunload', () => {
     stopHeartbeat();

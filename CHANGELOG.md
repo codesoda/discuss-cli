@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-28
+
+### Added
+- Browser-side syntax highlighting for fenced code blocks via [Prism](https://prismjs.com/) loaded from unpkg, including language-aware diffs (e.g. ` ```diff-rust `, ` ```diff-typescript `). The autoloader fetches grammars on demand, so any Prism-supported language works; unknown tags fall back to plain `<pre><code>`. Tag every fence with a language — see `skills/discuss/SKILL.md` for the curated list and Prism's site for the full set.
+- Light/dark/system theme toggle in the top bar (inline SVG icons; sun/moon/monitor). Persists to `localStorage` under `discuss-theme`. System mode subscribes to `prefers-color-scheme` and updates live. A pre-paint `<head>` bootstrap script applies the saved mode before first paint, preventing the flash of wrong theme on reload. Dark mode also recolors discuss's own UI via `[data-theme="dark"]` overrides on the existing CSS variables.
+- Inline comments on code blocks via an optional `lineRange: { start, end }` field on threads. Selecting text inside a single `<pre>` and creating a thread anchors it to those lines; the gutter shows a thin colored bar (faded green when resolved) on the affected line numbers. Whole-block threads still work via the existing click-without-selection path. Schema added to `src/state/types.rs`, propagated through `POST /api/threads`, `/api/state`, `thread.created` events (stdout + SSE), and the Done/history transcript. Server validates `start >= 1` and `end >= start` — otherwise structured 400 `validation_error`.
+- Heading minimap pinned to the left edge of the document — collapsed bars (h1–h4) by default, expand into a feathered translucent panel on hover with click-to-scroll and a tooltip per heading. Bar widths scale proportionally to heading text length so the longest heading anchors to the right edge of the panel. The first heading visible in the viewport (or the most recent one scrolled past) gets an accent-colored highlight, updated on scroll via `requestAnimationFrame`. Hovered bars grow vertically into the surrounding gap (negative margins keep flex layout stable, `border-radius: 999px` caps to a pill shape) without pushing siblings.
+- GitHub link in the header bar — sits between the spacer and the "Show all" toggle, opens `https://github.com/codesoda/discuss-cli` in a new tab. Styled to match the existing theme-toggle icon button (32×32, muted color, accent-soft hover tint in both light and dark themes).
+
+### Changed
+- `Prism.manual = true` plus a post-hydration `Prism.highlightAllUnder('#doc-content')` call lets the page control highlighting timing rather than auto-running on `DOMContentLoaded`. Prism's `complete` hook re-runs `renderMarkers` so the line-range gutter bars settle once the autoloader finishes any deferred grammar load.
+- Removed trailing blank space below short documents: `.workspace-grid` now uses `align-items: start` so panes hug their content instead of stretching to viewport, and a column gradient on the grid (card / divider / bg) preserves the per-column background colors when cells stop short. `reposition()` measures pane-right's vertical padding via `getComputedStyle` and matches `threadsHost.minHeight` to pane-left's content area so neither pane outgrows the other. Pane bottom padding tightened from 180px to 80px.
+
 ## [0.3.0] - 2026-04-27
 
 ### Added

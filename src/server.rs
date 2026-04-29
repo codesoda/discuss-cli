@@ -32,7 +32,7 @@ use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
-    Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
+    Draft, LineRange, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
 use crate::transcript::build_transcript;
 use crate::{Config, DiscussError, Result, render, template};
@@ -427,6 +427,8 @@ struct CreateThreadRequest {
     anchor_end: usize,
     snippet: String,
     text: String,
+    #[serde(default)]
+    line_range: Option<LineRange>,
 }
 
 #[derive(Debug, Serialize)]
@@ -549,6 +551,15 @@ async fn post_api_threads(
             );
         }
     };
+    if let Some(line_range) = request.line_range
+        && (line_range.start == 0 || line_range.end < line_range.start)
+    {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "lineRange must satisfy 1 <= start <= end",
+        );
+    }
     let created_at = Utc::now();
     let thread = Thread {
         id: app_state.next_user_thread_id(),
@@ -559,6 +570,7 @@ async fn post_api_threads(
         text: request.text,
         created_at,
         kind: ThreadKind::User,
+        line_range: request.line_range,
     };
 
     if app_state

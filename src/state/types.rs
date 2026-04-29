@@ -14,6 +14,13 @@ pub enum ThreadKind {
     Prepopulated,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
@@ -25,6 +32,8 @@ pub struct Thread {
     pub text: String,
     pub created_at: DateTime<Utc>,
     pub kind: ThreadKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_range: Option<LineRange>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,6 +162,7 @@ mod tests {
             text: "Needs clarification".to_string(),
             created_at: timestamp(),
             kind: ThreadKind::User,
+            line_range: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");
@@ -164,6 +174,29 @@ mod tests {
         assert_eq!(value["kind"], "user");
         assert!(value.get("anchor_start").is_none());
         assert!(value.get("created_at").is_none());
+        assert!(value.get("lineRange").is_none());
+
+        let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
+        assert_eq!(round_tripped, thread);
+    }
+
+    #[test]
+    fn thread_round_trips_with_line_range_in_camel_case() {
+        let thread = Thread {
+            id: ThreadId("u-code".to_string()),
+            anchor_start: 7,
+            anchor_end: 7,
+            snippet: "fn main() {}".to_string(),
+            breadcrumb: String::new(),
+            text: "Why is this here?".to_string(),
+            created_at: timestamp(),
+            kind: ThreadKind::User,
+            line_range: Some(LineRange { start: 3, end: 5 }),
+        };
+
+        let value = serde_json::to_value(&thread).expect("serialize thread");
+        assert_eq!(value["lineRange"], json!({ "start": 3, "end": 5 }));
+        assert!(value["lineRange"].get("Start").is_none());
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
         assert_eq!(round_tripped, thread);
