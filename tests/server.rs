@@ -40,7 +40,13 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("content-type: text/html; charset=utf-8")
     );
-    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
+    let body = response_body(&response);
+    assert!(body.contains("/assets/preact.umd.js"));
+    assert!(body.contains(r#"id="discuss-rendered-files""#));
+    assert!(
+        body.contains("Review Plan"),
+        "rendered markdown should be seeded into v2 page"
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -93,7 +99,7 @@ async fn shutdown_allows_started_request_to_complete() {
 }
 
 #[tokio::test]
-async fn get_root_serves_v2_template_when_ui_query_param_set() {
+async fn get_root_defaults_to_v2_and_serves_v1_when_ui_query_param_set() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process().with_markdown_source("# Hello v2");
     {
@@ -110,7 +116,7 @@ async fn get_root_serves_v2_template_when_ui_query_param_set() {
 
     wait_for_server(addr).await;
 
-    let response = get_path(addr, "/?ui=v2").await;
+    let response = get_path(addr, "/").await;
     assert!(response.starts_with("HTTP/1.1 200"));
     let body = response_body(&response);
     assert!(body.contains("/assets/preact.umd.js"));
@@ -126,7 +132,7 @@ async fn get_root_serves_v2_template_when_ui_query_param_set() {
         "rendered markdown HTML should be seeded into v2 page"
     );
 
-    let v1_response = get_path(addr, "/").await;
+    let v1_response = get_path(addr, "/?ui=v1").await;
     assert!(v1_response.starts_with("HTTP/1.1 200"));
     let v1_body = response_body(&v1_response);
     assert!(doc_content(v1_body).contains("<h1>Hello v2</h1>"));
@@ -160,11 +166,15 @@ async fn get_root_seeds_current_state_for_reload() {
     wait_for_server(addr).await;
 
     let response = get_root(addr).await;
-    let initial_state = initial_state_script(response_body(&response));
+    let body = response_body(&response);
+    let initial_state = initial_state_script(body);
 
     assert!(initial_state.contains("\"u-one\""));
     assert!(initial_state.contains("\"u-two\""));
-    assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+    assert!(
+        body.contains("State Seed"),
+        "rendered markdown should be seeded into v2 page"
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

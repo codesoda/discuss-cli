@@ -1489,8 +1489,8 @@ async fn get_root(
     Query(query): Query<UiVariantQuery>,
 ) -> Response {
     let result = match query.ui.as_deref() {
-        Some("v2") => render_root_page_v2(&app_state),
-        _ => render_root_page(&app_state),
+        Some("v1") => render_root_page(&app_state),
+        _ => render_root_page_v2(&app_state),
     };
 
     match result {

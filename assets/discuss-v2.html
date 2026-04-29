@@ -1422,8 +1422,8 @@ window.__DISCUSS_RENDERED_FILES__ = {};
             />`}
         <main class="v2-content">
           <p class="v2-banner">
-            discuss v2 (in progress) · ${initialFiles.length} file${initialFiles.length === 1 ? '' : 's'} · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
-            <a href="/">switch to v1</a>
+            ${initialFiles.length} file${initialFiles.length === 1 ? '' : 's'} · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
+            <a href="/?ui=v1" title="Switch back to the legacy UI for this release">legacy UI</a>
             <${ThemeToggle} />
           </p>
           ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}

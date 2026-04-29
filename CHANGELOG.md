@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- v2 Preact UI is now the default at `/`. The legacy v1 shell is still available as an opt-out for one release via `?ui=v1`, and the v2 banner links to it from the header (labeled "legacy UI"). The next release will drop v1 entirely.
+
 ### Added
 - New-thread draft keys now include `fileId`. Previously a draft on file `a.md` line 5 collided with a draft on `b.md` line 5; the key encoding became `<fileId>|<start>-<end>` (e.g. `f-2|3-5`) and the upsert/clear request DTOs and `draft.updated`/`draft.cleared` SSE payloads carry `fileId`. Legacy single-file archives that key on `<start>-<end>` deserialize into the default file id (`f-1`) for compatibility.
 - Done transcript / history archive groups threads by file. The Done payload now carries a top-level `files: Vec<FileMeta>` array (id / path / kind for every file in the session) and threads sort by `(file_index, anchor_start, anchor_end)` instead of a flat anchor sort, so multi-file sessions and `discuss diff` archives lay out as one block per file. Single-file sessions stay byte-for-byte compatible (the `files` key is omitted when no source is provided).
