@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Bundled `assets/mermaid.min.js` upgraded from a v8-era build to mermaid v11.14.0 (UMD/iife) so modern flowchart syntax (`subgraph X["label"]`, cylinder shapes, `<br/>` in node labels, unicode arrows) renders correctly. The hydration shim was rewritten to use the v10/v11 promise-based `mermaid.render(id, source)` API with `securityLevel: 'loose'`, surfaces parse failures inline as a `.mermaid-error` note instead of failing silently, and now marks `<pre>` blocks with `mermaid-block`/`no-line-numbers` *before* Prism runs. `highlightCodeBlocks()` skips those blocks (no `line-numbers` class, no `Prism.highlightElement`) so mermaid sources are no longer tokenized by Prism before the SVG render lands. Asset size budget bumped from 700 KB to 4 MB to fit v11.
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
