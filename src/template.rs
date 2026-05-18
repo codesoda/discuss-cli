@@ -216,7 +216,8 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        assert!(!page.contains("localStorage"));
+        // Old state-in-localStorage pattern used STORAGE_KEY — must stay removed.
+        // localStorage is now used for UI preferences (CMD_ENTER_KEY, theme), which is fine.
         assert!(!page.contains("STORAGE_KEY"));
     }
 
