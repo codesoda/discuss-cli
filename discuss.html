@@ -553,7 +553,8 @@
     font-weight: 500;
   }
   .followup button.resolve:hover { background: #d8e8d8; }
-  .followup .hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .enter-to-send { display: flex; align-items: center; gap: 3px; margin-left: auto; cursor: pointer; font-size: 11px; color: var(--muted); user-select: none; }
+  .enter-to-send input { margin: 0; cursor: pointer; }
   .mutation-error {
     display: flex;
     align-items: center;
@@ -1697,6 +1698,23 @@
     }
   });
 
+  // ---------- Send-shortcut setting ----------
+  const CMD_ENTER_KEY = 'discuss-cmd-enter-to-send';
+  function isCmdEnterRequired() { return localStorage.getItem(CMD_ENTER_KEY) !== 'false'; }
+  function setCmdEnterRequired(v) { localStorage.setItem(CMD_ENTER_KEY, v ? 'true' : 'false'); document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v); }
+  function enterSendCheckboxHtml() {
+    return `<label class="enter-to-send"><input type="checkbox" ${isCmdEnterRequired() ? 'checked' : ''}> ⌘ Enter to send</label>`;
+  }
+  function wireEnterSendCheckbox(container) {
+    const cb = container.querySelector('.enter-to-send input');
+    if (cb) cb.addEventListener('change', () => setCmdEnterRequired(cb.checked));
+  }
+  function shouldSendOnKey(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') return true;
+    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !isCmdEnterRequired()) return true;
+    return false;
+  }
+
   // ---------- DOM references ----------
   const paneLeft = document.getElementById('pane-left');
   const paneRight = document.getElementById('pane-right');
@@ -1739,12 +1757,12 @@
         <div class="user-comment-list"></div>
         <div class="resolution-banner"></div>
         <div class="followup">
-          <textarea placeholder="Add follow-up note — or leave blank and press Resolve to close this point… (⌘/Ctrl+Enter to save)"></textarea>
+          <textarea placeholder="Add follow-up note — or leave blank and press Resolve to close this point…"></textarea>
           <div class="actions">
             <button class="primary save">Save</button>
             <button class="resolve" title="Resolve this point. If the textarea has content, it becomes the decision. Leave blank to resolve without a reason.">Resolve ✓</button>
             <button class="clear">Clear</button>
-            <span class="hint">⌘/Ctrl+Enter</span>
+            ${enterSendCheckboxHtml()}
           </div>
         </div>
       </div>
@@ -1778,12 +1796,12 @@
         <div class="user-comment-list"></div>
         <div class="resolution-banner"></div>
         <div class="followup">
-          <textarea placeholder="Add note — or leave blank and press Resolve to close this point… (⌘/Ctrl+Enter to save)"></textarea>
+          <textarea placeholder="Add note — or leave blank and press Resolve to close this point…"></textarea>
           <div class="actions">
             <button class="primary save">Save</button>
             <button class="resolve" title="Resolve this point. If the textarea has content, it becomes the decision. Leave blank to resolve without a reason.">Resolve ✓</button>
             <button class="clear">Clear</button>
-            <span class="hint">⌘/Ctrl+Enter</span>
+            ${enterSendCheckboxHtml()}
           </div>
         </div>
       </div>
@@ -2014,8 +2032,9 @@
     });
     ta.addEventListener('blur', () => renderMarkers());
     ta.addEventListener('keydown', (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
+      if (shouldSendOnKey(e)) { e.preventDefault(); save(); }
     });
+    wireEnterSendCheckbox(followup);
   }
 
   function renderResolution(threadEl, threadId) {
@@ -2455,10 +2474,11 @@
     const snippet = snippetOfRange(startIdx, endIdx);
     editor.innerHTML = `
       <div class="anchor-ref">${rangeLabel} · ${escapeHtml(snippet.slice(0, 140))}${snippet.length > 140 ? '…' : ''}</div>
-      <textarea placeholder="New comment anchored to ${startIdx === endIdx ? 'this element' : 'these elements'}… (⌘/Ctrl+Enter to save, Esc to cancel)"></textarea>
+      <textarea placeholder="New comment anchored to ${startIdx === endIdx ? 'this element' : 'these elements'}… (Esc to cancel)"></textarea>
       <div class="actions">
         <button class="primary save">Save</button>
         <button class="cancel">Cancel</button>
+        ${enterSendCheckboxHtml()}
       </div>
     `;
     threadsHost.appendChild(editor);
@@ -2622,8 +2642,9 @@
     });
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); closeNewThreadEditor(); }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save(); }
+      if (shouldSendOnKey(e)) { e.preventDefault(); save(); }
     });
+    wireEnterSendCheckbox(editor);
     newThreadEditor = editor;
   }
 
