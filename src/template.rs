@@ -12,7 +12,17 @@ const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
 pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
     let page = inject_initial_state(&page, initial_state_json);
+    let page = inject_version(&page);
     inject_mermaid_shim(&page)
+}
+
+const VERSION_PLACEHOLDER: &str = "window.__DISCUSS_VERSION__ = \"\";";
+
+fn inject_version(page: &str) -> String {
+    let version_json =
+        serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".to_string());
+    let replacement = format!("window.__DISCUSS_VERSION__ = {};", version_json);
+    page.replacen(VERSION_PLACEHOLDER, &replacement, 1)
 }
 
 pub fn render_v2_page(initial_state_json: &str, rendered_files_json: &str) -> String {
@@ -25,14 +35,23 @@ pub fn render_v2_page(initial_state_json: &str, rendered_files_json: &str) -> St
         "window.__DISCUSS_RENDERED_FILES__ = {};",
         js_safe_json(rendered_files_json)
     );
+    let version_replacement = format!(
+        "window.__DISCUSS_VERSION__ = {};",
+        js_safe_json(
+            &serde_json::to_string(env!("CARGO_PKG_VERSION"))
+                .unwrap_or_else(|_| "\"\"".to_string())
+        )
+    );
 
     template
         .replacen(V2_INITIAL_STATE_PLACEHOLDER, &state_replacement, 1)
         .replacen(V2_RENDERED_FILES_PLACEHOLDER, &rendered_replacement, 1)
+        .replacen(V2_VERSION_PLACEHOLDER, &version_replacement, 1)
 }
 
 const V2_INITIAL_STATE_PLACEHOLDER: &str = "window.__DISCUSS_INITIAL_STATE__ = {};";
 const V2_RENDERED_FILES_PLACEHOLDER: &str = "window.__DISCUSS_RENDERED_FILES__ = {};";
+const V2_VERSION_PLACEHOLDER: &str = "window.__DISCUSS_VERSION__ = \"\";";
 
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
     let section_start =
@@ -141,7 +160,13 @@ mod tests {
     fn without_injected_scripts(html: &str) -> String {
         let html =
             without_injected_script(html, INITIAL_STATE_SCRIPT_OPEN, INITIAL_STATE_SCRIPT_CLOSE);
-        without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE)
+        let html =
+            without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE);
+        let version_line = format!(
+            "window.__DISCUSS_VERSION__ = {};",
+            serde_json::to_string(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| "\"\"".to_string())
+        );
+        html.replacen(&version_line, VERSION_PLACEHOLDER, 1)
     }
 
     #[test]

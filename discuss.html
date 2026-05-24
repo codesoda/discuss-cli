@@ -56,6 +56,45 @@
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css">
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
 
+<script id="discuss-version">
+window.__DISCUSS_VERSION__ = "";
+</script>
+
+<script id="discuss-version-paint">
+(function () {
+  function paint() {
+    var el = document.getElementById('header-version');
+    if (!el) return;
+    var v = window.__DISCUSS_VERSION__ || '';
+    el.textContent = v ? 'v' + v : '';
+  }
+  function fetchUpdate() {
+    if (!window.__DISCUSS_VERSION__) return;
+    fetch('/api/version-check')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (!data || !data.updateAvailable || !data.latest) return;
+        var el = document.getElementById('header-update');
+        if (!el) return;
+        el.textContent = 'update available · v' + data.latest;
+        el.href = data.releaseUrl || '#';
+        el.title = 'Run `discuss update` to upgrade to v' + data.latest;
+        el.hidden = false;
+      })
+      .catch(function () {});
+  }
+  function init() {
+    paint();
+    fetchUpdate();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+
 <!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
 <script id="discuss-theme-bootstrap">
 (function () {
@@ -159,6 +198,22 @@
     gap: 16px;
   }
   header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .header-version { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: -6px; }
+  header .header-version:empty { display: none; }
+  header .header-update {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-dashed);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    text-decoration: none;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+  header .header-update:hover { background: var(--accent-hover); }
+  header .header-update:empty { display: none; }
   header .meta { color: var(--muted); font-size: 13px; }
   header .spacer { flex: 1; }
   header .toggle {
@@ -344,8 +399,8 @@
   /* --- Left-pane content --- */
   #doc-content h1 { font-size: 22px; margin: 0 0 16px 0; font-weight: 700; }
   #doc-content h2 { font-size: 19px; margin: 24px 0 10px 0; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-  #doc-content h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; color: #333; }
-  #doc-content h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; color: #444; }
+  #doc-content h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; color: var(--ink); }
+  #doc-content h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; color: var(--ink); }
   #doc-content p { margin: 8px 0; }
   #doc-content ul, #doc-content ol { padding-left: 22px; margin: 8px 0; }
   #doc-content li { margin: 3px 0; }
@@ -1072,12 +1127,14 @@
 <body>
 
 <header>
-  <h1>Contextual Discussion</h1>
-  <span class="meta" id="meta-status">Loading…</span>
-  <span class="spacer"></span>
+  <h1>Discuss</h1>
+  <span class="header-version" id="header-version" data-version></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
   </a>
+  <a class="header-update" id="header-update" href="" target="_blank" rel="noopener noreferrer" hidden></a>
+  <span class="meta" id="meta-status">Loading…</span>
+  <span class="spacer"></span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">

@@ -96,8 +96,8 @@ mod tests {
     fn discuss_v2_template_assigns_anchor_indices_and_renders_threads_panel() {
         let template = discuss_v2_html();
         assert!(template.contains("setAttribute('data-anchor-idx'"));
-        assert!(template.contains("v2-threads-panel"));
-        assert!(template.contains("function ThreadsPanel"));
+        assert!(template.contains("v2-threads-host"));
+        assert!(template.contains("function ThreadsHost"));
         assert!(template.contains("function scrollToAnchor"));
     }
 

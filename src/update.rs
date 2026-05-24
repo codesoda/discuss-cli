@@ -12,6 +12,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, LOCATION};
 use reqwest::redirect::Policy;
 use semver::Version;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use tempfile::{NamedTempFile, TempPath};
@@ -30,11 +31,37 @@ struct LatestRelease {
     version: Version,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheck {
+    pub current: String,
+    pub latest: String,
+    pub update_available: bool,
+    pub release_url: String,
+}
+
 pub fn check() -> Result<String> {
     let current = current_version()?;
     let latest = latest_release()?;
 
     Ok(status_line(&current, &latest.version))
+}
+
+pub fn run_update_check() -> Result<UpdateCheck> {
+    let current = current_version()?;
+    let latest = latest_release()?;
+    let update_available = compare_versions(&current, &latest.version) == Ordering::Less;
+
+    Ok(UpdateCheck {
+        current: current.to_string(),
+        latest: latest.version.to_string(),
+        update_available,
+        release_url: release_html_url(&latest.tag),
+    })
+}
+
+fn release_html_url(tag: &str) -> String {
+    format!("{}/releases/tag/{tag}", env!("CARGO_PKG_REPOSITORY"))
 }
 
 pub fn install(yes: bool) -> Result<String> {

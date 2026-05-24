@@ -40,13 +40,7 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("content-type: text/html; charset=utf-8")
     );
-    let body = response_body(&response);
-    assert!(body.contains("/assets/preact.umd.js"));
-    assert!(body.contains(r#"id="discuss-rendered-files""#));
-    assert!(
-        body.contains("Review Plan"),
-        "rendered markdown should be seeded into v2 page"
-    );
+    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -99,9 +93,9 @@ async fn shutdown_allows_started_request_to_complete() {
 }
 
 #[tokio::test]
-async fn get_root_defaults_to_v2_and_serves_v1_when_ui_query_param_set() {
+async fn get_root_serves_v1_template_for_all_ui_variants() {
     let addr = free_loopback_addr();
-    let app_state = AppState::for_process().with_markdown_source("# Hello v2");
+    let app_state = AppState::for_process().with_markdown_source("# Hello world");
     {
         let mut state = app_state
             .state
@@ -116,27 +110,12 @@ async fn get_root_defaults_to_v2_and_serves_v1_when_ui_query_param_set() {
 
     wait_for_server(addr).await;
 
-    let response = get_path(addr, "/").await;
-    assert!(response.starts_with("HTTP/1.1 200"));
-    let body = response_body(&response);
-    assert!(body.contains("/assets/preact.umd.js"));
-    assert!(body.contains("/assets/preact-hooks.umd.js"));
-    assert!(body.contains("/assets/htm.umd.js"));
-    assert!(body.contains(r#"id="app""#));
-    assert!(body.contains(r#"id="discuss-initial-state""#));
-    assert!(body.contains(r#"id="discuss-rendered-files""#));
-    assert!(body.contains("\"u-v2\""));
-    assert!(body.contains("__DISCUSS_RENDERED_FILES__"));
-    assert!(
-        body.contains("Hello v2"),
-        "rendered markdown HTML should be seeded into v2 page"
-    );
-
-    let v1_response = get_path(addr, "/?ui=v1").await;
-    assert!(v1_response.starts_with("HTTP/1.1 200"));
-    let v1_body = response_body(&v1_response);
-    assert!(doc_content(v1_body).contains("<h1>Hello v2</h1>"));
-    assert!(!v1_body.contains("/assets/preact.umd.js"));
+    for path in ["/", "/?ui=v1", "/?ui=v2"] {
+        let response = get_path(addr, path).await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let body = response_body(&response);
+        assert!(doc_content(body).contains("<h1>Hello world</h1>"));
+    }
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

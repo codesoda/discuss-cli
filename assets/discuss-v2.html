@@ -122,6 +122,375 @@
     .review-complete .v2-tree li { pointer-events: none; }
     .v2-banner .v2-theme-toggle { margin-left: 0.5rem; padding: 0.15rem 0.55rem; border-radius: 4px; border: 1px solid rgba(127,127,127,0.4); background: transparent; cursor: pointer; font: inherit; font-size: 0.75rem; color: inherit; }
     .v2-banner .v2-theme-toggle:hover { background: rgba(127,127,127,0.12); }
+
+    :root {
+      color-scheme: light dark;
+      --bg: #fdfdfb;
+      --card: #ffffff;
+      --ink: #2a2a2a;
+      --muted: #7a7a78;
+      --accent: #1d6fd8;
+      --accent-soft: rgba(29, 111, 216, 0.10);
+      --accent-hover: rgba(29, 111, 216, 0.06);
+      --accent-dashed: rgba(11, 95, 255, 0.45);
+      --accent-range: rgba(11, 95, 255, 0.18);
+      --line: #e8e6e0;
+      --line-strong: #d4d2cc;
+      --pre-bg: #f0efeb;
+      --quote: #fdf6c1;
+      --quote-border: #c8a85a;
+      --decision: #c8e6cb;
+      --decision-border: #5a8a6c;
+      --callout: #c1d4e6;
+      --callout-border: #4a6a8c;
+      --context: #e8e8e6;
+      --user-note: #e8c4d2;
+      --user-note-border: #c44a72;
+      --pending: #fff8d8;
+      --pending-border: #c8a85a;
+      --pending-dark: #8a7838;
+      --marker-blue: #3b82f6;
+      --marker-yellow: #e9b949;
+      --marker-pink: #d75d82;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --v2-header-h: 54px;
+      --left-w: 60%;
+      --divider-w: 6px;
+      --left-gutter: 44px;
+      --v2-header-bg: var(--card);
+      --v2-header-line: var(--line-strong);
+      --v2-header-ink: var(--ink);
+      --v2-header-muted: var(--muted);
+      --v2-header-card: var(--card);
+    }
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #1a1a1a;
+      --card: #252525;
+      --ink: #e8e8e6;
+      --muted: #a8a8a4;
+      --accent: #5a9bff;
+      --accent-soft: rgba(90, 155, 255, 0.18);
+      --accent-hover: rgba(90, 155, 255, 0.10);
+      --accent-dashed: rgba(90, 155, 255, 0.45);
+      --accent-range: rgba(90, 155, 255, 0.18);
+      --line: #3a3a38;
+      --line-strong: #4c4c48;
+      --pre-bg: #2d2d2c;
+      --quote: #3a3210;
+      --quote-border: #8a7838;
+      --context: #2a2a28;
+      --decision: #1f3526;
+      --decision-border: #4a8862;
+      --callout: #1a2a3f;
+      --callout-border: #3a6aa8;
+      --user-note: #3a1f29;
+      --user-note-border: #8a4a5f;
+      --pending: #3a3210;
+      --pending-border: #6a5a30;
+      --pending-dark: #c8a85a;
+      --marker-blue: #5a9bff;
+      --marker-yellow: #f0c860;
+      --marker-pink: #e87a9c;
+    }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .v2-workspace {
+      position: fixed;
+      top: var(--v2-header-h);
+      left: 0; right: 0; bottom: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    .v2-workspace-grid {
+      display: grid;
+      grid-template-columns: var(--left-w) var(--divider-w) 1fr;
+      min-height: 100%;
+      align-items: start;
+      background: linear-gradient(
+        to right,
+        var(--card) 0,
+        var(--card) var(--left-w),
+        var(--line-strong) var(--left-w),
+        var(--line-strong) calc(var(--left-w) + var(--divider-w)),
+        var(--bg) calc(var(--left-w) + var(--divider-w)),
+        var(--bg) 100%
+      );
+    }
+    .v2-workspace-grid[data-tree-open="true"] {
+      grid-template-columns: var(--tree-w) var(--left-w) var(--divider-w) 1fr;
+      background: linear-gradient(
+        to right,
+        var(--card) 0,
+        var(--card) var(--tree-w),
+        var(--line) var(--tree-w),
+        var(--line) calc(var(--tree-w) + 1px),
+        var(--card) calc(var(--tree-w) + 1px),
+        var(--card) calc(var(--tree-w) + var(--left-w)),
+        var(--line-strong) calc(var(--tree-w) + var(--left-w)),
+        var(--line-strong) calc(var(--tree-w) + var(--left-w) + var(--divider-w)),
+        var(--bg) calc(var(--tree-w) + var(--left-w) + var(--divider-w)),
+        var(--bg) 100%
+      );
+    }
+    .v2-pane-left, .v2-pane-right { min-width: 0; }
+    .v2-pane-left {
+      padding: 28px var(--left-gutter) 80px 36px;
+      background: var(--card);
+      border-right: 1px solid var(--line);
+    }
+    .v2-pane-right {
+      padding: 28px 24px 80px 24px;
+      background: var(--bg);
+      position: relative;
+    }
+    #v2-divider {
+      align-self: stretch;
+      background: var(--line-strong);
+      cursor: col-resize;
+      position: relative;
+      transition: background 0.12s;
+    }
+    #v2-divider:hover, #v2-divider.dragging { background: var(--accent); }
+    #v2-divider::before {
+      content: "";
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 2px; height: 32px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 1px;
+    }
+    body.dragging, body.dragging * { user-select: none !important; cursor: col-resize !important; }
+
+    .v2-pane-left article.v2-doc { line-height: 1.55; }
+    .v2-pane-left article.v2-doc h1 { font-size: 22px; margin: 0 0 16px 0; font-weight: 700; }
+    .v2-pane-left article.v2-doc h2 { font-size: 19px; margin: 24px 0 10px 0; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+    .v2-pane-left article.v2-doc h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; }
+    .v2-pane-left article.v2-doc h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; }
+    .v2-pane-left article.v2-doc p { margin: 8px 0; }
+    .v2-pane-left article.v2-doc ul, .v2-pane-left article.v2-doc ol { padding-left: 22px; margin: 8px 0; }
+    .v2-pane-left article.v2-doc li { margin: 3px 0; }
+    .v2-pane-left article.v2-doc blockquote { margin: 10px 0; border-left: 3px solid var(--accent); padding: 4px 12px; background: var(--accent-hover); }
+    .v2-pane-left article.v2-doc :not(pre) > code { font-family: var(--mono); font-size: 0.9em; background: var(--context); padding: 1px 5px; border-radius: 3px; }
+    .v2-pane-left article.v2-doc pre {
+      margin: 10px 0;
+      background: var(--pre-bg);
+      padding: 10px 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .v2-pane-left article.v2-doc pre code { background: none; padding: 0; font-size: inherit; }
+
+    .v2-pane-left article.v2-doc [data-anchor-idx] {
+      position: relative;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 0.12s, outline-color 0.12s;
+    }
+    .v2-pane-left article.v2-doc [data-anchor-idx]:hover {
+      outline: 1px dashed var(--accent-dashed);
+      outline-offset: 2px;
+    }
+    .v2-pane-left article.v2-doc [data-anchor-idx].focused {
+      outline: 1px solid var(--accent);
+      outline-offset: 2px;
+      background: var(--accent-soft);
+    }
+    .v2-pane-left article.v2-doc [data-anchor-idx].in-range {
+      outline: 1px dashed var(--accent-dashed);
+      outline-offset: 2px;
+      background: var(--accent-range);
+    }
+    .v2-pane-left article.v2-doc [data-anchor-idx].has-thread {
+      outline: 1px solid rgba(127,127,127,0.25);
+      outline-offset: 2px;
+    }
+    .v2-pane-left article.v2-doc [data-anchor-idx].has-thread:hover {
+      outline: 1px dashed var(--accent-dashed);
+    }
+
+    .v2-threads-host { position: relative; min-height: 100%; }
+    .v2-threads-host > .v2-thread-card { position: absolute; left: 0; right: 0; transition: top 0.12s; }
+    .v2-threads-host > .v2-thread-card[data-expanded="true"] { z-index: 2; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+    .v2-page-header {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: var(--v2-header-h);
+      z-index: 100;
+      background: var(--v2-header-bg);
+      border-bottom: 1px solid var(--v2-header-line);
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 24px;
+      color: var(--v2-header-ink);
+    }
+    .v2-page-header h1 { margin: 0; font-size: 16px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .v2-page-header .v2-header-version { color: var(--v2-header-muted); font-size: 12px; font-weight: 400; margin-left: -4px; }
+    .v2-page-header .v2-header-meta { color: var(--v2-header-muted); font-size: 13px; white-space: nowrap; }
+    .v2-page-header .v2-header-spacer { flex: 1; }
+    .v2-page-header .v2-header-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      color: var(--v2-header-muted); text-decoration: none;
+      flex: 0 0 auto;
+    }
+    .v2-page-header .v2-header-link:hover { background: rgba(127,127,127,0.12); color: var(--v2-header-ink); }
+    .v2-page-header button.v2-header-link { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; }
+    .v2-page-header .v2-tree-toggle.active { background: rgba(29,111,216,0.12); color: #1d6fd8; }
+    html[data-theme="dark"] .v2-page-header .v2-tree-toggle.active { color: #5fa6ff; background: rgba(95,166,255,0.18); }
+    .v2-page-header .v2-header-update {
+      flex: 0 0 auto;
+      font-size: 11px; font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(29,111,216,0.12);
+      color: #1d6fd8;
+      text-decoration: none;
+      border: 1px solid rgba(29,111,216,0.25);
+      white-space: nowrap;
+    }
+    .v2-page-header .v2-header-update:hover { background: rgba(29,111,216,0.2); }
+    html[data-theme="dark"] .v2-page-header .v2-header-update { color: #5fa6ff; background: rgba(95,166,255,0.15); border-color: rgba(95,166,255,0.3); }
+    .v2-page-header .v2-theme-menu { position: relative; display: inline-flex; flex: 0 0 auto; }
+    .v2-page-header .v2-theme-toggle {
+      width: 32px; height: 32px; padding: 0;
+      border: 1px solid rgba(127,127,127,0.35);
+      background: transparent;
+      color: var(--v2-header-muted);
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .v2-page-header .v2-theme-toggle:hover { background: rgba(127,127,127,0.12); color: var(--v2-header-ink); }
+    .v2-page-header .v2-theme-toggle.open { background: rgba(29,111,216,0.12); color: #1d6fd8; border-color: #1d6fd8; }
+    html[data-theme="dark"] .v2-page-header .v2-theme-toggle.open { color: #5fa6ff; background: rgba(95,166,255,0.18); border-color: #5fa6ff; }
+    .v2-page-header .v2-theme-toggle .v2-theme-icon { width: 18px; height: 18px; display: block; }
+    .v2-theme-menu-list {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      min-width: 144px;
+      padding: 4px;
+      background: var(--v2-header-bg);
+      border: 1px solid rgba(127,127,127,0.35);
+      border-radius: 6px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 110;
+    }
+    .v2-theme-menu-item {
+      font: inherit; font-size: 13px;
+      text-align: left;
+      padding: 6px 10px;
+      border: 0;
+      background: transparent;
+      color: var(--v2-header-ink);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .v2-theme-menu-item:hover { background: rgba(127,127,127,0.12); }
+    .v2-theme-menu-item.active { background: rgba(29,111,216,0.12); }
+    html[data-theme="dark"] .v2-theme-menu-item.active { background: rgba(95,166,255,0.18); }
+    .v2-theme-menu-item .v2-theme-icon { width: 16px; height: 16px; flex: 0 0 auto; color: var(--v2-header-muted); }
+    .v2-theme-menu-item.active .v2-theme-icon { color: #1d6fd8; }
+    html[data-theme="dark"] .v2-theme-menu-item.active .v2-theme-icon { color: #5fa6ff; }
+    .v2-theme-menu-item .v2-theme-check { margin-left: auto; color: #1d6fd8; width: 14px; height: 14px; }
+    html[data-theme="dark"] .v2-theme-menu-item .v2-theme-check { color: #5fa6ff; }
+    .v2-theme-menu-item:not(.active) .v2-theme-check { visibility: hidden; }
+    .v2-page-header #v2-done-button {
+      font: inherit;
+      padding: 7px 14px;
+      border: 1px solid #1d6fd8;
+      background: #1d6fd8;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 13px;
+      flex: 0 0 auto;
+    }
+    .v2-page-header #v2-done-button:hover { opacity: 0.92; }
+    .v2-page-header #v2-done-button.ok { background: #2e7d32; border-color: #2e7d32; }
+    .v2-page-header #v2-done-button:disabled { opacity: 0.65; cursor: default; }
+    .v2-page-header .v2-done-error { font-size: 12px; color: #c33; }
+
+    /* push the layout below the fixed header */
+    body { padding-top: var(--v2-header-h); }
+    .v2-done-banner { top: var(--v2-header-h) !important; bottom: auto !important; left: 0 !important; right: 0 !important; transform: none !important; border-radius: 0 !important; padding: 10px 24px !important; }
+
+    /* heading minimap (single-file markdown) */
+    .v2-minimap {
+      position: fixed;
+      top: calc(var(--v2-header-h) + 36px);
+      left: 2px;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 8px 8px 8px 6px;
+      width: 22px;
+      max-height: calc(100vh - var(--v2-header-h) - 72px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      transition: width 0.18s ease, background 0.18s ease;
+      scrollbar-width: none;
+    }
+    .v2-minimap::-webkit-scrollbar { display: none; }
+    .v2-minimap::before {
+      content: ""; position: absolute; inset: -8px -12px;
+      background: rgba(255,255,255,0.32);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      opacity: 0; pointer-events: none; z-index: -1;
+      transition: opacity 0.18s ease;
+      -webkit-mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+      mask-image: radial-gradient(ellipse 90% 95% at center, black 40%, rgba(0,0,0,0) 95%);
+    }
+    html[data-theme="dark"] .v2-minimap::before { background: rgba(40,40,40,0.32); }
+    .v2-minimap:hover { width: 220px; }
+    .v2-minimap:hover::before { opacity: 1; }
+    .v2-minimap .hm-bar {
+      display: block; flex: 0 0 auto; height: 5px; width: 12px;
+      border: 0; padding: 0; border-radius: 999px;
+      background: rgba(0,0,0,0.22);
+      cursor: pointer;
+      transition: height 0.18s ease, width 0.18s ease, background 0.12s ease, margin-left 0.18s ease, margin-top 0.12s ease, margin-bottom 0.12s ease;
+    }
+    html[data-theme="dark"] .v2-minimap .hm-bar { background: rgba(255,255,255,0.22); }
+    .v2-minimap .hm-bar[data-level="1"] { margin-left: 0; }
+    .v2-minimap .hm-bar[data-level="2"] { margin-left: 6px; }
+    .v2-minimap .hm-bar[data-level="3"] { margin-left: 12px; }
+    .v2-minimap .hm-bar[data-level="4"] { margin-left: 18px; }
+    .v2-minimap:hover .hm-bar { height: 7px; width: var(--hm-w-expanded, 180px); }
+    .v2-minimap:hover .hm-bar:hover { background: var(--v2-header-ink); height: 14px; margin-top: -3.5px; margin-bottom: -3.5px; z-index: 1; }
+    .v2-minimap .hm-bar.is-active { background: #1d6fd8; }
+    html[data-theme="dark"] .v2-minimap .hm-bar.is-active { background: #5a9bff; }
+    .v2-minimap:hover .hm-bar.is-active { background: #1d6fd8; }
+    .v2-minimap:hover .hm-bar.is-active:hover { background: var(--v2-header-ink); }
+    .v2-hm-tooltip {
+      position: fixed; display: none;
+      background: var(--v2-header-ink); color: var(--v2-header-bg);
+      font-size: 12px; line-height: 1.2;
+      padding: 5px 9px; border-radius: 4px;
+      white-space: nowrap; pointer-events: none; z-index: 60;
+      max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }
   </style>
   <script src="/assets/preact.umd.js"></script>
   <script src="/assets/preact-hooks.umd.js"></script>
@@ -152,6 +521,9 @@ window.__DISCUSS_INITIAL_STATE__ = {};
   </script>
   <script id="discuss-rendered-files">
 window.__DISCUSS_RENDERED_FILES__ = {};
+  </script>
+  <script id="discuss-version">
+window.__DISCUSS_VERSION__ = "";
   </script>
   <script>
 (function() {
@@ -281,8 +653,22 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     return '⌖';
   }
 
+  const SYSTEM_ICON_SVG = html`<svg class="v2-theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`;
+  const LIGHT_ICON_SVG = html`<svg class="v2-theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M4.93 19.07l1.41-1.41"/><path d="M17.66 6.34l1.41-1.41"/></svg>`;
+  const DARK_ICON_SVG = html`<svg class="v2-theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+  const CHECK_ICON_SVG = html`<svg class="v2-theme-check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
+
+  function themeIconSvg(mode) {
+    if (mode === 'light') return LIGHT_ICON_SVG;
+    if (mode === 'dark') return DARK_ICON_SVG;
+    return SYSTEM_ICON_SVG;
+  }
+
   function ThemeToggle() {
     const [mode, setMode] = useState(readStoredThemeMode());
+    const [open, setOpen] = useState(false);
+    const wrapRef = useRef(null);
+
     useEffect(() => {
       if (!themeMediaQuery) return undefined;
       const onChange = () => { if (mode === 'system') applyThemeMode('system'); };
@@ -293,21 +679,59 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       themeMediaQuery.addListener(onChange);
       return () => themeMediaQuery.removeListener(onChange);
     }, [mode]);
-    function cycle() {
-      const next = nextThemeMode(mode);
+
+    useEffect(() => {
+      if (!open) return undefined;
+      function onDocClick(e) {
+        if (!wrapRef.current) return;
+        if (!wrapRef.current.contains(e.target)) setOpen(false);
+      }
+      function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+      document.addEventListener('mousedown', onDocClick);
+      document.addEventListener('keydown', onKey);
+      return () => {
+        document.removeEventListener('mousedown', onDocClick);
+        document.removeEventListener('keydown', onKey);
+      };
+    }, [open]);
+
+    function pick(next) {
       applyThemeMode(next);
       setMode(next);
+      setOpen(false);
     }
+
     return html`
-      <button
-        class="v2-theme-toggle"
-        type="button"
-        aria-label=${`theme: ${mode}`}
-        title=${`theme: ${mode} (click to change)`}
-        onClick=${cycle}
-      >
-        ${themeIcon(mode)} ${mode}
-      </button>
+      <span class="v2-theme-menu" ref=${wrapRef}>
+        <button
+          class=${`v2-theme-toggle${open ? ' open' : ''}`}
+          type="button"
+          aria-label="Color theme"
+          aria-haspopup="menu"
+          aria-expanded=${open ? 'true' : 'false'}
+          title="Color theme"
+          onClick=${() => setOpen(o => !o)}
+        >
+          ${themeIconSvg(mode)}
+        </button>
+        ${open
+          ? html`<div class="v2-theme-menu-list" role="menu" aria-label="Color theme">
+              ${THEME_MODES.map(m => html`
+                <button
+                  class=${`v2-theme-menu-item${m === mode ? ' active' : ''}`}
+                  role="menuitemradio"
+                  aria-checked=${m === mode ? 'true' : 'false'}
+                  type="button"
+                  onClick=${() => pick(m)}
+                >
+                  ${themeIconSvg(m)}
+                  <span>${m === 'system' ? 'System' : m === 'light' ? 'Light' : 'Dark'}</span>
+                  ${CHECK_ICON_SVG}
+                </button>
+              `)}
+            </div>`
+          : null}
+      </span>
     `;
   }
 
@@ -802,57 +1226,102 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     `;
   }
 
-  function ThreadsPanel({
+  function ThreadsHost({
     threads, files, replies, takes, resolutions, drafts,
     selectedThreadId, onSelect, onCollapse, onReply, onResolve, onUnresolve, onDelete, onScrollTo,
     onSaveFollowupDraft, onClearFollowupDraft,
   }) {
+    const hostRef = useRef(null);
     const filesById = useMemo(() => {
       const map = {};
       files.forEach(file => { map[file.id] = file; });
       return map;
     }, [files]);
 
-    const grouped = useMemo(() => groupThreadsByFile(threads, files), [threads, files]);
+    useEffect(() => {
+      function reposition() {
+        const host = hostRef.current;
+        if (!host) return;
+        const paneRight = host.parentElement;
+        const paneLeft = document.querySelector('.v2-pane-left');
+        if (!paneLeft || !paneRight) return;
+        const cs = window.getComputedStyle(paneRight);
+        const padTop = parseFloat(cs.paddingTop) || 0;
+        const padBottom = parseFloat(cs.paddingBottom) || 0;
+        const baseTarget = paneLeft.scrollHeight - paneRight.offsetTop - padTop - padBottom;
 
-    if (!threads.length) {
-      return html`
-        <aside class="v2-threads-panel">
-          <h2>Threads</h2>
-          <p class="v2-threads-empty">no threads yet</p>
-        </aside>
-      `;
-    }
+        const sortedThreads = threads.slice().sort((a, b) => (a.anchorStart - b.anchorStart) || (a.anchorEnd - b.anchorEnd));
+        const paneRightRect = paneRight.getBoundingClientRect();
+        const gap = 10;
+        let prevBottom = 0;
+
+        sortedThreads.forEach(thread => {
+          const card = host.querySelector(`[data-thread-id="${cssEscape(thread.id)}"]`);
+          if (!card) return;
+          const fileId = thread.fileId || (files[0] && files[0].id);
+          const anchor = document.querySelector(
+            `[data-file-id="${cssEscape(fileId || '')}"] [data-anchor-idx="${thread.anchorStart}"]`
+          );
+          if (!anchor) return;
+          const anchorTop = anchor.getBoundingClientRect().top - paneRightRect.top;
+          let top = Math.max(anchorTop, prevBottom + gap);
+          card.style.top = top + 'px';
+          prevBottom = top + card.offsetHeight;
+        });
+
+        host.style.minHeight = Math.max(prevBottom + 20, baseTarget, 0) + 'px';
+      }
+
+      let raf = false;
+      function schedule() {
+        if (raf) return;
+        raf = true;
+        requestAnimationFrame(() => {
+          raf = false;
+          reposition();
+        });
+      }
+
+      schedule();
+      // Re-run a few times after threads change to catch async layout (Prism/Mermaid)
+      const t1 = setTimeout(schedule, 60);
+      const t2 = setTimeout(schedule, 250);
+      const t3 = setTimeout(schedule, 600);
+
+      const ws = document.querySelector('.v2-workspace');
+      if (ws) ws.addEventListener('scroll', schedule, { passive: true });
+      window.addEventListener('resize', schedule, { passive: true });
+      return () => {
+        clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+        if (ws) ws.removeEventListener('scroll', schedule);
+        window.removeEventListener('resize', schedule);
+      };
+    }, [threads, replies, takes, resolutions, selectedThreadId, files]);
+
     return html`
-      <aside class="v2-threads-panel">
-        <h2>Threads (${threads.length})</h2>
-        ${grouped.map(({ fileId, items }) => html`
-          <section class="v2-thread-group" key=${fileId}>
-            <div class="v2-thread-group-path">${(filesById[fileId] && filesById[fileId].path) || fileId}</div>
-            ${items.map(thread => html`
-              <${ThreadCard}
-                key=${thread.id}
-                thread=${thread}
-                file=${filesById[thread.fileId]}
-                replyList=${replies[thread.id]}
-                takeList=${takes[thread.id]}
-                resolution=${resolutions[thread.id] || null}
-                replyDraftText=${(drafts && drafts[thread.id] && drafts[thread.id].text) || ''}
-                expanded=${selectedThreadId === thread.id}
-                onSelect=${onSelect}
-                onCollapse=${onCollapse}
-                onReply=${onReply}
-                onResolve=${onResolve}
-                onUnresolve=${onUnresolve}
-                onDelete=${onDelete}
-                onScrollTo=${onScrollTo}
-                onSaveFollowupDraft=${onSaveFollowupDraft}
-                onClearFollowupDraft=${onClearFollowupDraft}
-              />
-            `)}
-          </section>
+      <div class="v2-threads-host" ref=${hostRef}>
+        ${threads.map(thread => html`
+          <${ThreadCard}
+            key=${thread.id}
+            thread=${thread}
+            file=${filesById[thread.fileId]}
+            replyList=${replies[thread.id]}
+            takeList=${takes[thread.id]}
+            resolution=${resolutions[thread.id] || null}
+            replyDraftText=${(drafts && drafts[thread.id] && drafts[thread.id].text) || ''}
+            expanded=${selectedThreadId === thread.id}
+            onSelect=${onSelect}
+            onCollapse=${onCollapse}
+            onReply=${onReply}
+            onResolve=${onResolve}
+            onUnresolve=${onUnresolve}
+            onDelete=${onDelete}
+            onScrollTo=${onScrollTo}
+            onSaveFollowupDraft=${onSaveFollowupDraft}
+            onClearFollowupDraft=${onClearFollowupDraft}
+          />
         `)}
-      </aside>
+      </div>
     `;
   }
 
@@ -884,6 +1353,15 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     el.classList.add('v2-anchor-flash');
     setTimeout(() => el.classList.remove('v2-anchor-flash'), 800);
+  }
+
+  function compareSemver(a, b) {
+    const parse = v => String(v || '').split('.').map(s => parseInt(s, 10) || 0);
+    const [a1, a2, a3] = parse(a);
+    const [b1, b2, b3] = parse(b);
+    if (a1 !== b1) return a1 - b1;
+    if (a2 !== b2) return a2 - b2;
+    return a3 - b3;
   }
 
   function cssEscape(value) {
@@ -1082,8 +1560,120 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     return '';
   }
 
+  function HeadingMinimap({ activeFileId, fileKind }) {
+    const navRef = useRef(null);
+    const tooltipRef = useRef(null);
+    const headingsRef = useRef([]);
+
+    useEffect(() => {
+      if (fileKind && fileKind !== 'markdown') {
+        if (navRef.current) navRef.current.innerHTML = '';
+        headingsRef.current = [];
+        return undefined;
+      }
+
+      let raf = false;
+      let buildTimer = null;
+
+      function build() {
+        const article = document.querySelector('article.v2-doc[data-file-id]');
+        if (!article || !navRef.current) {
+          headingsRef.current = [];
+          if (navRef.current) navRef.current.innerHTML = '';
+          return;
+        }
+        const headings = Array.from(article.querySelectorAll('h1, h2, h3, h4'))
+          .map(el => ({
+            el,
+            level: parseInt(el.tagName.substring(1), 10),
+            text: (el.textContent || '').trim(),
+          }))
+          .filter(h => h.text.length > 0);
+        headingsRef.current = headings;
+        navRef.current.innerHTML = '';
+        if (headings.length < 2) return;
+
+        const longestTextLen = Math.max(...headings.map(h => h.text.length));
+        const containerInnerWidth = 206;
+        const indentForLevel = lvl => (lvl - 1) * 6;
+
+        headings.forEach((h, i) => {
+          const bar = document.createElement('button');
+          bar.type = 'button';
+          bar.className = 'hm-bar';
+          bar.setAttribute('data-level', String(h.level));
+          bar.setAttribute('data-idx', String(i));
+          bar.setAttribute('aria-label', h.text);
+          bar.title = h.text;
+          const targetRight = (h.text.length / longestTextLen) * containerInnerWidth;
+          const width = Math.max(12, targetRight - indentForLevel(h.level));
+          bar.style.setProperty('--hm-w-expanded', width + 'px');
+          bar.addEventListener('click', e => {
+            e.preventDefault();
+            const top = h.el.getBoundingClientRect().top + window.scrollY - 64;
+            window.scrollTo({ top, behavior: 'smooth' });
+          });
+          bar.addEventListener('mouseenter', () => {
+            if (!tooltipRef.current) return;
+            tooltipRef.current.textContent = h.text;
+            const rect = bar.getBoundingClientRect();
+            tooltipRef.current.style.display = 'block';
+            const tipH = tooltipRef.current.offsetHeight || 22;
+            tooltipRef.current.style.left = (rect.right + 8) + 'px';
+            tooltipRef.current.style.top = (rect.top + rect.height / 2 - tipH / 2) + 'px';
+          });
+          bar.addEventListener('mouseleave', () => {
+            if (tooltipRef.current) tooltipRef.current.style.display = 'none';
+          });
+          navRef.current.appendChild(bar);
+        });
+      }
+
+      function updateActive() {
+        raf = false;
+        const headings = headingsRef.current;
+        if (!headings.length || !navRef.current) return;
+        const headerH = 54;
+        const viewportH = window.innerHeight;
+        let firstVisible = -1;
+        let lastPassed = -1;
+        for (let i = 0; i < headings.length; i++) {
+          const top = headings[i].el.getBoundingClientRect().top;
+          if (top < headerH) lastPassed = i;
+          else if (top <= viewportH) { firstVisible = i; break; }
+          else break;
+        }
+        const activeIdx = firstVisible !== -1 ? firstVisible : lastPassed;
+        navRef.current.querySelectorAll('.hm-bar').forEach((b, i) => {
+          b.classList.toggle('is-active', i === activeIdx);
+        });
+      }
+
+      function schedule() {
+        if (raf) return;
+        raf = true;
+        requestAnimationFrame(updateActive);
+      }
+
+      buildTimer = setTimeout(() => { build(); updateActive(); }, 80);
+      window.addEventListener('scroll', schedule, { passive: true });
+      window.addEventListener('resize', schedule, { passive: true });
+      return () => {
+        if (buildTimer) clearTimeout(buildTimer);
+        window.removeEventListener('scroll', schedule);
+        window.removeEventListener('resize', schedule);
+      };
+    }, [activeFileId, fileKind]);
+
+    return html`
+      <nav class="v2-minimap" ref=${navRef} aria-label="Document outline"></nav>
+      <span class="v2-hm-tooltip" ref=${tooltipRef}></span>
+    `;
+  }
+
   function App() {
     const [activeFileId, setActiveFileId] = useState(initialFiles[0] ? initialFiles[0].id : null);
+    const [treeOpen, setTreeOpen] = useState(initialFiles.length > 1);
     const [threads, setThreads] = useState(initialThreads);
     const [replies, setReplies] = useState(initialReplies);
     const [takes, setTakes] = useState(initialTakes);
@@ -1095,6 +1685,103 @@ window.__DISCUSS_RENDERED_FILES__ = {};
     const [reviewComplete, setReviewComplete] = useState(false);
     const [doneBusy, setDoneBusy] = useState(false);
     const [doneError, setDoneError] = useState(null);
+    const [updateInfo, setUpdateInfo] = useState(null);
+    const currentVersion = window.__DISCUSS_VERSION__ || '';
+
+    useEffect(() => {
+      if (!currentVersion) return undefined;
+      let cancelled = false;
+      fetch('/api/version-check')
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => {
+          if (cancelled || !data) return;
+          if (data.updateAvailable && data.latest) {
+            setUpdateInfo({ version: data.latest, url: data.releaseUrl || '' });
+          }
+        })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }, [currentVersion]);
+
+    useEffect(() => {
+      const divider = document.getElementById('v2-divider');
+      if (!divider) return undefined;
+      function onPointerDown(e) {
+        e.preventDefault();
+        const grid = document.querySelector('.v2-workspace-grid');
+        const paneLeft = document.querySelector('.v2-pane-left');
+        if (!grid || !paneLeft) return;
+        divider.classList.add('dragging');
+        document.body.classList.add('dragging');
+        const startX = e.clientX;
+        const startLeft = paneLeft.getBoundingClientRect().width;
+        const totalWidth = grid.getBoundingClientRect().width;
+        const treeOffset = grid.dataset.treeOpen === 'true'
+          ? (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tree-w')) || 220)
+          : 0;
+        const usableWidth = totalWidth - treeOffset;
+        function onMove(ev) {
+          const dx = ev.clientX - startX;
+          let newLeft = startLeft + dx;
+          newLeft = Math.max(280, Math.min(newLeft, usableWidth - 320));
+          const pct = (newLeft / usableWidth) * 100;
+          document.documentElement.style.setProperty('--left-w', pct + '%');
+        }
+        function onUp() {
+          divider.classList.remove('dragging');
+          document.body.classList.remove('dragging');
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+        }
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      }
+      divider.addEventListener('pointerdown', onPointerDown);
+      return () => divider.removeEventListener('pointerdown', onPointerDown);
+    }, [activeFileId, treeOpen]);
+
+    useEffect(() => {
+      if (reviewComplete) return undefined;
+      function onClick(e) {
+        if (e.defaultPrevented) return;
+        if (e.button !== 0) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return;
+        const paneLeft = e.target.closest('.v2-pane-left');
+        if (!paneLeft) return;
+        const anchor = e.target.closest('[data-anchor-idx]');
+        if (!anchor) return;
+        const article = anchor.closest('[data-file-id]');
+        if (!article) return;
+        const idx = parseInt(anchor.getAttribute('data-anchor-idx'), 10);
+        if (!Number.isFinite(idx)) return;
+        const rect = anchor.getBoundingClientRect();
+        openEditor({
+          fileId: article.getAttribute('data-file-id'),
+          anchorStart: idx,
+          anchorEnd: idx,
+          snippet: (anchor.textContent || '').trim().slice(0, 280),
+          rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+        });
+      }
+      document.addEventListener('click', onClick);
+      return () => document.removeEventListener('click', onClick);
+    }, [reviewComplete, activeFileId]);
+
+    useEffect(() => {
+      function applyHasThread() {
+        document.querySelectorAll('.v2-pane-left [data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
+        threads.forEach(t => {
+          const fileId = t.fileId || (initialFiles[0] && initialFiles[0].id);
+          for (let i = t.anchorStart; i <= t.anchorEnd; i++) {
+            const el = document.querySelector(`[data-file-id="${cssEscape(fileId || '')}"] [data-anchor-idx="${i}"]`);
+            if (el) el.classList.add('has-thread');
+          }
+        });
+      }
+      const t = setTimeout(applyHasThread, 60);
+      return () => clearTimeout(t);
+    }, [threads, activeFileId]);
 
     useEffect(() => {
       function handleSelectionChange() {
@@ -1397,51 +2084,102 @@ window.__DISCUSS_RENDERED_FILES__ = {};
       ? drafts.newThread[editorDraftKey].text
       : '';
 
+    const singleFile = initialFiles.length === 1;
+    const activeFile = initialFiles.find(f => f.id === activeFileId) || initialFiles[0] || null;
+
+    const multiFile = initialFiles.length > 1;
+    const treeToggleBtn = multiFile
+      ? html`<button
+          class=${`v2-header-link v2-tree-toggle${treeOpen ? ' active' : ''}`}
+          title=${treeOpen ? 'Hide file tree' : 'Show file tree'}
+          aria-label=${treeOpen ? 'Hide file tree' : 'Show file tree'}
+          aria-pressed=${treeOpen ? 'true' : 'false'}
+          onClick=${() => setTreeOpen(o => !o)}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+        </button>`
+      : null;
+
+    const pageHeader = html`
+      <header class="v2-page-header">
+        ${treeToggleBtn}
+        <h1>Discuss</h1>
+        ${currentVersion ? html`<span class="v2-header-version">v${currentVersion}</span>` : null}
+        <a class="v2-header-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
+        </a>
+        ${updateInfo
+          ? html`<a
+              class="v2-header-update"
+              href=${updateInfo.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title=${`Run \`discuss update\` to upgrade to v${updateInfo.version}`}
+            >update available · v${updateInfo.version}</a>`
+          : null}
+        <span class="v2-header-spacer"></span>
+        <${ThemeToggle} />
+        <button
+          id="v2-done-button"
+          class=${reviewComplete ? 'ok' : ''}
+          disabled=${doneBusy || reviewComplete || !initialFiles.length}
+          title="Finish the review and send the transcript to the agent"
+          onClick=${submitDone}
+        >
+          ${reviewComplete ? 'Done ✓' : doneBusy ? 'Sending…' : 'Done — send to chat'}
+        </button>
+        ${doneError ? html`<span class="v2-done-error">${doneError}</span>` : null}
+      </header>
+    `;
+
+    const visibleThreads = activeFile
+      ? threads.filter(t => (t.fileId || (initialFiles[0] && initialFiles[0].id)) === activeFile.id)
+      : threads;
+    const threadsHostProps = { ...threadsPanelProps, threads: visibleThreads };
+
     if (!initialFiles.length) {
       return html`
-        <div class="v2-layout">
-          <${FileTree} files=${initialFiles} activeId=${null} onSelect=${() => {}} />
-          <main class="v2-content">
-            <p class="v2-banner">discuss v2 — no files loaded.</p>
-          </main>
-          <${ThreadsPanel} ...${threadsPanelProps} />
+        ${pageHeader}
+        <div class="v2-workspace">
+          <div class="v2-workspace-grid">
+            <div class="v2-pane-left"><p class="v2-empty">No files loaded.</p></div>
+            <div id="v2-divider"></div>
+            <div class="v2-pane-right"></div>
+          </div>
         </div>
       `;
     }
 
-    const singleFile = initialFiles.length === 1;
     return html`
-      <div class="v2-layout" data-single-file=${singleFile ? 'true' : 'false'}>
-        ${singleFile
-          ? null
-          : html`<${FileTree}
-              files=${initialFiles}
-              activeId=${activeFileId}
-              threadCounts=${threadCounts}
-              onSelect=${handleSelectFile}
-            />`}
-        <main class="v2-content">
-          <p class="v2-banner">
-            ${initialFiles.length} file${initialFiles.length === 1 ? '' : 's'} · ${threads.length} thread${threads.length === 1 ? '' : 's'} ·
-            <a href="/?ui=v1" title="Switch back to the legacy UI for this release">legacy UI</a>
-            <${ThemeToggle} />
-          </p>
-          ${initialFiles.map(file => html`<${FileSection} key=${file.id} file=${file} />`)}
-          <div class="v2-done-bar" id="v2-done-bar">
-            <button
-              id="v2-done-button"
-              class=${reviewComplete ? 'ok' : ''}
-              disabled=${doneBusy || reviewComplete}
-              title="Finish the review and send the transcript to the agent"
-              onClick=${submitDone}
-            >
-              ${reviewComplete ? 'Done ✓' : doneBusy ? 'Sending…' : 'Done — send to chat'}
-            </button>
-            ${doneError ? html`<span class="v2-done-error">${doneError}</span>` : null}
-          </div>
-        </main>
-        <${ThreadsPanel} ...${threadsPanelProps} />
+      ${pageHeader}
+      <div class="v2-workspace">
+        <div
+          class="v2-workspace-grid"
+          data-single-file=${singleFile ? 'true' : 'false'}
+          data-tree-open=${multiFile && treeOpen ? 'true' : 'false'}
+        >
+          ${multiFile && treeOpen
+            ? html`<${FileTree}
+                files=${initialFiles}
+                activeId=${activeFileId}
+                threadCounts=${threadCounts}
+                onSelect=${handleSelectFile}
+              />`
+            : null}
+          <main class="v2-pane-left">
+            ${activeFile
+              ? html`<${FileSection} key=${activeFile.id} file=${activeFile} />`
+              : null}
+          </main>
+          <div id="v2-divider"></div>
+          <aside class="v2-pane-right">
+            <${ThreadsHost} ...${threadsHostProps} />
+          </aside>
+        </div>
       </div>
+      ${singleFile && activeFile && activeFile.kind === 'markdown'
+        ? html`<${HeadingMinimap} activeFileId=${activeFile.id} fileKind=${activeFile.kind} />`
+        : null}
       ${!editorAnchors && !reviewComplete
         ? html`<${SelectionPopup} anchors=${popupAnchors} onCreate=${openEditor} />`
         : null}

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -11,7 +10,6 @@ use axum::Json;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Path;
-use axum::extract::Query;
 use axum::extract::State as AxumState;
 use axum::extract::rejection::JsonRejection;
 use axum::http::Request;
@@ -38,6 +36,8 @@ use crate::state::{
     SharedState, Source, State, StateSnapshot, Take, Thread, ThreadId, ThreadKind, default_file_id,
 };
 use crate::transcript::build_transcript_with_source;
+#[allow(unused_imports)]
+use crate::update;
 use crate::{Config, DiscussError, Result, render, template};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -149,14 +149,6 @@ impl AppState {
             .snapshot();
         snapshot.files = self.source.files.iter().map(FileMeta::from).collect();
         Ok(snapshot)
-    }
-
-    fn primary_markdown_content(&self) -> &str {
-        self.source
-            .files
-            .first()
-            .map(|file| file.content.as_str())
-            .unwrap_or("")
     }
 
     pub fn with_history_dir(mut self, history_dir: impl Into<PathBuf>) -> Self {
@@ -448,6 +440,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/state", get(get_api_state))
         .route("/api/events", get(get_api_events))
         .route("/api/heartbeat", post(post_api_heartbeat))
+        .route("/api/version-check", get(get_api_version_check))
         .route(
             "/api/drafts/new-thread",
             post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),
@@ -1478,20 +1471,8 @@ async fn reject_during_shutdown(
     next.run(request).await
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct UiVariantQuery {
-    #[serde(default)]
-    ui: Option<String>,
-}
-
-async fn get_root(
-    AxumState(app_state): AxumState<AppState>,
-    Query(query): Query<UiVariantQuery>,
-) -> Response {
-    let result = match query.ui.as_deref() {
-        Some("v1") => render_root_page(&app_state),
-        _ => render_root_page_v2(&app_state),
-    };
+async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
+    let result = render_root_page(&app_state);
 
     match result {
         Ok(page) => (
@@ -1508,7 +1489,8 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
     let snapshot = app_state.snapshot_with_files()?;
     let initial_state_json = serde_json::to_string(&snapshot)
         .map_err(|error| format!("failed to serialize initial state: {error}"))?;
-    let rendered_markdown = render::render(app_state.primary_markdown_content());
+    let combined_markdown = combined_source_markdown(app_state.source());
+    let rendered_markdown = render::render(&combined_markdown);
 
     Ok(template::render_page(
         &rendered_markdown,
@@ -1516,27 +1498,35 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
     ))
 }
 
-fn render_root_page_v2(app_state: &AppState) -> std::result::Result<String, String> {
-    let snapshot = app_state.snapshot_with_files()?;
-    let initial_state_json = serde_json::to_string(&snapshot)
-        .map_err(|error| format!("failed to serialize initial state: {error}"))?;
-    let rendered_files = rendered_markdown_files(app_state.source());
-    let rendered_files_json = serde_json::to_string(&rendered_files)
-        .map_err(|error| format!("failed to serialize rendered files: {error}"))?;
-
-    Ok(template::render_v2_page(
-        &initial_state_json,
-        &rendered_files_json,
-    ))
-}
-
-fn rendered_markdown_files(source: &Source) -> BTreeMap<String, String> {
-    source
-        .files
-        .iter()
-        .filter(|file| file.kind == FileKind::Markdown)
-        .map(|file| (file.id.0.clone(), render::render(&file.content)))
-        .collect()
+fn combined_source_markdown(source: &Source) -> String {
+    let files = &source.files;
+    if files.len() == 1 && files[0].kind == FileKind::Markdown {
+        return files[0].content.clone();
+    }
+    let mut out = String::new();
+    for (i, file) in files.iter().enumerate() {
+        if i > 0 {
+            out.push_str("\n\n");
+        }
+        match file.kind {
+            FileKind::Markdown => {
+                out.push_str(&format!("# {}\n\n", file.path));
+                out.push_str(&file.content);
+                if !file.content.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            FileKind::Diff => {
+                out.push_str(&format!("# {}\n\n```diff\n", file.path));
+                out.push_str(&file.content);
+                if !file.content.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("```\n");
+            }
+        }
+    }
+    out
 }
 
 async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
@@ -1593,6 +1583,31 @@ async fn get_api_events(AxumState(app_state): AxumState<AppState>) -> impl IntoR
             .interval(SSE_HEARTBEAT_INTERVAL)
             .text("keep-alive"),
     )
+}
+
+async fn get_api_version_check() -> Response {
+    // MOCK: temporary stub so the "update available" chip renders without hitting GitHub.
+    Json(serde_json::json!({
+        "current": env!("CARGO_PKG_VERSION"),
+        "latest": "99.0.0",
+        "updateAvailable": true,
+        "releaseUrl": "https://github.com/codesoda/discuss-cli/releases/tag/v99.0.0",
+    }))
+    .into_response()
+    // let result = tokio::task::spawn_blocking(update::run_update_check).await;
+    // match result {
+    //     Ok(Ok(check)) => Json(check).into_response(),
+    //     Ok(Err(error)) => api_error_response(
+    //         StatusCode::SERVICE_UNAVAILABLE,
+    //         "version_check_failed",
+    //         error.to_string(),
+    //     ),
+    //     Err(error) => api_error_response(
+    //         StatusCode::INTERNAL_SERVER_ERROR,
+    //         "internal_error",
+    //         format!("version check task panicked: {error}"),
+    //     ),
+    // }
 }
 
 async fn get_mermaid_js() -> impl IntoResponse {
