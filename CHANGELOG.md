@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- YAML frontmatter (the leading `---` ... `---` block at the top of a markdown file) renders as a `<details class="front-matter">` containing a `<pre><code class="language-yaml">` of the raw fields, collapsed by default, with a "Front Matter" summary. Body markdown renders unchanged below. The block is intentionally threadable — the existing pre-wrap pass in `discuss.html` treats it like any other code block, so reviewers can comment on a wrong title or missing tag; collapsing hides inner markers via normal `<details>` semantics, re-expanding restores them. Detection and HTML emission live in `src/render.rs` (six new unit tests); CSS in `discuss.html` reuses the existing `--line`, `--bg`, `--muted` custom properties so light and dark themes follow automatically. Closes [#14](https://github.com/codesoda/discuss-cli/issues/14).
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
