@@ -34,6 +34,7 @@ use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     Draft, LineRange, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
+use std::collections::HashMap;
 use crate::transcript::build_transcript;
 use crate::{Config, DiscussError, Result, render, template};
 
@@ -42,6 +43,38 @@ const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Deserialize)]
+struct SourceUpdateRequest {
+    markdown: String,
+    thread_anchors: Vec<ThreadAnchor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThreadAnchor {
+    thread_id: String,
+    anchor_start: Option<usize>,
+    anchor_end: Option<usize>,
+    snippet: Option<String>,
+    orphaned: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceUpdatedPayload {
+    markdown: String,
+    rendered_html: String,
+    thread_anchors: Vec<ThreadAnchorResponse>,
+    orphaned_thread_ids: Vec<String>,
+    source_version: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ThreadAnchorResponse {
+    thread_id: String,
+    anchor_start: Option<usize>,
+    anchor_end: Option<usize>,
+    orphaned: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -58,6 +91,7 @@ pub struct AppState {
     next_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
+    source_version: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -80,6 +114,7 @@ impl AppState {
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
+            source_version: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -162,6 +197,14 @@ impl AppState {
         let number = self.next_take_number.fetch_add(1, Ordering::Relaxed);
 
         format!("t-{number}")
+    }
+
+    fn current_source_version(&self) -> u64 {
+        self.source_version.load(Ordering::Relaxed)
+    }
+
+    fn bump_source_version(&self) -> u64 {
+        self.source_version.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
