@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Polling fallback for agent integrations without a Monitor-type tool: `skills/discuss/poller.sh` blocks on `/api/state`, emits newline-delimited JSON events (`thread.created`, `thread.updated`, `session.done`) plus a `snapshot` baseline line so no concurrent events are dropped between invocations. `skills/discuss/SKILL.md` documents the fallback as Option B, gated on Monitor being unavailable.
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
