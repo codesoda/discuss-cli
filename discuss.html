@@ -377,6 +377,129 @@
      left padding under the same id-scope when line-numbers is on. */
   #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
+  #doc-content pre.mermaid-block {
+    background: transparent;
+    padding: 8px 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+  #doc-content pre.mermaid-block svg { max-width: 100%; height: auto; }
+  #doc-content .mermaid-error {
+    margin: 6px 0 14px;
+    padding: 8px 12px;
+    border-left: 3px solid #c62828;
+    background: #fff2f0;
+    color: #8a1f14;
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    border-radius: 0 4px 4px 0;
+  }
+  #doc-content details.front-matter {
+    margin: 0 0 16px 0;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  #doc-content details.front-matter > summary {
+    cursor: pointer;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    user-select: none;
+    list-style: revert;
+  }
+  #doc-content details.front-matter[open] > summary {
+    border-bottom: 1px solid var(--line);
+  }
+  #doc-content details.front-matter > pre {
+    margin: 0;
+    border-radius: 0 0 4px 4px;
+  }
+  #doc-content details.collapsible-section {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+  }
+  #doc-content details.collapsible-section > summary {
+    list-style: none;
+    cursor: default;
+    position: relative;
+    display: flex;
+    align-items: baseline;
+  }
+  #doc-content details.collapsible-section > summary::-webkit-details-marker { display: none; }
+  #doc-content details.collapsible-section > summary > h1,
+  #doc-content details.collapsible-section > summary > h2 {
+    flex: 1;
+    min-width: 0;
+  }
+  .section-toggle {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    margin-left: -18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 10px;
+    padding: 0;
+    border-radius: 3px;
+    opacity: 0;
+    transition: margin-left 0.15s, opacity 0.15s, background 0.12s;
+  }
+  #doc-content details.collapsible-section:hover .section-toggle,
+  #doc-content details.collapsible-section:not([open]) .section-toggle {
+    margin-left: 0;
+    opacity: 1;
+  }
+  .section-toggle:hover {
+    background: var(--accent-hover);
+    color: var(--ink);
+  }
+  .section-toggle::after {
+    content: '';
+    display: block;
+    width: 0; height: 0;
+    border-left: 5px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform 0.15s;
+  }
+  details.collapsible-section[open] > summary .section-toggle::after {
+    transform: rotate(90deg);
+  }
+  .marker-aggregate {
+    position: absolute;
+    right: calc(-1 * (var(--left-gutter) - 10px));
+    top: 1px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 3;
+  }
+  .marker-aggregate .thread-marker {
+    position: relative;
+    right: auto;
+    top: auto;
+    opacity: 0.55;
+    outline: 1.5px dashed currentColor;
+    outline-offset: 1px;
+  }
+  .marker-aggregate .thread-marker:hover { opacity: 0.85; }
+  .marker-overflow-badge {
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1;
+    padding-top: 1px;
+  }
   #doc-content blockquote {
     margin: 10px 0;
     border-left: 3px solid var(--accent);
@@ -2096,6 +2219,100 @@
     }[c]));
   }
 
+  // ---------- Collapsible heading sections ----------
+  function wrapCollapsibleSections() {
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+
+    function wrapLevel(container, tag, breakTags) {
+      const headings = [...container.querySelectorAll(':scope > ' + tag.toLowerCase())];
+      for (const heading of headings) {
+        const details = document.createElement('details');
+        details.className = 'collapsible-section';
+        details.open = true;
+        const summary = document.createElement('summary');
+        const toggle = document.createElement('button');
+        toggle.className = 'section-toggle';
+        toggle.setAttribute('aria-label', 'Toggle section');
+        heading.parentNode.insertBefore(details, heading);
+        summary.appendChild(toggle);
+        summary.appendChild(heading);
+        details.appendChild(summary);
+        while (details.nextSibling) {
+          const next = details.nextSibling;
+          if (next.nodeType === 1 && breakTags.includes(next.tagName)) break;
+          details.appendChild(next);
+        }
+      }
+    }
+
+    wrapLevel(doc, 'H2', ['H1', 'H2']);
+    wrapLevel(doc, 'H1', ['H1']);
+
+    doc.addEventListener('click', (e) => {
+      const toggle = e.target.closest('.section-toggle');
+      if (toggle) {
+        e.preventDefault();
+        e.stopPropagation();
+        const details = toggle.closest('details.collapsible-section');
+        if (details) details.open = !details.open;
+        return;
+      }
+      const summary = e.target.closest('.collapsible-section > summary');
+      if (summary) e.preventDefault();
+    });
+
+    doc.addEventListener('toggle', () => {
+      refreshMarkerAggregation();
+    }, true);
+  }
+  wrapCollapsibleSections();
+
+  // ---------- Marker aggregation for collapsed sections ----------
+  function refreshMarkerAggregation() {
+    document.querySelectorAll('.marker-aggregate').forEach(el => el.remove());
+    const collapsed = document.querySelectorAll('#doc-content details:not([open])');
+    collapsed.forEach(details => {
+      const summary = details.querySelector(':scope > summary');
+      if (!summary) return;
+      const bodyMarkers = details.querySelectorAll(':scope > :not(summary) .thread-marker:not(.aggregated)');
+      if (!bodyMarkers.length) return;
+      const seen = new Set();
+      const items = [];
+      bodyMarkers.forEach(m => {
+        const tid = m.getAttribute('data-thread-id');
+        if (!tid || seen.has(tid)) return;
+        seen.add(tid);
+        items.push(m);
+      });
+      if (!items.length) return;
+      const stack = document.createElement('div');
+      stack.className = 'marker-aggregate thread-marker-stack';
+      const cap = 5;
+      items.slice(0, cap).forEach(m => {
+        const clone = m.cloneNode(true);
+        clone.classList.add('aggregated');
+        clone.removeAttribute('style');
+        const tid = m.getAttribute('data-thread-id');
+        clone.addEventListener('click', (e) => {
+          e.stopPropagation();
+          details.open = true;
+          refreshMarkerAggregation();
+          const threadEl = document.querySelector('.thread[data-thread-id="' + tid + '"]');
+          if (threadEl) openThread(threadEl);
+        });
+        stack.appendChild(clone);
+      });
+      if (items.length > cap) {
+        const badge = document.createElement('span');
+        badge.className = 'marker-overflow-badge';
+        badge.textContent = '+' + (items.length - cap);
+        stack.appendChild(badge);
+      }
+      summary.appendChild(stack);
+    });
+  }
+
   // ---------- Assign stable anchor indices to commentable elements ----------
   // Any element matching this selector inside #doc-content becomes commentable.
   // <pre> is commented-on via a generated .pre-wrap wrapper because <pre>'s
@@ -3012,6 +3229,7 @@
     // Keep the header in sync — it surfaces draft count too.
     syncOpenThreadMarkerClasses();
     renderMetaStatus();
+    refreshMarkerAggregation();
   }
 
   function renderLineRangeIndicators(state) {
@@ -3777,12 +3995,20 @@
   }
 
   // ---------- Syntax highlighting ----------
+  function isMermaidPre(pre) {
+    if (!pre) return false;
+    if (pre.classList.contains('no-line-numbers')) return true;
+    const code = pre.querySelector(':scope > code');
+    return !!(code && code.classList.contains('language-mermaid'));
+  }
   function highlightCodeBlocks() {
     if (!window.Prism) return;
     document.querySelectorAll('#doc-content pre').forEach(pre => {
+      if (isMermaidPre(pre)) return;
       pre.classList.add('line-numbers');
+      const code = pre.querySelector(':scope > code');
+      if (code) Prism.highlightElement(code);
     });
-    Prism.highlightAllUnder(document.getElementById('doc-content'));
   }
   function attachPrismCompleteHook() {
     if (!window.Prism || !Prism.hooks || !Prism.hooks.add) return;

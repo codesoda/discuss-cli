@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- YAML frontmatter (the leading `---` ... `---` block at the top of a markdown file) renders as a `<details class="front-matter">` containing a `<pre><code class="language-yaml">` of the raw fields, collapsed by default, with a "Front Matter" summary. Body markdown renders unchanged below. The block is intentionally threadable — the existing pre-wrap pass in `discuss.html` treats it like any other code block, so reviewers can comment on a wrong title or missing tag; collapsing hides inner markers via normal `<details>` semantics, re-expanding restores them. Detection and HTML emission live in `src/render.rs` (six new unit tests); CSS in `discuss.html` reuses the existing `--line`, `--bg`, `--muted` custom properties so light and dark themes follow automatically. Closes [#14](https://github.com/codesoda/discuss-cli/issues/14).
+- H1 and H2 heading sections are collapsible — each heading wraps its content in a `<details open>` element with nested H2-inside-H1 structure. An inline chevron toggle appears on hover, shifting the heading text right; clicking the heading itself still opens the thread editor. When a section is collapsed, thread markers from hidden anchors aggregate onto the summary as a muted dashed-outline marker stack (capped at 5 visible, `+N` overflow badge). Clicking an aggregated marker expands the section and opens the thread. The aggregation pattern generalizes to any `<details>` wrapper including the frontmatter block. Closes [#13](https://github.com/codesoda/discuss-cli/issues/13).
+- Polling fallback for agent integrations without a Monitor-type tool: `skills/discuss/poller.sh` blocks on `/api/state`, emits newline-delimited JSON events (`thread.created`, `thread.updated`, `session.done`) plus a `snapshot` baseline line so no concurrent events are dropped between invocations. `skills/discuss/SKILL.md` documents the fallback as Option B, gated on Monitor being unavailable.
+
+### Changed
+- Bundled `assets/mermaid.min.js` upgraded from a v8-era build to mermaid v11.14.0 (UMD/iife) so modern flowchart syntax (`subgraph X["label"]`, cylinder shapes, `<br/>` in node labels, unicode arrows) renders correctly. The hydration shim was rewritten to use the v10/v11 promise-based `mermaid.render(id, source)` API with `securityLevel: 'loose'`, surfaces parse failures inline as a `.mermaid-error` note instead of failing silently, and now marks `<pre>` blocks with `mermaid-block`/`no-line-numbers` *before* Prism runs. `highlightCodeBlocks()` skips those blocks (no `line-numbers` class, no `Prism.highlightElement`) so mermaid sources are no longer tokenized by Prism before the SVG render lands. Asset size budget bumped from 700 KB to 4 MB to fit v11.
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
