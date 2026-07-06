@@ -200,8 +200,19 @@ mod tests {
         assert!(page.contains("Prism.plugins.autoloader.languages_path"));
         assert!(page.contains("window.Prism.manual = true"));
         assert!(page.contains("function highlightCodeBlocks()"));
-        assert!(page.contains("Prism.highlightAllUnder(document.getElementById('doc-content'))"));
+        assert!(page.contains("Prism.highlightElement(code)"));
         assert!(page.contains("pre.classList.add('line-numbers')"));
+    }
+
+    #[test]
+    fn bundled_template_skips_prism_for_mermaid_blocks() {
+        let page = render_page("<p>Doc</p>", "{}");
+
+        assert!(page.contains("function isMermaidPre(pre)"));
+        assert!(page.contains("language-mermaid"));
+        assert!(page.contains("if (isMermaidPre(pre)) return;"));
+        assert!(page.contains(".mermaid-block"));
+        assert!(page.contains(".mermaid-error"));
     }
 
     #[test]
