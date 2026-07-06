@@ -45,7 +45,11 @@ If the user declines the install, stop.
 ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 ```
 
-## Step 1: Launch as a persistent Monitor
+## Step 1: Launch discuss and choose an event strategy
+
+Always try Monitor (or an equivalent background-monitoring tool) first. Only if no such tool is available in the current context (e.g. ToolSearch finds nothing and invoking Monitor returns a tool-not-enabled error) fall back to the **polling fallback** described below. Do not use the poller when a monitor-type tool exists — Monitor delivers events push-style with no polling latency. The rest of the steps are the same once you have events flowing.
+
+### Option A — Monitor (preferred)
 
 Run `discuss` directly as the Monitor command — do NOT launch it via Bash with `run_in_background`. Monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
 
@@ -86,6 +90,54 @@ Notes:
 - Record the `task_id` returned by Monitor — you'll need it for `TaskStop` later.
 - If the port is already bound or the file doesn't exist, discuss exits immediately and Monitor ends without ever emitting a `session.started` event. Read the Monitor output file to surface the error, then stop.
 - In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.
+
+### Option B — Polling fallback (only when no monitor-type tool is available)
+
+Use this only when no Monitor-type background monitoring tool is enabled in the current context. If Monitor (or equivalent) is available, use Option A.
+
+**1. Start discuss in the background:**
+
+```bash
+discuss "$ARGUMENTS" --port <port> > /tmp/discuss-startup.log 2>&1 &
+sleep 2
+curl -s http://127.0.0.1:<port>/api/state | jq -e 'has("threads")' > /dev/null \
+  || { cat /tmp/discuss-startup.log; exit 1; }
+```
+
+Pick a free port by checking which of 7777–7782 isn't already bound (`curl -s http://127.0.0.1:<port>/api/state`). If all are in use, discuss is already running — attach to the existing one.
+
+**2. Enter the event loop — blocking poller:**
+
+This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. Call it via Bash (blocking, timeout 600000ms). It polls `/api/state` every 5 seconds and exits as soon as something changes:
+
+```bash
+bash <skill-dir>/poller.sh "http://127.0.0.1:<port>"
+```
+
+On the first invocation, pass no baseline — the poller snapshots current state itself. On every subsequent invocation, pass the baseline captured from the previous run's `snapshot` line (see below).
+
+- Exit 0 → one or more new events; parse stdout (one JSON object per line), handle each, then **immediately re-invoke the poller** with the new baseline.
+- Exit 1 → error (API unreachable); report to user and stop.
+- Exit 2 → session ended (discuss exited); summarize threads and stop.
+- Bash tool timeout → not an error; the session is just quiet. Re-invoke the poller with the same baseline.
+
+**3. Handling events from the poller:**
+
+On exit 0, stdout contains one line per changed thread, followed by a final `snapshot` line:
+
+```json
+{"event": "thread.created", "thread": { ...full thread object... }}
+{"event": "thread.updated", "thread": { ...full thread object... }, "prev_count": 1, "current_count": 2}
+{"event": "snapshot", "baseline": {"<thread-id>": 2, "<thread-id>": 0}}
+```
+
+Handle every `thread.created` and `thread.updated` line exactly as you would `thread.created` and `reply.added` Monitor events (see Step 3). On exit 2 the last line is `{"event": "session.done"}` — treat it as the signal to stop and summarize.
+
+**Baseline handling:** always pass the `baseline` object from the `snapshot` line to the next poller invocation — do NOT re-fetch state to rebuild it yourself, or events that arrive in between will be silently dropped. If you post a reply or take while handling an event, bump that thread's count in the baseline first so your own post doesn't re-fire:
+
+```bash
+BASELINE=$(echo "$BASELINE" | jq -c --arg id "$THREAD_ID" '.[$id] += 1')
+```
 
 Optionally `Read` the markdown source afterward for context on anchor snippets (file mode only).
 
