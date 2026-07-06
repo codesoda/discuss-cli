@@ -22,14 +22,20 @@ mod tests {
     #[test]
     fn shim_loads_mermaid_only_after_finding_blocks() {
         let shim = mermaid_shim_js();
-        let empty_check = shim
-            .find("if (!blocks.length) return;")
-            .expect("empty check");
+        // The loader must be gated on actually finding mermaid blocks — either
+        // at page load or when a live source update introduces new ones.
+        let loader_def = shim
+            .find("function ensureLoadedThenRender()")
+            .expect("lazy loader");
         let script_create = shim
             .find("document.createElement('script')")
             .expect("script creation");
-
-        assert!(empty_check < script_create);
+        assert!(
+            loader_def < script_create,
+            "script creation lives inside the lazy loader"
+        );
+        assert!(shim.contains("if (markBlocks().length) ensureLoadedThenRender();"));
+        assert!(shim.contains("window.__discussRenderMermaid"));
     }
 
     #[test]

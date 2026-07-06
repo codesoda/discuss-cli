@@ -1,17 +1,24 @@
 (function () {
   const selector = 'pre > code.language-mermaid';
-  const blocks = Array.from(document.querySelectorAll(selector));
+  let renderSeq = 0;
+  let mermaidLoaded = false;
 
   // Mark each block before Prism runs so highlightCodeBlocks() in
   // discuss.html can skip syntax highlighting for mermaid sources.
-  blocks.forEach(function (code) {
-    const pre = code.parentElement;
-    if (!pre) return;
-    pre.classList.add('mermaid-block', 'no-line-numbers');
-    pre.setAttribute('data-mermaid', 'pending');
-  });
-
-  if (!blocks.length) return;
+  function markBlocks() {
+    const blocks = Array.from(document.querySelectorAll(selector)).filter(
+      function (code) {
+        const pre = code.parentElement;
+        return pre && !pre.hasAttribute('data-mermaid');
+      }
+    );
+    blocks.forEach(function (code) {
+      const pre = code.parentElement;
+      pre.classList.add('mermaid-block', 'no-line-numbers');
+      pre.setAttribute('data-mermaid', 'pending');
+    });
+    return blocks;
+  }
 
   function reportError(pre, error) {
     pre.setAttribute('data-mermaid', 'error');
@@ -33,11 +40,10 @@
       });
     }
 
-    blocks.forEach(function (code, index) {
-      const pre = code.parentElement;
-      if (!pre) return;
-      const source = code.textContent || '';
-      const id = 'discuss-mermaid-' + index;
+    document.querySelectorAll('pre[data-mermaid="pending"]').forEach(function (pre) {
+      const code = pre.querySelector('code.language-mermaid');
+      const source = code ? code.textContent || '' : '';
+      const id = 'discuss-mermaid-' + renderSeq++;
       try {
         mermaid
           .render(id, source)
@@ -54,9 +60,30 @@
     });
   }
 
-  const script = document.createElement('script');
-  script.src = window.__DISCUSS_MERMAID_SRC__ || '/assets/mermaid.min.js';
-  script.async = true;
-  script.onload = renderBlocks;
-  document.head.appendChild(script);
+  let loaderStarted = false;
+  function ensureLoadedThenRender() {
+    if (mermaidLoaded) {
+      renderBlocks();
+      return;
+    }
+    if (loaderStarted) return; // onload will pick up pending blocks
+    loaderStarted = true;
+    const script = document.createElement('script');
+    script.src = window.__DISCUSS_MERMAID_SRC__ || '/assets/mermaid.min.js';
+    script.async = true;
+    script.onload = function () {
+      mermaidLoaded = true;
+      renderBlocks();
+    };
+    document.head.appendChild(script);
+  }
+
+  // Re-scan and render after a live source update replaces #doc-content.
+  window.__discussRenderMermaid = function () {
+    if (markBlocks().length || document.querySelector('pre[data-mermaid="pending"]')) {
+      ensureLoadedThenRender();
+    }
+  };
+
+  if (markBlocks().length) ensureLoadedThenRender();
 })();

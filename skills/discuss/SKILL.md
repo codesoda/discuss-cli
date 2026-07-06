@@ -217,6 +217,23 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
+| POST | `/api/source` | `{markdown, threadAnchors}` | Live source update with re-anchoring (see below) |
+
+### Live source updates (`POST /api/source`)
+
+If you regenerate the markdown mid-session (e.g. the user fixed code under review and you rebuilt the diff summary), push the new source into the running session instead of restarting it. You own the re-anchor decision: send the full new markdown plus one entry per **active** thread — either its new anchor position or `"orphaned": true` if its content no longer exists. Coverage is strict; the request is rejected (and nothing changes) if any active thread is missing or unknown.
+
+```json
+{
+  "markdown": "...entire new document...",
+  "threadAnchors": [
+    { "threadId": "u-1", "anchorStart": 4, "anchorEnd": 4, "snippet": "optional refreshed snippet" },
+    { "threadId": "u-2", "orphaned": true }
+  ]
+}
+```
+
+Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
 
 ## Stdout event kinds
 
@@ -227,6 +244,7 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
+- `source.updated` → `{markdown, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, or another agent's)
 - `prompt.suggest_done` → lifecycle; informational
 
 **Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.

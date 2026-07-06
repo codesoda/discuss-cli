@@ -16,6 +16,7 @@ pub struct State {
     resolutions: HashMap<ThreadId, Resolution>,
     drafts: Drafts,
     deleted_at: HashMap<ThreadId, DateTime<Utc>>,
+    source_version: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -26,6 +27,8 @@ pub struct StateSnapshot {
     pub takes: HashMap<ThreadId, Vec<Take>>,
     pub resolutions: HashMap<ThreadId, Resolution>,
     pub drafts: Drafts,
+    #[serde(default)]
+    pub source_version: u64,
 }
 
 impl State {
@@ -43,6 +46,24 @@ impl State {
 
     pub(crate) fn all_threads(&self) -> &[Thread] {
         &self.threads
+    }
+
+    /// Mutable access to an active (non-deleted) thread, used by live source
+    /// updates to rewrite anchors in place.
+    pub(crate) fn thread_mut(&mut self, thread_id: &ThreadId) -> Option<&mut Thread> {
+        if self.deleted_at.contains_key(thread_id) {
+            return None;
+        }
+        self.threads.iter_mut().find(|t| &t.id == thread_id)
+    }
+
+    pub fn source_version(&self) -> u64 {
+        self.source_version
+    }
+
+    pub fn bump_source_version(&mut self) -> u64 {
+        self.source_version += 1;
+        self.source_version
     }
 
     pub(crate) fn replies_for_thread(&self, thread_id: &ThreadId) -> Vec<Reply> {
@@ -138,6 +159,7 @@ impl State {
                 new_thread: self.drafts.new_thread.clone(),
                 followup: active_value_map(&self.drafts.followup, &active_thread_ids),
             },
+            source_version: self.source_version,
         }
     }
 }
@@ -179,6 +201,7 @@ mod tests {
     fn thread(id: &str, anchor_start: usize) -> Thread {
         Thread {
             id: ThreadId(id.to_string()),
+            orphaned: false,
             anchor_start,
             anchor_end: anchor_start + 1,
             snippet: format!("snippet {id}"),
