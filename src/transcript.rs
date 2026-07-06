@@ -71,6 +71,7 @@ mod tests {
 
     fn thread(id: &str, anchor_start: usize, anchor_end: usize) -> Thread {
         Thread {
+            orphaned: false,
             id: ThreadId(id.to_string()),
             anchor_start,
             anchor_end,

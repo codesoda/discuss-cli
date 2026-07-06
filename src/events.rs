@@ -16,11 +16,12 @@ pub enum EventKind {
     ThreadUnresolved,
     ReplyAdded,
     PromptSuggestDone,
+    SourceUpdated,
     SessionDone,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::SessionStarted,
         Self::ThreadCreated,
         Self::ThreadDeleted,
@@ -28,6 +29,7 @@ impl EventKind {
         Self::ThreadUnresolved,
         Self::ReplyAdded,
         Self::PromptSuggestDone,
+        Self::SourceUpdated,
         Self::SessionDone,
     ];
 
@@ -40,6 +42,7 @@ impl EventKind {
             Self::ThreadUnresolved => "thread.unresolved",
             Self::ReplyAdded => "reply.added",
             Self::PromptSuggestDone => "prompt.suggest_done",
+            Self::SourceUpdated => "source.updated",
             Self::SessionDone => "session.done",
         }
     }
@@ -75,6 +78,7 @@ impl<'de> Deserialize<'de> for EventKind {
             "thread.unresolved" => Ok(Self::ThreadUnresolved),
             "reply.added" => Ok(Self::ReplyAdded),
             "prompt.suggest_done" => Ok(Self::PromptSuggestDone),
+            "source.updated" => Ok(Self::SourceUpdated),
             "session.done" => Ok(Self::SessionDone),
             _ => Err(de::Error::unknown_variant(
                 &raw,
@@ -86,6 +90,7 @@ impl<'de> Deserialize<'de> for EventKind {
                     "thread.unresolved",
                     "reply.added",
                     "prompt.suggest_done",
+                    "source.updated",
                     "session.done",
                 ],
             )),
@@ -193,6 +198,7 @@ mod tests {
             (EventKind::ThreadUnresolved, "thread.unresolved"),
             (EventKind::ReplyAdded, "reply.added"),
             (EventKind::PromptSuggestDone, "prompt.suggest_done"),
+            (EventKind::SourceUpdated, "source.updated"),
             (EventKind::SessionDone, "session.done"),
         ];
 
@@ -219,6 +225,7 @@ mod tests {
             EventKind::ThreadUnresolved,
             EventKind::ReplyAdded,
             EventKind::PromptSuggestDone,
+            EventKind::SourceUpdated,
             EventKind::SessionDone,
         ];
 

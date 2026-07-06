@@ -34,6 +34,11 @@ pub struct Thread {
     pub kind: ThreadKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_range: Option<LineRange>,
+    /// Set when a live source update (`POST /api/source`) could not carry this
+    /// thread's anchor into the new markdown. Orphaned threads keep their
+    /// conversation but no longer point at valid document offsets.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub orphaned: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -163,6 +168,7 @@ mod tests {
             created_at: timestamp(),
             kind: ThreadKind::User,
             line_range: None,
+            orphaned: false,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");
@@ -175,6 +181,7 @@ mod tests {
         assert!(value.get("anchor_start").is_none());
         assert!(value.get("created_at").is_none());
         assert!(value.get("lineRange").is_none());
+        assert!(value.get("orphaned").is_none());
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
         assert_eq!(round_tripped, thread);
@@ -192,6 +199,7 @@ mod tests {
             created_at: timestamp(),
             kind: ThreadKind::User,
             line_range: Some(LineRange { start: 3, end: 5 }),
+            orphaned: false,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");

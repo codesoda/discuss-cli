@@ -395,6 +395,8 @@
     white-space: pre-wrap;
     border-radius: 0 4px 4px 0;
   }
+  .thread.orphaned { border-left: 3px dashed var(--muted); opacity: 0.85; }
+  .thread.orphaned .thread-anchor { color: var(--muted); font-style: italic; }
   #doc-content details.front-matter {
     margin: 0 0 16px 0;
     border: 1px solid var(--line);
@@ -1357,6 +1359,7 @@
       followups: {},
       resolutions: {},
       drafts: { newThread: {}, followup: {} },
+      sourceVersion: 0,
     };
   }
   function normalizeState(raw) {
@@ -1370,6 +1373,8 @@
     state.followups = normalizeFollowups(raw.followups, state.replies, state.userThreads);
     state.resolutions = raw.resolutions && typeof raw.resolutions === 'object' ? raw.resolutions : {};
     state.drafts = normalizeDrafts(raw.drafts);
+    const sourceVersion = parseInt(raw.sourceVersion, 10);
+    state.sourceVersion = Number.isFinite(sourceVersion) && sourceVersion >= 0 ? sourceVersion : 0;
     return state;
   }
   function normalizeUserThreads(sourceThreads) {
@@ -1385,8 +1390,9 @@
         breadcrumb: t.breadcrumb || '',
         createdAt: t.createdAt || new Date().toISOString(),
         lineRange: normalizeLineRange(t.lineRange),
+        orphaned: !!t.orphaned,
       }))
-      .filter(t => t.id && Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd));
+      .filter(t => t.id && (t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
   }
   function normalizeLineRange(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -1560,6 +1566,7 @@
     'take.added',
     'draft.updated',
     'draft.cleared',
+    'source.updated',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
@@ -1634,7 +1641,50 @@
       case 'draft.cleared':
         applyDraftClearedEvent(payload);
         break;
+      case 'source.updated':
+        applySourceUpdatedEvent(payload);
+        break;
     }
+  }
+
+  // Live source update: the agent pushed new markdown plus re-anchored (or
+  // orphaned) thread positions. Swap the document in place and re-run every
+  // load-time pass that depends on #doc-content, preserving the conversation.
+  function applySourceUpdatedEvent(payload) {
+    if (!payload || typeof payload.renderedHtml !== 'string') return;
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+    // In-flight new-thread selections anchor into the old source; drop them.
+    if (typeof closeNewThreadEditor === 'function') closeNewThreadEditor();
+    doc.innerHTML = payload.renderedHtml;
+    assignAnchorIndices();
+    buildHeadingMinimap();
+
+    const s = cloneState(loadState());
+    const version = parseInt(payload.sourceVersion, 10);
+    s.sourceVersion = Number.isFinite(version) ? version : s.sourceVersion + 1;
+    const anchorById = new Map(
+      (Array.isArray(payload.threadAnchors) ? payload.threadAnchors : [])
+        .map(a => [String(a.threadId), a])
+    );
+    const applyAnchor = (t, startKey, endKey) => {
+      const a = anchorById.get(String(t.id));
+      if (!a) return;
+      t.orphaned = !!a.orphaned;
+      if (!a.orphaned) {
+        t[startKey] = parseInt(a.anchorStart, 10);
+        t[endKey] = parseInt(a.anchorEnd, 10);
+      }
+    };
+    (s.userThreads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
+    (s.threads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
+    setCurrentState(s);
+
+    highlightCodeBlocks();
+    if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
+    renderAllThreads();
+    scheduleReposition();
+    setTimeout(scheduleReposition, 600);
   }
 
   // ---------- Heartbeat ----------
@@ -2584,10 +2634,12 @@
 
   function createUserThread(t) {
     const el = document.createElement('div');
-    el.className = 'thread user';
+    el.className = t.orphaned ? 'thread user orphaned' : 'thread user';
     el.setAttribute('data-thread-id', t.id);
-    el.setAttribute('data-anchor-start', t.anchorStart);
-    el.setAttribute('data-anchor-end', t.anchorEnd);
+    if (!t.orphaned) {
+      el.setAttribute('data-anchor-start', t.anchorStart);
+      el.setAttribute('data-anchor-end', t.anchorEnd);
+    }
     if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
       el.setAttribute('data-line-start', t.lineRange.start);
       el.setAttribute('data-line-end', t.lineRange.end);
@@ -2595,7 +2647,9 @@
     const lineLabel = t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)
       ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
       : '';
-    const rangeLabel = (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
+    const rangeLabel = t.orphaned
+      ? 'orphaned'
+      : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
     el.innerHTML = `
       <div class="thread-head">
         <span>Your thread</span>
@@ -3101,7 +3155,9 @@
     const threads = Array.from(threadsHost.querySelectorAll('.thread'));
     const byIdx = new Map();
     threads.forEach(thread => {
+      if (thread.classList.contains('orphaned')) return;
       const start = parseInt(thread.getAttribute('data-anchor-start'));
+      if (!Number.isFinite(start)) return;
       if (!byIdx.has(start)) byIdx.set(start, []);
       byIdx.get(start).push(thread);
       const end = parseInt(thread.getAttribute('data-anchor-end'));
@@ -3386,14 +3442,17 @@
       threadsHost.style.minHeight = Math.max(0, baseTarget) + 'px';
       return;
     }
-    open.sort((a, b) =>
-      parseInt(a.getAttribute('data-anchor-start')) - parseInt(b.getAttribute('data-anchor-start')));
+    const sortKey = (el) => {
+      const start = parseInt(el.getAttribute('data-anchor-start'));
+      return Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER; // orphaned last
+    };
+    open.sort((a, b) => sortKey(a) - sortKey(b));
     const paneRightRect = paneRight.getBoundingClientRect();
     const gap = 10;
     let prevBottom = 0;
     open.forEach(thread => {
       let top = anchorTopForThread(thread, paneRightRect);
-      if (top == null) return;
+      if (top == null) top = prevBottom + gap; // orphaned/unanchored: stack below previous
       if (top < prevBottom + gap) top = prevBottom + gap;
       thread.style.top = top + 'px';
       prevBottom = top + thread.offsetHeight;
@@ -3567,6 +3626,7 @@
             anchorEnd: parseInt(endIdx),
             snippet,
             text,
+            sourceVersion: loadState().sourceVersion || 0,
             ...(lineRange ? { lineRange: { start: lineRange.start, end: lineRange.end } } : {}),
           },
         });

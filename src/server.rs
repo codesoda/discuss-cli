@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -34,7 +35,6 @@ use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     Draft, LineRange, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
-use std::collections::HashMap;
 use crate::transcript::build_transcript;
 use crate::{Config, DiscussError, Result, render, template};
 
@@ -45,34 +45,44 @@ const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceUpdateRequest {
     markdown: String,
-    thread_anchors: Vec<ThreadAnchor>,
+    thread_anchors: Vec<ThreadAnchorUpdate>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ThreadAnchor {
-    thread_id: String,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadAnchorUpdate {
+    thread_id: ThreadId,
+    #[serde(default)]
     anchor_start: Option<usize>,
+    #[serde(default)]
     anchor_end: Option<usize>,
+    #[serde(default)]
     snippet: Option<String>,
-    orphaned: Option<bool>,
+    #[serde(default)]
+    line_range: Option<LineRange>,
+    #[serde(default)]
+    orphaned: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SourceUpdatedPayload {
     markdown: String,
     rendered_html: String,
     thread_anchors: Vec<ThreadAnchorResponse>,
-    orphaned_thread_ids: Vec<String>,
+    orphaned_thread_ids: Vec<ThreadId>,
     source_version: u64,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ThreadAnchorResponse {
-    thread_id: String,
-    anchor_start: Option<usize>,
-    anchor_end: Option<usize>,
+    thread_id: ThreadId,
+    anchor_start: usize,
+    anchor_end: usize,
     orphaned: bool,
 }
 
@@ -81,7 +91,7 @@ pub struct AppState {
     pub state: SharedState,
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
-    markdown_source: Arc<str>,
+    markdown_source: Arc<std::sync::RwLock<Arc<str>>>,
     source_path: Arc<Option<PathBuf>>,
     history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
@@ -91,7 +101,6 @@ pub struct AppState {
     next_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
-    source_version: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -104,7 +113,7 @@ impl AppState {
             state,
             bus,
             emitter,
-            markdown_source: Arc::from(""),
+            markdown_source: Arc::new(std::sync::RwLock::new(Arc::from(""))),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
@@ -114,7 +123,6 @@ impl AppState {
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
-            source_version: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -126,10 +134,19 @@ impl AppState {
         )
     }
 
-    pub fn with_markdown_source(mut self, markdown_source: impl Into<String>) -> Self {
+    pub fn with_markdown_source(self, markdown_source: impl Into<String>) -> Self {
         let markdown_source = markdown_source.into();
-        self.markdown_source = Arc::from(markdown_source.into_boxed_str());
+        if let Ok(mut source) = self.markdown_source.write() {
+            *source = Arc::from(markdown_source.into_boxed_str());
+        }
         self
+    }
+
+    fn current_markdown_source(&self) -> std::result::Result<Arc<str>, String> {
+        self.markdown_source
+            .read()
+            .map(|source| Arc::clone(&source))
+            .map_err(|_| "markdown source lock poisoned".to_string())
     }
 
     pub fn with_source_path(mut self, source_path: impl Into<PathBuf>) -> Self {
@@ -197,14 +214,6 @@ impl AppState {
         let number = self.next_take_number.fetch_add(1, Ordering::Relaxed);
 
         format!("t-{number}")
-    }
-
-    fn current_source_version(&self) -> u64 {
-        self.source_version.load(Ordering::Relaxed)
-    }
-
-    fn bump_source_version(&self) -> u64 {
-        self.source_version.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
@@ -442,6 +451,7 @@ fn build_router(app_state: AppState) -> Router {
             "/api/drafts/followup",
             post(post_api_drafts_followup).delete(delete_api_drafts_followup),
         )
+        .route("/api/source", post(post_api_source))
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -472,6 +482,11 @@ struct CreateThreadRequest {
     text: String,
     #[serde(default)]
     line_range: Option<LineRange>,
+    /// Optional optimistic-concurrency guard: when set, the thread is only
+    /// created if the server's current source version matches, so anchors
+    /// computed against an outdated document are rejected instead of drifting.
+    #[serde(default)]
+    source_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +595,204 @@ struct ApiError {
     message: String,
 }
 
+/// `POST /api/source` — live source update with agent-pushed re-anchoring.
+///
+/// The agent that changed the markdown owns the re-anchor decision: it sends
+/// the full new source plus one anchor entry per active thread (strict
+/// coverage — every active thread must be re-anchored or explicitly orphaned).
+/// The server swaps the source, rewrites anchors atomically under the state
+/// lock, bumps the source version, and broadcasts `source.updated` over SSE
+/// and stdout.
+async fn post_api_source(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<SourceUpdateRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+
+    let mut updates: HashMap<ThreadId, ThreadAnchorUpdate> = HashMap::new();
+    for update in request.thread_anchors {
+        if !update.orphaned {
+            let (Some(start), Some(end)) = (update.anchor_start, update.anchor_end) else {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "validation_error",
+                    format!(
+                        "thread {} must provide anchorStart and anchorEnd, or set orphaned: true",
+                        update.thread_id.0
+                    ),
+                );
+            };
+            if start == 0 || end < start {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "validation_error",
+                    format!(
+                        "thread {} anchors must satisfy 1 <= anchorStart <= anchorEnd",
+                        update.thread_id.0
+                    ),
+                );
+            }
+            if let Some(line_range) = update.line_range
+                && (line_range.start == 0 || line_range.end < line_range.start)
+            {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "validation_error",
+                    format!(
+                        "thread {} lineRange must satisfy 1 <= start <= end",
+                        update.thread_id.0
+                    ),
+                );
+            }
+        }
+        let thread_id = update.thread_id.clone();
+        if updates.insert(thread_id.clone(), update).is_some() {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                format!(
+                    "thread {} appears more than once in threadAnchors",
+                    thread_id.0
+                ),
+            );
+        }
+    }
+
+    let markdown = request.markdown;
+    let (threads, source_version) = {
+        let mut state = match app_state.state.write() {
+            Ok(state) => state,
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "state lock poisoned while updating source",
+                );
+            }
+        };
+
+        // Strict coverage in both directions: a silently-forgotten thread
+        // would drift onto wrong content, and an unknown thread id is an
+        // agent bug worth surfacing.
+        let active_ids: Vec<ThreadId> = state.get_threads().into_iter().map(|t| t.id).collect();
+        let active_set: HashSet<&ThreadId> = active_ids.iter().collect();
+        if let Some(missing) = active_ids.iter().find(|id| !updates.contains_key(id)) {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                format!(
+                    "threadAnchors must cover every active thread: missing {} (re-anchor it or mark it orphaned)",
+                    missing.0
+                ),
+            );
+        }
+        if let Some(unknown) = updates.keys().find(|id| !active_set.contains(id)) {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                format!(
+                    "threadAnchors references unknown or deleted thread {}",
+                    unknown.0
+                ),
+            );
+        }
+
+        for (thread_id, update) in &updates {
+            let Some(thread) = state.thread_mut(thread_id) else {
+                continue; // unreachable: validated active above
+            };
+            if update.orphaned {
+                thread.orphaned = true;
+            } else {
+                thread.orphaned = false;
+                thread.anchor_start = update.anchor_start.expect("validated anchorStart");
+                thread.anchor_end = update.anchor_end.expect("validated anchorEnd");
+                thread.line_range = update.line_range;
+                if let Some(snippet) = &update.snippet {
+                    thread.snippet = snippet.clone();
+                }
+            }
+        }
+
+        // Swap the markdown while still holding the state write lock so no
+        // reader can observe new anchors against the old source or vice versa.
+        match app_state.markdown_source.write() {
+            Ok(mut source) => *source = Arc::from(markdown.as_str()),
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "markdown source lock poisoned while updating source",
+                );
+            }
+        }
+
+        let source_version = state.bump_source_version();
+        (state.get_threads(), source_version)
+    };
+    app_state.record_mutation();
+
+    let rendered_html = render::render(&markdown);
+    let thread_anchors = threads
+        .iter()
+        .map(|thread| ThreadAnchorResponse {
+            thread_id: thread.id.clone(),
+            anchor_start: thread.anchor_start,
+            anchor_end: thread.anchor_end,
+            orphaned: thread.orphaned,
+        })
+        .collect();
+    let orphaned_thread_ids = threads
+        .iter()
+        .filter(|thread| thread.orphaned)
+        .map(|thread| thread.id.clone())
+        .collect();
+    let payload = SourceUpdatedPayload {
+        markdown,
+        rendered_html,
+        thread_anchors,
+        orphaned_thread_ids,
+        source_version,
+    };
+    let payload = match serde_json::to_value(&payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to serialize source.updated payload: {error}"),
+            );
+        }
+    };
+
+    app_state.bus.publish(BroadcastEvent {
+        kind: EventKind::SourceUpdated.to_string(),
+        payload: payload.clone(),
+    });
+    if let Err(error) = app_state.emitter.emit(&Event {
+        kind: EventKind::SourceUpdated,
+        at: Utc::now(),
+        payload: payload.clone(),
+    }) {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("failed to emit source.updated event: {error}"),
+        );
+    }
+
+    Json(payload).into_response()
+}
+
 async fn post_api_threads(
     AxumState(app_state): AxumState<AppState>,
     payload: std::result::Result<Json<CreateThreadRequest>, JsonRejection>,
@@ -603,6 +816,27 @@ async fn post_api_threads(
             "lineRange must satisfy 1 <= start <= end",
         );
     }
+    if let Some(requested_version) = request.source_version {
+        let current_version = match app_state.state.read() {
+            Ok(state) => state.source_version(),
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "state lock poisoned while checking source version",
+                );
+            }
+        };
+        if requested_version != current_version {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "stale_source_version",
+                format!(
+                    "sourceVersion {requested_version} is stale; the document is now at version {current_version}, refresh anchors against the current source"
+                ),
+            );
+        }
+    }
     let created_at = Utc::now();
     let thread = Thread {
         id: app_state.next_user_thread_id(),
@@ -614,6 +848,7 @@ async fn post_api_threads(
         created_at,
         kind: ThreadKind::User,
         line_range: request.line_range,
+        orphaned: false,
     };
 
     if app_state
@@ -1412,7 +1647,8 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .snapshot();
     let initial_state_json = serde_json::to_string(&snapshot)
         .map_err(|error| format!("failed to serialize initial state: {error}"))?;
-    let rendered_markdown = render::render(app_state.markdown_source.as_ref());
+    let markdown_source = app_state.current_markdown_source()?;
+    let rendered_markdown = render::render(markdown_source.as_ref());
 
     Ok(template::render_page(
         &rendered_markdown,

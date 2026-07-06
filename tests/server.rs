@@ -147,7 +147,8 @@ async fn get_api_state_returns_empty_snapshot_json() {
             "drafts": {
                 "newThread": {},
                 "followup": {}
-            }
+            },
+            "sourceVersion": 0
         })
     );
 
@@ -2145,6 +2146,241 @@ fn single_json_file(dir: &Path) -> PathBuf {
     entries.remove(0)
 }
 
+#[tokio::test]
+async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_markdown_source("# Old Title\n\nOld body.");
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-keep", 2));
+        state.add_thread(thread("u-lost", 4));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state.clone(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let body = json!({
+        "markdown": "# New Title\n\nNew body.",
+        "threadAnchors": [
+            { "threadId": "u-keep", "anchorStart": 1, "anchorEnd": 1, "snippet": "New Title" },
+            { "threadId": "u-lost", "orphaned": true }
+        ]
+    });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_json_headers(&response);
+
+    let payload = response_json(&response);
+    assert_eq!(payload["markdown"], "# New Title\n\nNew body.");
+    assert!(
+        payload["renderedHtml"]
+            .as_str()
+            .expect("renderedHtml string")
+            .contains("<h1>New Title</h1>")
+    );
+    assert_eq!(payload["sourceVersion"], 1);
+    assert_eq!(payload["orphanedThreadIds"], json!(["u-lost"]));
+    let anchors = payload["threadAnchors"]
+        .as_array()
+        .expect("threadAnchors array");
+    let keep = anchors
+        .iter()
+        .find(|a| a["threadId"] == "u-keep")
+        .expect("u-keep anchor");
+    assert_eq!(keep["anchorStart"], 1);
+    assert_eq!(keep["anchorEnd"], 1);
+    assert_eq!(keep["orphaned"], false);
+    let lost = anchors
+        .iter()
+        .find(|a| a["threadId"] == "u-lost")
+        .expect("u-lost anchor");
+    assert_eq!(lost["orphaned"], true);
+
+    // SSE broadcast carries the same payload.
+    let event = read_until(&mut sse, "\n\n").await;
+    assert!(event.contains("event: source.updated"), "event: {event}");
+    assert!(event.contains("<h1>New Title</h1>"));
+
+    // Stdout event emitted for observing agents.
+    let stdout_line = stdout_string(&stdout);
+    assert!(
+        stdout_line.contains("\"source.updated\""),
+        "stdout: {stdout_line}"
+    );
+
+    // Root page renders the new source; state reflects new anchors + version.
+    let response = get_root(addr).await;
+    assert!(doc_content(response_body(&response)).contains("<h1>New Title</h1>"));
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 1);
+    let threads = state["threads"].as_array().expect("threads array");
+    let keep = threads
+        .iter()
+        .find(|t| t["id"] == "u-keep")
+        .expect("u-keep thread");
+    assert_eq!(keep["anchorStart"], 1);
+    assert!(keep.get("orphaned").is_none());
+    let lost = threads
+        .iter()
+        .find(|t| t["id"] == "u-lost")
+        .expect("u-lost thread");
+    assert_eq!(lost["orphaned"], true);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_source_enforces_strict_thread_coverage() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-one", 1));
+        state.add_thread(thread("u-two", 2));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state.clone(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    // Missing an active thread -> rejected.
+    let body = json!({
+        "markdown": "# Doc v2",
+        "threadAnchors": [{ "threadId": "u-one", "anchorStart": 1, "anchorEnd": 1 }]
+    });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert!(
+        response_json(&response)["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("u-two")
+    );
+
+    // Unknown thread id -> rejected.
+    let body = json!({
+        "markdown": "# Doc v2",
+        "threadAnchors": [
+            { "threadId": "u-one", "anchorStart": 1, "anchorEnd": 1 },
+            { "threadId": "u-two", "anchorStart": 2, "anchorEnd": 2 },
+            { "threadId": "u-ghost", "anchorStart": 3, "anchorEnd": 3 }
+        ]
+    });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+
+    // Invalid anchors (end < start) -> rejected.
+    let body = json!({
+        "markdown": "# Doc v2",
+        "threadAnchors": [
+            { "threadId": "u-one", "anchorStart": 3, "anchorEnd": 1 },
+            { "threadId": "u-two", "anchorStart": 2, "anchorEnd": 2 }
+        ]
+    });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+
+    // Anchors omitted without orphaned -> rejected.
+    let body = json!({
+        "markdown": "# Doc v2",
+        "threadAnchors": [
+            { "threadId": "u-one" },
+            { "threadId": "u-two", "anchorStart": 2, "anchorEnd": 2 }
+        ]
+    });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+
+    // A failed update must not touch state.
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 0);
+    let response = get_root(addr).await;
+    assert!(doc_content(response_body(&response)).contains("<h1>Doc</h1>"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_rejects_stale_source_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state.clone(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    // Bump the source version via a live update (no threads yet, so empty coverage).
+    let body = json!({ "markdown": "# Doc v2", "threadAnchors": [] });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // A thread created against the old document version is rejected.
+    let body = json!({
+        "anchorStart": 1,
+        "anchorEnd": 1,
+        "snippet": "Doc",
+        "text": "comment",
+        "sourceVersion": 0
+    });
+    let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "stale_source_version"
+    );
+
+    // The current version (or omitting sourceVersion) still works.
+    let body = json!({
+        "anchorStart": 1,
+        "anchorEnd": 1,
+        "snippet": "Doc v2",
+        "text": "comment",
+        "sourceVersion": 1
+    });
+    let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
@@ -2378,6 +2614,7 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         created_at: timestamp(0),
         kind,
         line_range: None,
+        orphaned: false,
     }
 }
 
