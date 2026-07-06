@@ -35,6 +35,28 @@ mod tests {
     #[test]
     fn mermaid_asset_is_bundled_and_within_size_budget() {
         assert!(mermaid_js().contains("mermaidAPI"));
-        assert!(mermaid_js().len() < 700 * 1024);
+        assert!(mermaid_js().len() < 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn shim_uses_modern_mermaid_api_and_loose_security() {
+        let shim = mermaid_shim_js();
+        assert!(shim.contains("startOnLoad: false"));
+        assert!(shim.contains("securityLevel: 'loose'"));
+        assert!(shim.contains(".render(id, source)"));
+        assert!(shim.contains("output.svg"));
+        assert!(shim.contains("'rendered'"));
+    }
+
+    #[test]
+    fn shim_marks_blocks_for_prism_skip_before_loading_mermaid() {
+        let shim = mermaid_shim_js();
+        let mark_pos = shim
+            .find("'mermaid-block', 'no-line-numbers'")
+            .expect("shim should mark mermaid pre blocks");
+        let script_pos = shim
+            .find("document.createElement('script')")
+            .expect("shim should load mermaid asset");
+        assert!(mark_pos < script_pos);
     }
 }

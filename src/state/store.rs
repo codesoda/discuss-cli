@@ -186,6 +186,7 @@ mod tests {
             text: format!("thread {id}"),
             created_at: timestamp(0),
             kind: ThreadKind::User,
+            line_range: None,
         }
     }
 

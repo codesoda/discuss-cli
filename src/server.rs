@@ -6,19 +6,19 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::Json;
+use axum::Router;
 use axum::body::Body;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::Path;
 use axum::extract::State as AxumState;
-use axum::http::header;
+use axum::extract::rejection::JsonRejection;
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
-use axum::Json;
-use axum::Router;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -32,10 +32,10 @@ use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
-    Draft, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
+    Draft, LineRange, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
 };
 use crate::transcript::build_transcript;
-use crate::{render, template, Config, DiscussError, Result};
+use crate::{Config, DiscussError, Result, render, template};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
 const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
@@ -427,6 +427,8 @@ struct CreateThreadRequest {
     anchor_end: usize,
     snippet: String,
     text: String,
+    #[serde(default)]
+    line_range: Option<LineRange>,
 }
 
 #[derive(Debug, Serialize)]
@@ -549,6 +551,15 @@ async fn post_api_threads(
             );
         }
     };
+    if let Some(line_range) = request.line_range
+        && (line_range.start == 0 || line_range.end < line_range.start)
+    {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "lineRange must satisfy 1 <= start <= end",
+        );
+    }
     let created_at = Utc::now();
     let thread = Thread {
         id: app_state.next_user_thread_id(),
@@ -559,6 +570,7 @@ async fn post_api_threads(
         text: request.text,
         created_at,
         kind: ThreadKind::User,
+        line_range: request.line_range,
     };
 
     if app_state

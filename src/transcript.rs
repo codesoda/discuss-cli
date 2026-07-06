@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{Reply, Resolution, State, Take, ThreadId, ThreadKind};
+use crate::state::{LineRange, Reply, Resolution, State, Take, ThreadId, ThreadKind};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +19,8 @@ pub struct TranscriptThread {
     pub breadcrumb: String,
     pub text: String,
     pub kind: ThreadKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_range: Option<LineRange>,
     pub replies: Vec<Reply>,
     pub takes: Vec<Take>,
     pub resolution: Option<Resolution>,
@@ -38,6 +40,7 @@ pub fn build_transcript(state: &State) -> Transcript {
             breadcrumb: thread.breadcrumb.clone(),
             text: thread.text.clone(),
             kind: thread.kind.clone(),
+            line_range: thread.line_range,
             replies: state.replies_for_thread(&thread.id),
             takes: state.takes_for_thread(&thread.id),
             resolution: state.resolution_for_thread(&thread.id),
@@ -76,6 +79,7 @@ mod tests {
             text: format!("initial comment {id}"),
             created_at: timestamp(anchor_start as u32),
             kind: ThreadKind::User,
+            line_range: None,
         }
     }
 
@@ -210,6 +214,27 @@ mod tests {
         );
         assert!(value["threads"][0].get("anchor_start").is_none());
         assert!(value["threads"][0].get("created_at").is_none());
+    }
+
+    #[test]
+    fn transcript_preserves_line_range_for_code_block_threads() {
+        use crate::state::LineRange;
+
+        let mut thread_with_range = thread("u-code", 5, 5);
+        thread_with_range.line_range = Some(LineRange { start: 2, end: 4 });
+
+        let mut state = State::default();
+        state.add_thread(thread_with_range);
+
+        let transcript = build_transcript(&state);
+        assert_eq!(
+            transcript.threads[0].line_range,
+            Some(LineRange { start: 2, end: 4 })
+        );
+
+        let value = serde_json::to_value(&transcript).expect("serialize");
+        assert_eq!(value["threads"][0]["lineRange"]["start"], 2);
+        assert_eq!(value["threads"][0]["lineRange"]["end"], 4);
     }
 
     #[test]

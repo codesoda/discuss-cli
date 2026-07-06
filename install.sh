@@ -3,8 +3,10 @@ set -eu
 
 BINARY_NAME="discuss"
 REPO_URL="https://github.com/codesoda/discuss-cli"
+RAW_REPO_URL="https://raw.githubusercontent.com/codesoda/discuss-cli"
 INSTALL_DIR="${HOME}/.discuss/bin"
 LINK_DIR="${HOME}/.local/bin"
+SKILL_INSTALL_DIR="${HOME}/.discuss/skills/discuss"
 INSTALLED_BINARY="${INSTALL_DIR}/${BINARY_NAME}"
 LINK_BINARY="${LINK_DIR}/${BINARY_NAME}"
 TMP_DIR=""
@@ -217,8 +219,7 @@ print_path_hint() {
 }
 
 install_skill_symlinks() {
-  SOURCE_DIR="$1"
-  SKILL_SOURCE="${SOURCE_DIR}/skills/discuss"
+  SKILL_SOURCE="$1"
 
   if [ ! -d "${SKILL_SOURCE}" ]; then
     warn "skill source not found at ${SKILL_SOURCE}; skipping skill install"
@@ -250,6 +251,66 @@ install_skill_symlinks() {
   done
 }
 
+fetch_to() {
+  URL="$1"
+  DEST="$2"
+  HTTP_STATUS="$(curl -L -sS --connect-timeout 10 --retry 2 -w '%{http_code}' -o "${DEST}" "${URL}" 2>/dev/null)" || HTTP_STATUS="000"
+  case "${HTTP_STATUS}" in
+    2??) return 0 ;;
+    *)
+      rm -f "${DEST}"
+      printf '%s' "${HTTP_STATUS}"
+      return 1
+      ;;
+  esac
+}
+
+install_skill_from_download() {
+  REF="$1"
+  STAGING="${TMP_DIR}/skill-staging/discuss"
+  mkdir -p "${STAGING}" || {
+    warn "failed to stage skill download; skipping skill install"
+    return 0
+  }
+
+  RAW_BASE="${RAW_REPO_URL}/${REF}/skills/discuss"
+  MANIFEST_DEST="${STAGING}/manifest.txt"
+
+  status "Fetching skill manifest from ${RAW_BASE}/manifest.txt"
+  if ! HTTP_STATUS="$(fetch_to "${RAW_BASE}/manifest.txt" "${MANIFEST_DEST}")"; then
+    warn "failed to fetch skill manifest (HTTP ${HTTP_STATUS}); skipping skill install"
+    return 0
+  fi
+
+  while IFS= read -r FILE_PATH || [ -n "${FILE_PATH}" ]; do
+    # Strip CR (in case of CRLF) and surrounding whitespace
+    FILE_PATH="$(printf '%s' "${FILE_PATH}" | tr -d '\r' | awk '{$1=$1};1')"
+    case "${FILE_PATH}" in
+      ''|'#'*) continue ;;
+    esac
+    DEST_DIR="$(dirname "${STAGING}/${FILE_PATH}")"
+    mkdir -p "${DEST_DIR}" || {
+      warn "failed to create ${DEST_DIR}; skipping skill install"
+      return 0
+    }
+    if ! HTTP_STATUS="$(fetch_to "${RAW_BASE}/${FILE_PATH}" "${STAGING}/${FILE_PATH}")"; then
+      warn "failed to fetch skill file ${FILE_PATH} (HTTP ${HTTP_STATUS}); skipping skill install"
+      return 0
+    fi
+  done < "${MANIFEST_DEST}"
+
+  mkdir -p "${HOME}/.discuss/skills" || {
+    warn "failed to create ${HOME}/.discuss/skills; skipping skill install"
+    return 0
+  }
+  rm -rf "${SKILL_INSTALL_DIR}"
+  cp -R "${STAGING}" "${SKILL_INSTALL_DIR}" || {
+    warn "failed to install skill to ${SKILL_INSTALL_DIR}"
+    return 0
+  }
+  install_skill_symlinks "${SKILL_INSTALL_DIR}"
+}
+
 verify_install() {
   status "Installed ${BINARY_NAME} to ${INSTALLED_BINARY}"
   status "Linked ${LINK_BINARY} to ${INSTALLED_BINARY}"
@@ -274,9 +335,10 @@ SCRIPT_DIR="$(script_dir)" || die "failed to determine script directory"
 
 if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -f "${SCRIPT_DIR}/Cargo.toml" ]; then
   run_source_install "${SCRIPT_DIR}"
-  install_skill_symlinks "${SCRIPT_DIR}"
+  install_skill_symlinks "${SCRIPT_DIR}/skills/discuss"
 else
   run_download_install
+  install_skill_from_download "${TAG}"
 fi
 
 verify_install
