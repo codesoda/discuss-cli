@@ -275,12 +275,17 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
+        // localStorage may only persist UI preferences (theme, ⌘-Enter-to-send),
+        // never document/thread state. The old state-in-localStorage pattern used
+        // STORAGE_KEY = 'discuss-state' — that must stay removed.
         for (offset, _) in page.match_indices("localStorage") {
             let window_end = (offset + 80).min(page.len());
             let context = &page[offset..window_end];
             assert!(
-                context.contains("discuss-theme") || context.contains("THEME_STORAGE_KEY"),
-                "localStorage may only persist the theme preference; saw: {context}",
+                context.contains("discuss-theme")
+                    || context.contains("THEME_STORAGE_KEY")
+                    || context.contains("CMD_ENTER_KEY"),
+                "localStorage may only persist UI preferences; saw: {context}",
             );
         }
         assert!(!page.contains("STORAGE_KEY = 'discuss-state'"));
