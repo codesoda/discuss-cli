@@ -12,6 +12,7 @@ use clap::CommandFactory;
 use crate::state::{File, FileId, FileKind, Source};
 
 pub mod assets;
+pub mod blocks;
 pub mod cli;
 pub mod config;
 pub mod diff;
