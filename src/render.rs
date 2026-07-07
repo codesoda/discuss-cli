@@ -10,7 +10,7 @@ pub fn render(markdown: &str) -> String {
     }
 }
 
-fn render_options() -> Options<'static> {
+pub(crate) fn render_options() -> Options<'static> {
     let mut options = Options::default();
     options.extension.table = true;
     options.extension.strikethrough = true;
@@ -20,7 +20,7 @@ fn render_options() -> Options<'static> {
     options
 }
 
-fn split_frontmatter(input: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_frontmatter(input: &str) -> Option<(&str, &str)> {
     let first_newline = input.find('\n')?;
     if input[..first_newline].trim_end() != "---" {
         return None;
