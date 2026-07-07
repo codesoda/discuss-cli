@@ -104,6 +104,7 @@
     --header-h: 54px;
     --left-w: 60%;
     --divider-w: 6px;
+    --files-w: 0px;
     --left-gutter: 44px;
     --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
@@ -296,19 +297,101 @@
   }
   .workspace-grid {
     display: grid;
-    grid-template-columns: var(--left-w) var(--divider-w) 1fr;
+    grid-template-columns: var(--files-w) var(--left-w) var(--divider-w) 1fr;
     min-height: 100%;
     align-items: start;
     background: linear-gradient(
       to right,
-      var(--card) 0,
-      var(--card) var(--left-w),
-      var(--line-strong) var(--left-w),
-      var(--line-strong) calc(var(--left-w) + var(--divider-w)),
-      var(--bg) calc(var(--left-w) + var(--divider-w)),
+      var(--bg) 0,
+      var(--bg) var(--files-w),
+      var(--card) var(--files-w),
+      var(--card) calc(var(--files-w) + var(--left-w)),
+      var(--line-strong) calc(var(--files-w) + var(--left-w)),
+      var(--line-strong) calc(var(--files-w) + var(--left-w) + var(--divider-w)),
+      var(--bg) calc(var(--files-w) + var(--left-w) + var(--divider-w)),
       var(--bg) 100%
     );
   }
+
+  /* --- File sidebar (multi-file sessions) --- */
+  body.multi-file { --files-w: 236px; }
+  .file-sidebar { display: none; }
+  body.multi-file .file-sidebar {
+    display: block;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - var(--header-h));
+    overflow-y: auto;
+    padding: 20px 8px 20px 10px;
+    border-right: 1px solid var(--line);
+    background: var(--bg);
+    min-width: 0;
+  }
+  .file-sidebar .file-sidebar-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted, #888);
+    margin: 0 0 8px 8px;
+  }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 8px;
+    border: 0;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.3;
+  }
+  .file-item:hover { background: var(--pre-bg); }
+  .file-item.active {
+    background: var(--card);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    font-weight: 600;
+  }
+  .file-item .file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-item .file-dir { opacity: 0.55; }
+  .file-item .file-kind {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--pre-bg);
+    color: var(--ink);
+    opacity: 0.8;
+  }
+  .file-item .file-count {
+    flex: 0 0 auto;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--marker-pink);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+  }
+  .file-item .file-count.zero { display: none; }
   #divider { align-self: stretch; }
   .pane-left, .pane-right { min-width: 0; }
   .pane-left {
@@ -552,7 +635,7 @@
   .heading-minimap {
     position: fixed;
     top: calc(var(--header-h) + 36px);
-    left: 2px;
+    left: calc(var(--files-w) + 2px);
     z-index: 50;
     display: flex;
     flex-direction: column;
@@ -1240,6 +1323,7 @@
 
 <div class="workspace" id="workspace">
   <div class="workspace-grid" id="workspace-grid">
+    <nav class="file-sidebar" id="file-sidebar" aria-label="Files under review"></nav>
     <div class="pane-left" id="pane-left">
       <!-- ==================== REPLACE THIS BLOCK WITH YOUR CONTENT ==================== -->
       <section id="doc-content">
@@ -1351,6 +1435,24 @@
   let currentState = emptyDiscussionState();
   let reviewComplete = false;
 
+  // ---------- Multi-file session state ----------
+  // The server seeds pre-rendered HTML for every file so switching files in
+  // the sidebar is a pure client-side swap (same machinery as live source
+  // updates). Single-file sessions keep the sidebar hidden and behave as
+  // before with everything scoped to the default file id.
+  const DEFAULT_FILE_ID = 'f-1';
+  const renderedFileHtml = new Map(
+    (Array.isArray(window.__DISCUSS_RENDERED_FILES__) ? window.__DISCUSS_RENDERED_FILES__ : [])
+      .filter(f => f && f.id != null)
+      .map(f => [String(f.id), typeof f.html === 'string' ? f.html : ''])
+  );
+  let discussFiles = [];
+  let activeFileId = DEFAULT_FILE_ID;
+
+  function threadFileId(t) {
+    return t && t.fileId ? String(t.fileId) : DEFAULT_FILE_ID;
+  }
+
   function emptyDiscussionState() {
     return {
       threads: [],
@@ -1361,6 +1463,7 @@
       resolutions: {},
       drafts: { newThread: {}, followup: {} },
       sourceVersion: 0,
+      files: [],
     };
   }
   function normalizeState(raw) {
@@ -1376,7 +1479,18 @@
     state.drafts = normalizeDrafts(raw.drafts);
     const sourceVersion = parseInt(raw.sourceVersion, 10);
     state.sourceVersion = Number.isFinite(sourceVersion) && sourceVersion >= 0 ? sourceVersion : 0;
+    state.files = normalizeFilesList(raw.files);
     return state;
+  }
+  function normalizeFilesList(rawFiles) {
+    if (!Array.isArray(rawFiles)) return [];
+    return rawFiles
+      .filter(f => f && f.id != null)
+      .map(f => ({
+        id: String(f.id),
+        path: f.path == null ? '' : String(f.path),
+        kind: f.kind === 'diff' ? 'diff' : 'markdown',
+      }));
   }
   function normalizeUserThreads(sourceThreads) {
     if (!Array.isArray(sourceThreads)) return [];
@@ -1384,6 +1498,7 @@
       .filter(t => t && (!t.kind || t.kind === 'user'))
       .map(t => ({
         id: String(t.id || ''),
+        fileId: threadFileId(t),
         anchorStart: parseInt(t.anchorStart, 10),
         anchorEnd: parseInt(t.anchorEnd, 10),
         snippet: t.snippet || t.text || '',
@@ -1470,13 +1585,21 @@
     if (!rawDrafts || typeof rawDrafts !== 'object') return drafts;
     Object.entries(rawDrafts).forEach(([key, draft]) => {
       if (!draft || typeof draft !== 'object') return;
-      const [start, end] = key.split('-').map(n => parseInt(n, 10));
+      // Keys are `<fileId>|<start>-<end>`; legacy `<start>-<end>` keys
+      // belong to the default file.
+      const pipe = key.indexOf('|');
+      const fileId = pipe >= 0 ? key.slice(0, pipe) : (draft.fileId ? String(draft.fileId) : DEFAULT_FILE_ID);
+      const range = pipe >= 0 ? key.slice(pipe + 1) : key;
+      const [start, end] = range.split('-').map(n => parseInt(n, 10));
       const anchorStart = parseInt(draft.anchorStart, 10);
       const anchorEnd = parseInt(draft.anchorEnd, 10);
-      drafts[key] = {
+      const resolvedStart = Number.isFinite(anchorStart) ? anchorStart : start;
+      const resolvedEnd = Number.isFinite(anchorEnd) ? anchorEnd : end;
+      drafts[`${fileId}|${resolvedStart}-${resolvedEnd}`] = {
         text: draft.text || '',
-        anchorStart: Number.isFinite(anchorStart) ? anchorStart : start,
-        anchorEnd: Number.isFinite(anchorEnd) ? anchorEnd : end,
+        fileId,
+        anchorStart: resolvedStart,
+        anchorEnd: resolvedEnd,
         savedAt: draft.savedAt || draft.updatedAt || new Date().toISOString(),
       };
     });
@@ -1655,11 +1778,19 @@
     if (!payload || typeof payload.renderedHtml !== 'string') return;
     const doc = document.getElementById('doc-content');
     if (!doc) return;
-    // In-flight new-thread selections anchor into the old source; drop them.
-    if (typeof closeNewThreadEditor === 'function') closeNewThreadEditor();
-    doc.innerHTML = payload.renderedHtml;
-    assignAnchorIndices();
-    buildHeadingMinimap();
+    const updatedFileId = payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID;
+    // Keep the pre-rendered copy fresh so switching to this file later shows
+    // the updated content.
+    renderedFileHtml.set(updatedFileId, payload.renderedHtml);
+    const isActiveFile = updatedFileId === activeFileId;
+    if (isActiveFile) {
+      // In-flight new-thread selections anchor into the old source; drop them.
+      if (typeof closeNewThreadEditor === 'function') closeNewThreadEditor();
+      doc.innerHTML = payload.renderedHtml;
+      wrapCollapsibleSectionsDom();
+      assignAnchorIndices();
+      buildHeadingMinimap();
+    }
 
     const s = cloneState(loadState());
     const version = parseInt(payload.sourceVersion, 10);
@@ -1680,6 +1811,13 @@
     (s.userThreads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
     (s.threads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
     setCurrentState(s);
+
+    if (!isActiveFile) {
+      // Anchors for a background file were updated; only the sidebar badges
+      // and meta counts can change until the user switches to it.
+      renderMetaStatus();
+      return;
+    }
 
     highlightCodeBlocks();
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
@@ -1771,6 +1909,7 @@
 
   function pendingThreadMatches(existing, incoming) {
     return String(existing.id || '').startsWith('pending-')
+      && threadFileId(existing) === threadFileId(incoming)
       && parseInt(existing.anchorStart, 10) === incoming.anchorStart
       && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd
       && (existing.text || '') === incoming.text;
@@ -2056,8 +2195,10 @@
       const anchorStart = parseInt(payload.anchorStart, 10);
       const anchorEnd = parseInt(payload.anchorEnd, 10);
       if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return;
-      state.drafts.newThread[newThreadDraftKey(anchorStart, anchorEnd)] = {
+      const fileId = payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID;
+      state.drafts.newThread[newThreadDraftKey(anchorStart, anchorEnd, fileId)] = {
         text: payload.text || '',
+        fileId,
         anchorStart,
         anchorEnd,
         savedAt: payload.updatedAt || new Date().toISOString(),
@@ -2086,7 +2227,7 @@
       const anchorStart = parseInt(payload.anchorStart, 10);
       const anchorEnd = parseInt(payload.anchorEnd, 10);
       if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return;
-      clearNewThreadDraft(state, anchorStart, anchorEnd);
+      clearNewThreadDraft(state, anchorStart, anchorEnd, payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID);
     } else if (payload.scope === 'followup') {
       const threadId = payload.threadId == null ? '' : String(payload.threadId);
       if (!threadId) return;
@@ -2178,7 +2319,9 @@
   // Drafts persist in-progress text so a user who starts typing but clicks
   // off doesn't lose their work. A teal dashed marker appears on the anchor
   // until the draft is saved, resolved, or explicitly cleared.
-  function newThreadDraftKey(startIdx, endIdx) { return `${startIdx}-${endIdx}`; }
+  function newThreadDraftKey(startIdx, endIdx, fileId) {
+    return `${fileId || activeFileId}|${startIdx}-${endIdx}`;
+  }
   function ensureDraftState(state) {
     if (!state.drafts) state.drafts = { newThread: {}, followup: {} };
     if (!state.drafts.newThread) state.drafts.newThread = {};
@@ -2190,6 +2333,7 @@
     if (text && text.trim()) {
       state.drafts.newThread[key] = {
         text,
+        fileId: activeFileId,
         anchorStart: parseInt(startIdx, 10),
         anchorEnd: parseInt(endIdx, 10),
         savedAt: new Date().toISOString(),
@@ -2223,11 +2367,12 @@
     const anchorStart = parseInt(startIdx, 10);
     const anchorEnd = parseInt(endIdx, 10);
     if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return Promise.resolve();
-    return queueDraftRequest(`newThread:${anchorStart}-${anchorEnd}`, () => {
+    const fileId = activeFileId;
+    return queueDraftRequest(`newThread:${fileId}|${anchorStart}-${anchorEnd}`, () => {
       if (text && text.trim()) {
-        return apiJson('/api/drafts/new-thread', { body: { anchorStart, anchorEnd, text } });
+        return apiJson('/api/drafts/new-thread', { body: { fileId, anchorStart, anchorEnd, text } });
       }
-      return apiJson('/api/drafts/new-thread', { method: 'DELETE', body: { anchorStart, anchorEnd } });
+      return apiJson('/api/drafts/new-thread', { method: 'DELETE', body: { fileId, anchorStart, anchorEnd } });
     });
   }
   function persistFollowupDraft(threadId, text) {
@@ -2259,9 +2404,9 @@
   function clearFollowupDraft(state, threadId) {
     if (state.drafts && state.drafts.followup) delete state.drafts.followup[threadId];
   }
-  function clearNewThreadDraft(state, startIdx, endIdx) {
+  function clearNewThreadDraft(state, startIdx, endIdx, fileId) {
     if (state.drafts && state.drafts.newThread) {
-      delete state.drafts.newThread[newThreadDraftKey(startIdx, endIdx)];
+      delete state.drafts.newThread[newThreadDraftKey(startIdx, endIdx, fileId)];
     }
   }
   function escapeHtml(s) {
@@ -2271,7 +2416,10 @@
   }
 
   // ---------- Collapsible heading sections ----------
-  function wrapCollapsibleSections() {
+  // DOM pass runs on every document swap (file switch, live source update);
+  // the doc-level listeners persist across innerHTML swaps and are attached
+  // exactly once at boot.
+  function wrapCollapsibleSectionsDom() {
     const doc = document.getElementById('doc-content');
     if (!doc) return;
 
@@ -2299,6 +2447,11 @@
 
     wrapLevel(doc, 'H2', ['H1', 'H2']);
     wrapLevel(doc, 'H1', ['H1']);
+  }
+
+  function attachCollapsibleSectionListeners() {
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
 
     doc.addEventListener('click', (e) => {
       const toggle = e.target.closest('.section-toggle');
@@ -2317,7 +2470,8 @@
       refreshMarkerAggregation();
     }, true);
   }
-  wrapCollapsibleSections();
+  wrapCollapsibleSectionsDom();
+  attachCollapsibleSectionListeners();
 
   // ---------- Marker aggregation for collapsed sections ----------
   function refreshMarkerAggregation() {
@@ -2390,6 +2544,110 @@
     });
   }
   assignAnchorIndices();
+
+  // ---------- File sidebar (multi-file sessions) ----------
+  function initFileSidebar() {
+    const nav = document.getElementById('file-sidebar');
+    if (!nav) return;
+    if (!Array.isArray(discussFiles) || discussFiles.length < 2) {
+      document.body.classList.remove('multi-file');
+      nav.innerHTML = '';
+      return;
+    }
+    document.body.classList.add('multi-file');
+    nav.innerHTML = '';
+    const title = document.createElement('h2');
+    title.className = 'file-sidebar-title';
+    title.textContent = `Files (${discussFiles.length})`;
+    nav.appendChild(title);
+    discussFiles.forEach(file => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'file-item';
+      item.setAttribute('data-file-id', file.id);
+      item.title = file.path;
+      const name = document.createElement('span');
+      name.className = 'file-name';
+      const path = String(file.path || '');
+      const slash = path.lastIndexOf('/');
+      if (slash >= 0) {
+        const dir = document.createElement('span');
+        dir.className = 'file-dir';
+        dir.textContent = path.slice(0, slash + 1);
+        name.appendChild(dir);
+      }
+      name.appendChild(document.createTextNode(slash >= 0 ? path.slice(slash + 1) : path));
+      item.appendChild(name);
+      if (file.kind === 'diff') {
+        const tag = document.createElement('span');
+        tag.className = 'file-kind';
+        tag.textContent = 'diff';
+        item.appendChild(tag);
+      }
+      const count = document.createElement('span');
+      count.className = 'file-count zero';
+      item.appendChild(count);
+      item.addEventListener('click', () => switchToFile(file.id));
+      nav.appendChild(item);
+    });
+    updateFileSidebar();
+  }
+
+  // Refreshes active-file highlight and per-file open-thread badges. Runs on
+  // every meta-status refresh so agent-created threads on background files
+  // surface in the sidebar immediately.
+  function updateFileSidebar() {
+    const nav = document.getElementById('file-sidebar');
+    if (!nav || !document.body.classList.contains('multi-file')) return;
+    const state = loadState();
+    const resolvedIds = new Set(Object.keys(state.resolutions || {}).map(String));
+    const openByFile = new Map();
+    (state.userThreads || []).forEach(t => {
+      if (resolvedIds.has(String(t.id))) return;
+      const fid = threadFileId(t);
+      openByFile.set(fid, (openByFile.get(fid) || 0) + 1);
+    });
+    prepopulated.forEach(t => {
+      if (!t || !t.anchorIdx || resolvedIds.has(String(t.id))) return;
+      const fid = t.fileId ? String(t.fileId) : DEFAULT_FILE_ID;
+      openByFile.set(fid, (openByFile.get(fid) || 0) + 1);
+    });
+    nav.querySelectorAll('.file-item').forEach(item => {
+      const id = item.getAttribute('data-file-id');
+      item.classList.toggle('active', id === activeFileId);
+      const open = openByFile.get(id) || 0;
+      const badge = item.querySelector('.file-count');
+      if (badge) {
+        badge.textContent = open > 0 ? String(open) : '';
+        badge.classList.toggle('zero', open === 0);
+      }
+    });
+  }
+
+  // Swaps the visible document to another file. Same re-run sequence as a
+  // live source update: the conversation state survives, and anchors are
+  // recomputed against the newly injected content.
+  function switchToFile(fileId) {
+    const id = String(fileId);
+    if (id === activeFileId) return;
+    if (!renderedFileHtml.has(id)) return;
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+    if (typeof closeNewThreadEditor === 'function' && newThreadEditor) closeNewThreadEditor();
+    activeFileId = id;
+    doc.innerHTML = renderedFileHtml.get(id);
+    wrapCollapsibleSectionsDom();
+    assignAnchorIndices();
+    buildHeadingMinimap();
+    highlightCodeBlocks();
+    if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
+    renderAllThreads();
+    const workspace = document.querySelector('.workspace');
+    if (workspace) workspace.scrollTo({ top: 0 });
+    updateFileSidebar();
+    scheduleReposition();
+    setTimeout(scheduleReposition, 600);
+  }
 
   // ---------- Heading minimap (left-edge document outline) ----------
   function buildHeadingMinimap() {
@@ -3096,6 +3354,7 @@
       segments.push('click a marker to open');
     }
     el.innerHTML = segments.join(' · ');
+    updateFileSidebar();
   }
   function countLiveDrafts(state) {
     const nt = Object.values(state.drafts.newThread || {})
@@ -3157,10 +3416,13 @@
     threadsHost.innerHTML = '';
     prepopulated.forEach(t => {
       if (!t.anchorIdx) return;
+      if ((t.fileId ? String(t.fileId) : DEFAULT_FILE_ID) !== activeFileId) return;
       threadsHost.appendChild(createPrepopulatedThread(t));
     });
     const s = loadState();
-    s.userThreads.forEach(t => threadsHost.appendChild(createUserThread(t)));
+    s.userThreads
+      .filter(t => threadFileId(t) === activeFileId)
+      .forEach(t => threadsHost.appendChild(createUserThread(t)));
     renderMarkers();
     updateEmptyState();
     renderMetaStatus();
@@ -3241,6 +3503,7 @@
     const draftAnchors = new Map();
     Object.entries(newThreadDrafts).forEach(([key, draft]) => {
       if (!draft || !draft.text || !draft.text.trim()) return;
+      if ((draft.fileId ? String(draft.fileId) : DEFAULT_FILE_ID) !== activeFileId) return;
       draftAnchors.set(key, {
         key,
         anchorStart: draft.anchorStart,
@@ -3611,6 +3874,7 @@
       const createdAt = new Date().toISOString();
       s.userThreads.push({
         id,
+        fileId: activeFileId,
         anchorStart: parseInt(startIdx),
         anchorEnd: parseInt(endIdx),
         snippet,
@@ -3620,6 +3884,7 @@
       });
       s.threads.push({
         id,
+        fileId: activeFileId,
         anchorStart: parseInt(startIdx),
         anchorEnd: parseInt(endIdx),
         snippet,
@@ -3642,6 +3907,7 @@
       try {
         const created = await apiJson('/api/threads', {
           body: {
+            fileId: activeFileId,
             anchorStart: parseInt(startIdx),
             anchorEnd: parseInt(endIdx),
             snippet,
@@ -4109,6 +4375,9 @@
   initThemeToggle();
   attachPrismCompleteHook();
   hydrateState().then(() => {
+    discussFiles = loadState().files || [];
+    if (discussFiles.length) activeFileId = String(discussFiles[0].id);
+    initFileSidebar();
     highlightCodeBlocks();
     renderAllThreads();
     scheduleReposition();

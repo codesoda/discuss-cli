@@ -351,7 +351,7 @@ mod tests {
         assert!(page.contains("function persistNewThreadDraft"));
         assert!(page.contains("function queueDraftRequest"));
         assert!(page.contains("apiJson('/api/drafts/new-thread'"));
-        assert!(page.contains("method: 'DELETE', body: { anchorStart, anchorEnd }"));
+        assert!(page.contains("method: 'DELETE', body: { fileId, anchorStart, anchorEnd }"));
         assert!(page.contains("function persistFollowupDraft"));
         assert!(page.contains("apiJson('/api/drafts/followup'"));
         assert!(page.contains("method: 'DELETE', body: { threadId }"));

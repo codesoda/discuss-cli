@@ -2390,6 +2390,262 @@ async fn post_api_threads_rejects_stale_source_version() {
         .expect("server shutdown should succeed");
 }
 
+fn multi_file_source() -> discuss::state::Source {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    Source {
+        files: vec![
+            File {
+                id: FileId("f-1".to_string()),
+                path: "alpha.md".to_string(),
+                kind: FileKind::Markdown,
+                content: "# Alpha\n\nAlpha body.\n".to_string(),
+            },
+            File {
+                id: FileId("f-2".to_string()),
+                path: "beta.md".to_string(),
+                kind: FileKind::Markdown,
+                content: "# Beta\n\nBeta body.\n".to_string(),
+            },
+            File {
+                id: FileId("f-3".to_string()),
+                path: "code.rs".to_string(),
+                kind: FileKind::Diff,
+                content: "diff --git a/code.rs b/code.rs\nindex 111..222 100644\n--- a/code.rs\n+++ b/code.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn new_name() {}\n".to_string(),
+            },
+        ],
+    }
+}
+
+#[tokio::test]
+async fn get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_root(addr).await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let body = response_body(&response);
+
+    // First file is injected into #doc-content; every file is seeded into
+    // the rendered-files map for client-side switching.
+    assert!(doc_content(body).contains("<h1>Alpha</h1>"));
+    assert!(body.contains("window.__DISCUSS_RENDERED_FILES__ = "));
+    assert!(body.contains(r#"{"id":"f-1","html":"#));
+    assert!(body.contains(r#"{"id":"f-2","html":"#));
+    assert!(body.contains(r#"{"id":"f-3","html":"#));
+    // Diff files render as per-hunk diff-<lang> fenced blocks.
+    assert!(body.contains("language-diff-rust"));
+    // Initial state carries file metadata (no content) for the sidebar.
+    assert!(body.contains(r#"\"files\":"#) || body.contains(r#""files":"#));
+    assert!(body.contains(r#""path":"beta.md"#));
+    assert!(body.contains(r#""kind":"diff"#));
+    assert!(body.contains(r#"id="file-sidebar""#));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_validates_file_id_against_loaded_files() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let missing = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"s","text":"t"}"#,
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 400"), "response: {missing}");
+    assert_eq!(response_json(&missing)["error"]["code"], "missing_file_id");
+
+    let unknown = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"fileId":"f-9","anchorStart":1,"anchorEnd":1,"snippet":"s","text":"t"}"#,
+    )
+    .await;
+    assert!(unknown.starts_with("HTTP/1.1 404"), "response: {unknown}");
+    assert_eq!(response_json(&unknown)["error"]["code"], "unknown_file");
+
+    let created = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"fileId":"f-2","anchorStart":2,"anchorEnd":2,"snippet":"Beta body.","text":"note"}"#,
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
+    let created = response_json(&created);
+    assert_eq!(created["fileId"], "f-2");
+
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["threads"][0]["fileId"], "f-2");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_defaults_file_id_in_single_file_sessions() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Solo\n\nBody.\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let created = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"Solo","text":"no fileId needed"}"#,
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
+    assert_eq!(response_json(&created)["fileId"], "f-1");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_source_scopes_coverage_and_payload_to_the_updated_file() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let created = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"fileId":"f-2","anchorStart":2,"anchorEnd":2,"snippet":"Beta body.","text":"beta note"}"#,
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
+    let thread_id = response_json(&created)["id"].as_str().unwrap().to_string();
+
+    // Updating f-1 must not require (or accept) f-2's threads.
+    let foreign = post_json_path(
+        addr,
+        "/api/source",
+        &json!({
+            "fileId": "f-1",
+            "markdown": "# Alpha v2\n",
+            "threadAnchors": [{ "threadId": thread_id, "anchorStart": 1, "anchorEnd": 1 }]
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(foreign.starts_with("HTTP/1.1 400"), "response: {foreign}");
+
+    let updated = post_json_path(
+        addr,
+        "/api/source",
+        r##"{"fileId":"f-1","markdown":"# Alpha v2\n","threadAnchors":[]}"##,
+    )
+    .await;
+    assert!(updated.starts_with("HTTP/1.1 200"), "response: {updated}");
+    let payload = response_json(&updated);
+    assert_eq!(payload["fileId"], "f-1");
+    assert!(
+        payload["renderedHtml"]
+            .as_str()
+            .unwrap()
+            .contains("<h1>Alpha v2</h1>")
+    );
+    assert_eq!(payload["threadAnchors"], json!([]));
+
+    // Updating f-2 requires covering its active thread.
+    let uncovered = post_json_path(
+        addr,
+        "/api/source",
+        r##"{"fileId":"f-2","markdown":"# Beta v2\n","threadAnchors":[]}"##,
+    )
+    .await;
+    assert!(
+        uncovered.starts_with("HTTP/1.1 400"),
+        "response: {uncovered}"
+    );
+    assert!(uncovered.contains("must cover every active thread on file f-2"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn drafts_with_same_anchors_on_different_files_coexist() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for (file_id, text) in [("f-1", "alpha draft"), ("f-2", "beta draft")] {
+        let response = post_json_path(
+            addr,
+            "/api/drafts/new-thread",
+            &json!({ "fileId": file_id, "anchorStart": 1, "anchorEnd": 2, "text": text })
+                .to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+        assert_eq!(response_json(&response)["fileId"], *file_id);
+    }
+
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(
+        state["drafts"]["newThread"]["f-1|1-2"]["text"],
+        "alpha draft"
+    );
+    assert_eq!(
+        state["drafts"]["newThread"]["f-2|1-2"]["text"],
+        "beta draft"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
