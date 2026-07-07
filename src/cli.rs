@@ -18,6 +18,7 @@ LLM ref: https://github.com/codesoda/discuss-cli/blob/main/llms.txt";
     name = "discuss",
     version,
     about = "Launch a live bidirectional markdown review session.",
+    subcommand_precedence_over_arg = true,
     after_help = HELP_FOOTER,
     after_long_help = HELP_FOOTER
 )]
@@ -45,9 +46,9 @@ pub struct Args {
 
     #[arg(
         value_name = "FILE",
-        help = "Markdown file to review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin."
+        help = "One or more files to review together. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin. Multiple paths open a single session with a file sidebar."
     )]
-    pub file: Option<PathBuf>,
+    pub files: Vec<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -61,6 +62,41 @@ pub enum Commands {
 Updates are explicit-only: discuss never checks for updates automatically, so no env opt-out is needed."
     )]
     Update(UpdateArgs),
+
+    #[command(
+        about = "Review a git diff in the browser.",
+        long_about = "Review a git diff in the browser.\n\n\
+Defaults to the staged diff (git diff --cached). Pass --unstaged for the working tree, or pass\n\
+<range> arguments through to `git diff` (e.g. HEAD~3..HEAD or main...feature).\n\n\
+Combines with the file list: `discuss plan.md diff HEAD~1..HEAD` reviews the markdown file and\n\
+the diff together in one session."
+    )]
+    Diff(DiffArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DiffArgs {
+    #[arg(
+        long,
+        conflicts_with = "args",
+        help = "Show the working tree diff (git diff) instead of the staged diff (git diff --cached)."
+    )]
+    pub unstaged: bool,
+
+    #[arg(
+        long,
+        value_name = "BYTES",
+        help = "Override the diff size cap (default 5 MB). Use 0 to disable the cap."
+    )]
+    pub max_diff_bytes: Option<usize>,
+
+    #[arg(
+        value_name = "ARG",
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Additional arguments forwarded to `git diff` (e.g. HEAD~3..HEAD)."
+    )]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -91,7 +127,7 @@ mod tests {
     fn bare_command_parses_with_no_file_or_subcommand() {
         let args = Args::try_parse_from(["discuss"]).expect("bare command should parse");
 
-        assert!(args.file.is_none());
+        assert!(args.files.is_empty());
         assert!(args.command.is_none());
     }
 
@@ -99,7 +135,7 @@ mod tests {
     fn parses_stdin_dash_argument() {
         let args = Args::try_parse_from(["discuss", "-"]).expect("dash should parse as stdin");
 
-        assert_eq!(args.file, Some(PathBuf::from("-")));
+        assert_eq!(args.files, vec![PathBuf::from("-")]);
     }
 
     #[test]
@@ -110,8 +146,118 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
         assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn parses_multiple_file_arguments() {
+        let args = Args::try_parse_from(["discuss", "a.md", "b.md", "c.md"])
+            .expect("multi file args should parse");
+
+        assert_eq!(
+            args.files,
+            vec![
+                PathBuf::from("a.md"),
+                PathBuf::from("b.md"),
+                PathBuf::from("c.md"),
+            ]
+        );
+        assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn parses_mixed_stdin_and_file_arguments() {
+        let args = Args::try_parse_from(["discuss", "a.md", "-", "b.md"])
+            .expect("mixed stdin + files should parse");
+
+        assert_eq!(
+            args.files,
+            vec![
+                PathBuf::from("a.md"),
+                PathBuf::from("-"),
+                PathBuf::from("b.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_defaults() {
+        let args = Args::try_parse_from(["discuss", "diff"]).expect("diff should parse");
+
+        assert!(args.files.is_empty());
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert!(!diff_args.unstaged);
+        assert!(diff_args.args.is_empty());
+        assert_eq!(diff_args.max_diff_bytes, None);
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_unstaged_flag() {
+        let args =
+            Args::try_parse_from(["discuss", "diff", "--unstaged"]).expect("unstaged parses");
+
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert!(diff_args.unstaged);
+        assert!(diff_args.args.is_empty());
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_range_args() {
+        let args = Args::try_parse_from(["discuss", "diff", "HEAD~3..HEAD"]).expect("range parses");
+
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert!(!diff_args.unstaged);
+        assert_eq!(diff_args.args, vec!["HEAD~3..HEAD".to_string()]);
+    }
+
+    #[test]
+    fn parses_diff_subcommand_with_max_diff_bytes() {
+        let args = Args::try_parse_from(["discuss", "diff", "--max-diff-bytes", "1048576"])
+            .expect("max-diff-bytes parses");
+
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert_eq!(diff_args.max_diff_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn rejects_unstaged_with_range_args() {
+        let error = Args::try_parse_from(["discuss", "diff", "--unstaged", "HEAD~3..HEAD"])
+            .expect_err("unstaged with range should conflict");
+
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_files_combined_with_diff_subcommand() {
+        let args = Args::try_parse_from(["discuss", "plan.md", "notes.md", "diff", "HEAD~1..HEAD"])
+            .expect("files + diff should parse");
+
+        assert_eq!(
+            args.files,
+            vec![PathBuf::from("plan.md"), PathBuf::from("notes.md")]
+        );
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert_eq!(diff_args.args, vec!["HEAD~1..HEAD".to_string()]);
+    }
+
+    #[test]
+    fn parses_files_combined_with_bare_diff() {
+        let args =
+            Args::try_parse_from(["discuss", "plan.md", "diff"]).expect("file + diff parses");
+
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
+        assert!(matches!(args.command, Some(Commands::Diff(_))));
     }
 
     #[test]
@@ -123,7 +269,7 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -134,7 +280,7 @@ mod tests {
         assert!(args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -153,7 +299,7 @@ mod tests {
             args.history_dir,
             Some(PathBuf::from("/tmp/discuss-history"))
         );
-        assert_eq!(args.file, Some(PathBuf::from("plan.md")));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
     }
 
     #[test]
@@ -172,7 +318,7 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
-        assert!(args.file.is_none());
+        assert!(args.files.is_empty());
         assert!(matches!(
             args.command,
             Some(Commands::Update(UpdateArgs {

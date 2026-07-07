@@ -1,11 +1,16 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{LineRange, Reply, Resolution, State, Take, ThreadId, ThreadKind};
+use crate::state::{
+    FileId, FileMeta, LineRange, Reply, Resolution, Source, State, Take, ThreadId, ThreadKind,
+    default_file_id,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileMeta>,
     pub threads: Vec<TranscriptThread>,
 }
 
@@ -13,6 +18,8 @@ pub struct Transcript {
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptThread {
     pub id: ThreadId,
+    #[serde(default = "default_file_id")]
+    pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
     pub snippet: String,
@@ -29,11 +36,23 @@ pub struct TranscriptThread {
 }
 
 pub fn build_transcript(state: &State) -> Transcript {
+    build_transcript_inner(state, &[])
+}
+
+/// Builds a transcript whose threads are grouped by file (in CLI order) and
+/// then by anchor position, with file metadata included for consumers.
+pub fn build_transcript_with_source(state: &State, source: &Source) -> Transcript {
+    let files = source.files.iter().map(FileMeta::from).collect::<Vec<_>>();
+    build_transcript_inner(state, &files)
+}
+
+fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
     let mut threads = state
         .all_threads()
         .iter()
         .map(|thread| TranscriptThread {
             id: thread.id.clone(),
+            file_id: thread.file_id.clone(),
             anchor_start: thread.anchor_start,
             anchor_end: thread.anchor_end,
             snippet: thread.snippet.clone(),
@@ -49,9 +68,26 @@ pub fn build_transcript(state: &State) -> Transcript {
         })
         .collect::<Vec<_>>();
 
-    threads.sort_by_key(|thread| (thread.anchor_start, thread.anchor_end));
+    let file_order: std::collections::HashMap<&FileId, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(idx, file)| (&file.id, idx))
+        .collect();
+    threads.sort_by_key(|thread| {
+        (
+            file_order
+                .get(&thread.file_id)
+                .copied()
+                .unwrap_or(usize::MAX),
+            thread.anchor_start,
+            thread.anchor_end,
+        )
+    });
 
-    Transcript { threads }
+    Transcript {
+        files: files.to_vec(),
+        threads,
+    }
 }
 
 #[cfg(test)]
@@ -73,6 +109,7 @@ mod tests {
         Thread {
             orphaned: false,
             id: ThreadId(id.to_string()),
+            file_id: default_file_id(),
             anchor_start,
             anchor_end,
             snippet: format!("snippet {id}"),
@@ -191,6 +228,7 @@ mod tests {
             json!({
                 "threads": [{
                     "id": "u-1",
+                    "fileId": "f-1",
                     "anchorStart": 2,
                     "anchorEnd": 3,
                     "snippet": "snippet u-1",
