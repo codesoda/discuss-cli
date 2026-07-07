@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::env;
 use std::fs;
-use std::io::{self, Cursor, IsTerminal, Write};
+use std::io::{self, Cursor, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -38,7 +38,7 @@ pub fn check() -> Result<String> {
 }
 
 pub fn install(yes: bool) -> Result<String> {
-    let stdin_is_tty = io::stdin().is_terminal();
+    let stdin_is_tty = crate::stdin_is_terminal();
     if !yes && !stdin_is_tty {
         return Err(update_install_error(
             "stdin is not a TTY - rerun with `discuss update -y` to confirm the install non-interactively"

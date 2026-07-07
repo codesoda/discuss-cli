@@ -1,6 +1,6 @@
 use std::fs;
 use std::future::{Future, pending};
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, Read};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,7 @@ where
         command,
     } = args;
 
-    if command.is_none() && file.is_none() && io::stdin().is_terminal() {
+    if command.is_none() && file.is_none() && stdin_is_terminal() {
         eprintln!("{}", cli::Args::command().render_long_help());
         std::process::exit(exit::EXIT_CONFIG_ERROR);
     }
@@ -141,6 +141,16 @@ where
     }
 }
 
+/// Whether stdin is attached to an interactive terminal.
+///
+/// Uses the `is-terminal` crate instead of `std::io::IsTerminal` because on
+/// Windows the std trait reports MSYS2/mintty/Git Bash pseudo-ttys (named
+/// pipes such as `\\msys-*-pty*`) as non-terminals, which made bare `discuss`
+/// block on stdin instead of printing help. See issue #5.
+pub(crate) fn stdin_is_terminal() -> bool {
+    is_terminal::IsTerminal::is_terminal(&io::stdin())
+}
+
 struct MarkdownInput {
     markdown_source: String,
     source_path: Option<PathBuf>,
@@ -159,7 +169,7 @@ fn resolve_input(file: Option<PathBuf>) -> Result<Option<MarkdownInput>> {
                 source_file,
             }))
         }
-        None if !io::stdin().is_terminal() => Ok(Some(read_markdown_stdin()?)),
+        None if !stdin_is_terminal() => Ok(Some(read_markdown_stdin()?)),
         None => Ok(None),
     }
 }
