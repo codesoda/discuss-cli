@@ -314,6 +314,12 @@
   }
 
   /* --- File sidebar (multi-file sessions) --- */
+  /* Explicit column placement keeps the panes in their tracks whether or
+     not the sidebar is rendered (display:none children leave the grid). */
+  .file-sidebar { grid-column: 1; }
+  .pane-left { grid-column: 2; }
+  #divider { grid-column: 3; }
+  .pane-right { grid-column: 4; }
   body.multi-file { --files-w: 236px; }
   .file-sidebar { display: none; }
   body.multi-file .file-sidebar {
