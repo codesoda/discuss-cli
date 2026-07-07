@@ -440,7 +440,7 @@ mod tests {
     fn bundled_template_finishes_session_through_done_api() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
-        assert!(page.contains("Done \u{2014} send to chat"));
+        assert!(page.contains(">Finish review</button>"));
         assert!(page.contains("You can close this tab."));
         assert!(page.contains("await apiJson('/api/done')"));
         assert!(page.contains("function markReviewComplete()"));

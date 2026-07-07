@@ -24,7 +24,7 @@
     4. Open in a browser. Click any element to start a new comment.
        Drag-select across multiple elements to comment on a range. Click
        an existing marker (left-margin dot) to open its thread.
-    5. When done, press "Done — send to chat" and wait for the close-tab banner.
+    5. When done, press "Finish review" and wait for the close-tab banner.
 
   Features mirrored from /tmp/plan-review.html
     - Two-pane Google-Docs layout, draggable divider.
@@ -1319,7 +1319,7 @@
     </div>
   </span>
   <span class="done-control" id="done-control">
-    <button id="copy-all" title="Finish the review and send the transcript to the agent">Done — send to chat</button>
+    <button id="copy-all" title="Finish the review and send the transcript to the agent">Finish review</button>
   </span>
 </header>
 
@@ -1371,7 +1371,7 @@
           <li>Replace <code>#doc-content</code> with the document you want reviewed.</li>
           <li>Optionally pre-seed discussion threads via the <code>#prepopulated-threads</code> JSON block below.</li>
           <li>Open in a browser. Click any element to comment; drag-select for a range.</li>
-          <li>Use the <b>Done — send to chat</b> button to emit the transcript and finish the session.</li>
+          <li>Use the <b>Finish review</b> button to emit the transcript and finish the session.</li>
         </ol>
 
         <blockquote>
@@ -1884,7 +1884,7 @@
     });
     const btn = document.getElementById('copy-all');
     if (btn) {
-      btn.textContent = 'Done ✓';
+      btn.textContent = 'Finished ✓';
       btn.classList.add('ok');
     }
     showDoneBanner();
