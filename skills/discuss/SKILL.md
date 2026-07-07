@@ -23,6 +23,34 @@ When you have markdown content already in hand (e.g. a generated summary of stag
 
 In stdin mode, the `session.started` event reports `source_file: "<stdin>"` and history archives are written under `.../unnamed/` since there is no source path to derive a folder name from.
 
+### Multi-file mode
+
+Pass several paths to review them together in one session with a file sidebar:
+
+```
+discuss plan.md design.md notes.md
+```
+
+- Files are identified by `fileId` (`f-1`, `f-2`, … in CLI order). `/api/state` includes a `files` array (`{id, path, kind}`).
+- Every `thread.created` payload carries a `fileId`. When you create threads or push source updates in a multi-file session, `fileId` is **required** — omitting it returns `400 missing_file_id`.
+- Anchor indices are per-file (1-based commentable blocks within that file's document).
+- `session.started` gains `files_count`, and `source_file` becomes `multi-<N>-files`.
+
+### Diff review mode
+
+**Prefer `discuss diff` over generating a markdown wrapper of a git diff.** It skips the summarize-and-fence round trip entirely — the binary runs `git diff`, splits it per file, and renders each hunk as a `diff-<lang>` block with line-anchored threads working out of the box:
+
+```
+discuss diff                  # staged (git diff --cached)
+discuss diff --unstaged       # working tree
+discuss diff HEAD~3..HEAD     # arbitrary range forwarded to git diff
+discuss plan.md diff          # markdown file(s) + diff in one session
+```
+
+- `session.started` gains `mode` (`"markdown"` / `"diff"` / `"mixed"`) and `git_args` so you know what's under review.
+- Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
+- Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
+
 ## Preflight: Ensure `discuss` is installed
 
 Run `command -v discuss` (via Bash). If it resolves to a path, skip ahead to Step 0.
@@ -211,17 +239,17 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 |---|---|---|---|
 | GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts |
 | GET | `/api/events` | — | SSE stream (alternative to stdout) |
-| POST | `/api/threads` | `{anchorStart, anchorEnd, snippet, text}` | Create a thread. Rare — usually the user does this. |
+| POST | `/api/threads` | `{fileId?, anchorStart, anchorEnd, snippet, text}` | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
-| POST | `/api/source` | `{markdown, threadAnchors}` | Live source update with re-anchoring (see below) |
+| POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
 
 ### Live source updates (`POST /api/source`)
 
-If you regenerate the markdown mid-session (e.g. the user fixed code under review and you rebuilt the diff summary), push the new source into the running session instead of restarting it. You own the re-anchor decision: send the full new markdown plus one entry per **active** thread — either its new anchor position or `"orphaned": true` if its content no longer exists. Coverage is strict; the request is rejected (and nothing changes) if any active thread is missing or unknown.
+If you regenerate the markdown mid-session (e.g. the user fixed code under review and you rebuilt the diff summary), push the new source into the running session instead of restarting it. You own the re-anchor decision: send the full new markdown plus one entry per **active** thread **on that file** — either its new anchor position or `"orphaned": true` if its content no longer exists. Coverage is strict and scoped per file; the request is rejected (and nothing changes) if any of that file's active threads is missing, or if you reference a thread from another file. In multi-file sessions pass `fileId`; single-file sessions default to the only file.
 
 ```json
 {
@@ -237,14 +265,14 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 ## Stdout event kinds
 
-- `session.started` → `{url, source_file, started_at}`
+- `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
 - `session.done` → `{}` — emitted when discuss exits cleanly
-- `thread.created` → `{id, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
-- `source.updated` → `{markdown, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, or another agent's)
+- `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, or another agent's)
 - `prompt.suggest_done` → lifecycle; informational
 
 **Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.

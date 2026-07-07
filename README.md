@@ -15,6 +15,8 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 `discuss` makes the doc itself the workspace:
 
 - **Inline anchored threads** — click any paragraph, drop a comment, get a threaded response.
+- **Multi-file sessions** — `discuss a.md b.md c.md` reviews several files in one session with a file sidebar.
+- **First-class diff review** — `discuss diff` opens the staged git diff with per-hunk syntax highlighting and line-anchored threads. Combines with the file list: `discuss plan.md diff HEAD~1..HEAD`.
 - **Syntax highlighting** — tag fenced code blocks with a language (e.g. ` ```rust `, ` ```diff-typescript `) for browser-side highlighting. See [Prism's supported languages](https://prismjs.com/#supported-languages) for the full set.
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. Rendered distinctly so you can tell who said what at a glance.
 - **Bidirectional** — the browser writes through a local REST API; the agent reads stdout events and writes back through the same API.
@@ -73,7 +75,33 @@ echo "# Quick note\n\nReview this." | discuss
 
 In stdin mode, `session.started` reports `source_file: "<stdin>"` and history archives are written under `<history-dir>/unnamed/<timestamp>.json` since there's no source path to derive a folder name from. Bare `discuss` in an interactive terminal still prints help and exits 2.
 
-### Reviewing a staged git diff
+### Reviewing multiple files
+
+```sh
+discuss plan.md design.md notes.md
+```
+
+All files open in a single session with a left sidebar for switching between them. Threads, drafts, and resolutions are scoped per file, and the sidebar badges show open-thread counts so nothing gets missed. The transcript groups threads by file in CLI order. Duplicate paths fail loudly; `-` (stdin) can appear once anywhere in the list. History archives for multi-file sessions land under `<history-dir>/multi-<N>-files/`.
+
+`.diff` / `.patch` files in the list render as diff review sections automatically.
+
+### Reviewing a git diff
+
+```sh
+discuss diff                    # staged (git diff --cached)
+discuss diff --unstaged         # working tree
+discuss diff HEAD~3..HEAD       # arbitrary range
+discuss diff main...feature     # branch comparison
+discuss plan.md diff            # plan + staged diff in one session
+```
+
+Each changed file gets its own entry in the sidebar, rendered as one fenced `diff-<lang>` block per hunk — so Prism highlights the diff *and* the underlying language, and line-anchored threads land directly on added/removed lines. `session.started` gains `mode` (`markdown` / `diff` / `mixed`) and `git_args` so agents know what they're reviewing.
+
+Diff output is capped at 5 MB to keep the browser responsive; override with `--max-diff-bytes <N>` (0 disables), `max_diff_bytes` in `discuss.config.toml`, or `DISCUSS_MAX_DIFF_BYTES`.
+
+### Reviewing a staged git diff (custom prompt)
+
+> ⚠️ **Deprecated in favor of `discuss diff`.** The built-in diff mode above skips the markdown-wrapper round trip entirely. This prompt path is kept for users on older binaries and will be removed from the docs in a release or two.
 
 Stdin + syntax highlighting + line-anchored threads make `discuss` a natural pre-commit review surface. Drop this in a custom prompt your agent can run before each commit:
 
@@ -92,9 +120,11 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 
 | Command | Description |
 |---------|-------------|
-| `discuss <file>` | Open a markdown file in a browser-based review session |
-| `discuss -` | Read markdown from stdin explicitly |
+| `discuss <file>...` | Open one or more files in a browser-based review session |
+| `discuss -` | Read markdown from stdin explicitly (once, anywhere in the file list) |
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
+| `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
+| `discuss <file>... diff [args]` | Review files and a git diff together in one session |
 | `discuss update --check` | Check GitHub for a newer release |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |
 
@@ -106,6 +136,7 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
+| `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
 
 ## HTTP API
 
@@ -113,9 +144,9 @@ While the server is running:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts |
+| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files |
 | `GET` | `/api/events` | SSE event stream (browser UI) |
-| `POST` | `/api/threads` | Create a thread |
+| `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded) |
 | `POST` | `/api/threads/{id}/replies` | Add a **human** reply |
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread |
