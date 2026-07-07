@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
-use discuss::state::{Draft, Resolution, State, Thread, ThreadId, ThreadKind};
+use discuss::state::{
+    Draft, NewThreadDraftKey, Resolution, State, Thread, ThreadId, ThreadKind, default_file_id,
+};
 use discuss::{
     AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript, serve,
     serve_with_ready,
@@ -144,6 +146,7 @@ async fn get_api_state_returns_empty_snapshot_json() {
             "replies": {},
             "takes": {},
             "resolutions": {},
+            "files": [],
             "drafts": {
                 "newThread": {},
                 "followup": {}
@@ -1300,7 +1303,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
             .expect("state lock should not be poisoned")
             .snapshot()
             .drafts
-            .new_thread[&(2, 4)]
+            .new_thread[&NewThreadDraftKey::new(default_file_id(), 2, 4)]
             .text,
         "First draft"
     );
@@ -1330,7 +1333,7 @@ async fn post_api_drafts_new_thread_upserts_replaces_and_emits_events() {
             .expect("state lock should not be poisoned")
             .snapshot()
             .drafts
-            .new_thread[&(2, 4)]
+            .new_thread[&NewThreadDraftKey::new(default_file_id(), 2, 4)]
             .text,
         "Revised draft"
     );
@@ -1355,7 +1358,10 @@ async fn post_api_drafts_new_thread_whitespace_text_clears_draft() {
     let state = State::new_shared();
     {
         let mut state_guard = state.write().expect("state lock should not be poisoned");
-        state_guard.upsert_new_thread_draft(5, 7, draft("stashed draft", 1));
+        state_guard.upsert_new_thread_draft(
+            NewThreadDraftKey::new(default_file_id(), 5, 7),
+            draft("stashed draft", 1),
+        );
     }
     let bus = Arc::new(EventBus::new(16));
     let stdout = Arc::new(Mutex::new(Vec::new()));
@@ -1413,7 +1419,10 @@ async fn delete_api_drafts_new_thread_clears_idempotently_and_emits_events() {
     let state = State::new_shared();
     {
         let mut state_guard = state.write().expect("state lock should not be poisoned");
-        state_guard.upsert_new_thread_draft(8, 9, draft("delete me", 1));
+        state_guard.upsert_new_thread_draft(
+            NewThreadDraftKey::new(default_file_id(), 8, 9),
+            draft("delete me", 1),
+        );
     }
     let bus = Arc::new(EventBus::new(16));
     let stdout = Arc::new(Mutex::new(Vec::new()));
@@ -2606,6 +2615,7 @@ fn draft(text: &str, second: u32) -> Draft {
 fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
     Thread {
         id: ThreadId(id.to_string()),
+        file_id: default_file_id(),
         anchor_start,
         anchor_end: anchor_start + 1,
         snippet: format!("snippet {id}"),

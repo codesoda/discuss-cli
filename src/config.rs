@@ -21,6 +21,7 @@ pub struct Config {
     pub history_dir: Option<PathBuf>,
     pub no_save: bool,
     pub log_level: Option<String>,
+    pub max_diff_bytes: Option<usize>,
 }
 
 impl Config {
@@ -81,6 +82,7 @@ impl Default for Config {
             history_dir: None,
             no_save: false,
             log_level: None,
+            max_diff_bytes: None,
         }
     }
 }
@@ -93,6 +95,7 @@ pub struct ConfigOverrides {
     pub history_dir: Option<PathBuf>,
     pub no_save: Option<bool>,
     pub log_level: Option<String>,
+    pub max_diff_bytes: Option<usize>,
 }
 
 impl ConfigOverrides {
@@ -120,6 +123,10 @@ impl ConfigOverrides {
         if let Some(log_level) = self.log_level {
             config.log_level = Some(log_level);
         }
+
+        if let Some(max_diff_bytes) = self.max_diff_bytes {
+            config.max_diff_bytes = Some(max_diff_bytes);
+        }
     }
 }
 
@@ -132,6 +139,7 @@ struct ConfigLayer {
     history_dir: Option<PathBuf>,
     no_save: Option<bool>,
     log_level: Option<String>,
+    max_diff_bytes: Option<usize>,
 }
 
 impl ConfigLayer {
@@ -155,6 +163,9 @@ impl ConfigLayer {
                 "DISCUSS_HISTORY_DIR" => layer.history_dir = Some(PathBuf::from(value)),
                 "DISCUSS_NO_SAVE" => layer.no_save = Some(parse_env_var(&name, &value)?),
                 "DISCUSS_LOG" => layer.log_level = Some(value),
+                "DISCUSS_MAX_DIFF_BYTES" => {
+                    layer.max_diff_bytes = Some(parse_env_var(&name, &value)?);
+                }
                 _ => {}
             }
         }
@@ -185,6 +196,10 @@ impl ConfigLayer {
 
         if let Some(log_level) = self.log_level {
             config.log_level = Some(log_level);
+        }
+
+        if let Some(max_diff_bytes) = self.max_diff_bytes {
+            config.max_diff_bytes = Some(max_diff_bytes);
         }
     }
 }
@@ -268,6 +283,7 @@ mod tests {
                 history_dir: None,
                 no_save: false,
                 log_level: None,
+                max_diff_bytes: None,
             }
         );
     }
@@ -454,6 +470,7 @@ log_level = "warn"
                 history_dir: Some(PathBuf::from("/cli/history")),
                 no_save: Some(false),
                 log_level: Some("trace".to_string()),
+                max_diff_bytes: None,
             },
             None,
             None,

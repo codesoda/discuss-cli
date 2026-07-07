@@ -33,9 +33,10 @@ use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
-    Draft, LineRange, Reply, Resolution, SharedState, State, Take, Thread, ThreadId, ThreadKind,
+    Draft, File, FileId, FileKind, LineRange, NewThreadDraftKey, Reply, Resolution, SharedState,
+    Source, State, Take, Thread, ThreadId, ThreadKind, default_file_id,
 };
-use crate::transcript::build_transcript;
+use crate::transcript::build_transcript_with_source;
 use crate::{Config, DiscussError, Result, render, template};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -48,6 +49,8 @@ const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceUpdateRequest {
     markdown: String,
+    #[serde(default)]
+    file_id: Option<FileId>,
     thread_anchors: Vec<ThreadAnchorUpdate>,
 }
 
@@ -71,6 +74,7 @@ struct ThreadAnchorUpdate {
 #[serde(rename_all = "camelCase")]
 struct SourceUpdatedPayload {
     markdown: String,
+    file_id: FileId,
     rendered_html: String,
     thread_anchors: Vec<ThreadAnchorResponse>,
     orphaned_thread_ids: Vec<ThreadId>,
@@ -91,7 +95,7 @@ pub struct AppState {
     pub state: SharedState,
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
-    markdown_source: Arc<std::sync::RwLock<Arc<str>>>,
+    source: Arc<std::sync::RwLock<Source>>,
     source_path: Arc<Option<PathBuf>>,
     history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
@@ -113,7 +117,7 @@ impl AppState {
             state,
             bus,
             emitter,
-            markdown_source: Arc::new(std::sync::RwLock::new(Arc::from(""))),
+            source: Arc::new(std::sync::RwLock::new(Source::default())),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
@@ -134,19 +138,76 @@ impl AppState {
         )
     }
 
-    pub fn with_markdown_source(self, markdown_source: impl Into<String>) -> Self {
-        let markdown_source = markdown_source.into();
-        if let Ok(mut source) = self.markdown_source.write() {
-            *source = Arc::from(markdown_source.into_boxed_str());
+    pub fn with_source(self, source: Source) -> Self {
+        if let Ok(mut current) = self.source.write() {
+            *current = source;
         }
         self
     }
 
-    fn current_markdown_source(&self) -> std::result::Result<Arc<str>, String> {
-        self.markdown_source
+    /// Single-file convenience used by tests and stdin sessions: replaces the
+    /// first file's content (creating a default markdown file if none exist).
+    pub fn with_markdown_source(self, markdown_source: impl Into<String>) -> Self {
+        let content = markdown_source.into();
+        if let Ok(mut source) = self.source.write() {
+            if let Some(first) = source.files.first_mut() {
+                first.content = content;
+            } else {
+                source.files.push(File {
+                    id: default_file_id(),
+                    path: "<stdin>".to_string(),
+                    kind: FileKind::Markdown,
+                    content,
+                });
+            }
+        }
+        self
+    }
+
+    fn current_source(&self) -> std::result::Result<Source, String> {
+        self.source
             .read()
-            .map(|source| Arc::clone(&source))
-            .map_err(|_| "markdown source lock poisoned".to_string())
+            .map(|source| source.clone())
+            .map_err(|_| "source lock poisoned".to_string())
+    }
+
+    fn primary_file_id(&self) -> FileId {
+        self.source
+            .read()
+            .ok()
+            .and_then(|source| source.files.first().map(|file| file.id.clone()))
+            .unwrap_or_else(default_file_id)
+    }
+
+    fn file_ids(&self) -> Vec<FileId> {
+        self.source
+            .read()
+            .map(|source| source.files.iter().map(|file| file.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    fn files_count(&self) -> usize {
+        self.source
+            .read()
+            .map(|source| source.files.len())
+            .unwrap_or(0)
+    }
+
+    fn snapshot_with_files(&self) -> std::result::Result<crate::state::StateSnapshot, String> {
+        let mut snapshot = self
+            .state
+            .read()
+            .map_err(|_| "state lock poisoned while reading state".to_string())?
+            .snapshot();
+        snapshot.files = self
+            .source
+            .read()
+            .map_err(|_| "source lock poisoned while reading state".to_string())?
+            .files
+            .iter()
+            .map(crate::state::FileMeta::from)
+            .collect();
+        Ok(snapshot)
     }
 
     pub fn with_source_path(mut self, source_path: impl Into<PathBuf>) -> Self {
@@ -476,6 +537,10 @@ fn build_router(app_state: AppState) -> Router {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateThreadRequest {
+    /// Which file the anchors refer to. Optional in single-file sessions
+    /// (defaults to the only file), required when multiple files are loaded.
+    #[serde(default)]
+    file_id: Option<FileId>,
     anchor_start: usize,
     anchor_end: usize,
     snippet: String,
@@ -493,6 +558,7 @@ struct CreateThreadRequest {
 #[serde(rename_all = "camelCase")]
 struct CreateThreadResponse {
     id: ThreadId,
+    file_id: FileId,
     created_at: DateTime<Utc>,
 }
 
@@ -514,6 +580,8 @@ struct ResolveThreadRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpsertNewThreadDraftRequest {
+    #[serde(default)]
+    file_id: Option<FileId>,
     anchor_start: usize,
     anchor_end: usize,
     text: String,
@@ -522,6 +590,8 @@ struct UpsertNewThreadDraftRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClearNewThreadDraftRequest {
+    #[serde(default)]
+    file_id: Option<FileId>,
     anchor_start: usize,
     anchor_end: usize,
 }
@@ -543,6 +613,7 @@ struct ClearFollowupDraftRequest {
 #[serde(rename_all = "camelCase")]
 struct NewThreadDraftResponse {
     scope: &'static str,
+    file_id: FileId,
     anchor_start: usize,
     anchor_end: usize,
     text: String,
@@ -553,6 +624,7 @@ struct NewThreadDraftResponse {
 #[serde(rename_all = "camelCase")]
 struct NewThreadDraftCleared {
     scope: &'static str,
+    file_id: FileId,
     anchor_start: usize,
     anchor_end: usize,
 }
@@ -667,8 +739,13 @@ async fn post_api_source(
         }
     }
 
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
+
     let markdown = request.markdown;
-    let (threads, source_version) = {
+    let (threads, source_version, updated_file) = {
         let mut state = match app_state.state.write() {
             Ok(state) => state,
             Err(_) => {
@@ -680,18 +757,23 @@ async fn post_api_source(
             }
         };
 
-        // Strict coverage in both directions: a silently-forgotten thread
-        // would drift onto wrong content, and an unknown thread id is an
-        // agent bug worth surfacing.
-        let active_ids: Vec<ThreadId> = state.get_threads().into_iter().map(|t| t.id).collect();
+        // Strict coverage in both directions, scoped to the updated file: a
+        // silently-forgotten thread would drift onto wrong content, and an
+        // unknown thread id is an agent bug worth surfacing.
+        let active_ids: Vec<ThreadId> = state
+            .get_threads()
+            .into_iter()
+            .filter(|t| t.file_id == file_id)
+            .map(|t| t.id)
+            .collect();
         let active_set: HashSet<&ThreadId> = active_ids.iter().collect();
         if let Some(missing) = active_ids.iter().find(|id| !updates.contains_key(id)) {
             return api_error_response(
                 StatusCode::BAD_REQUEST,
                 "validation_error",
                 format!(
-                    "threadAnchors must cover every active thread: missing {} (re-anchor it or mark it orphaned)",
-                    missing.0
+                    "threadAnchors must cover every active thread on file {}: missing {} (re-anchor it or mark it orphaned)",
+                    file_id.0, missing.0
                 ),
             );
         }
@@ -700,8 +782,8 @@ async fn post_api_source(
                 StatusCode::BAD_REQUEST,
                 "validation_error",
                 format!(
-                    "threadAnchors references unknown or deleted thread {}",
-                    unknown.0
+                    "threadAnchors references a thread that is not active on file {}: {}",
+                    file_id.0, unknown.0
                 ),
             );
         }
@@ -723,27 +805,39 @@ async fn post_api_source(
             }
         }
 
-        // Swap the markdown while still holding the state write lock so no
-        // reader can observe new anchors against the old source or vice versa.
-        match app_state.markdown_source.write() {
-            Ok(mut source) => *source = Arc::from(markdown.as_str()),
+        // Swap the file content while still holding the state write lock so
+        // no reader can observe new anchors against the old source or vice
+        // versa.
+        let updated_file = match app_state.source.write() {
+            Ok(mut source) => {
+                let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+                    return api_error_response(
+                        StatusCode::NOT_FOUND,
+                        "unknown_file",
+                        format!("unknown fileId: {}", file_id.0),
+                    );
+                };
+                file.content = markdown.clone();
+                file.clone()
+            }
             Err(_) => {
                 return api_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
-                    "markdown source lock poisoned while updating source",
+                    "source lock poisoned while updating source",
                 );
             }
-        }
+        };
 
         let source_version = state.bump_source_version();
-        (state.get_threads(), source_version)
+        (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();
 
-    let rendered_html = render::render(&markdown);
+    let rendered_html = render_file_html(&updated_file);
     let thread_anchors = threads
         .iter()
+        .filter(|thread| thread.file_id == file_id)
         .map(|thread| ThreadAnchorResponse {
             thread_id: thread.id.clone(),
             anchor_start: thread.anchor_start,
@@ -753,11 +847,12 @@ async fn post_api_source(
         .collect();
     let orphaned_thread_ids = threads
         .iter()
-        .filter(|thread| thread.orphaned)
+        .filter(|thread| thread.orphaned && thread.file_id == file_id)
         .map(|thread| thread.id.clone())
         .collect();
     let payload = SourceUpdatedPayload {
         markdown,
+        file_id,
         rendered_html,
         thread_anchors,
         orphaned_thread_ids,
@@ -837,9 +932,14 @@ async fn post_api_threads(
             );
         }
     }
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
     let created_at = Utc::now();
     let thread = Thread {
         id: app_state.next_user_thread_id(),
+        file_id: file_id.clone(),
         anchor_start: request.anchor_start,
         anchor_end: request.anchor_end,
         snippet: request.snippet,
@@ -895,9 +995,45 @@ async fn post_api_threads(
 
     Json(CreateThreadResponse {
         id: thread.id,
+        file_id,
         created_at,
     })
     .into_response()
+}
+
+/// Resolves an optional client-supplied file id against the loaded files:
+/// missing means "the only file" in single-file sessions but is an error when
+/// several files are loaded; unknown ids are always an error.
+fn resolve_file_id(
+    app_state: &AppState,
+    requested: Option<FileId>,
+) -> std::result::Result<FileId, Box<Response>> {
+    let known = app_state.file_ids();
+
+    match requested {
+        Some(file_id) => {
+            if known.is_empty() || known.contains(&file_id) {
+                Ok(file_id)
+            } else {
+                Err(Box::new(api_error_response(
+                    StatusCode::NOT_FOUND,
+                    "unknown_file",
+                    format!("unknown fileId: {}", file_id.0),
+                )))
+            }
+        }
+        None => {
+            if known.len() > 1 {
+                Err(Box::new(api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "missing_file_id",
+                    "fileId is required when multiple files are loaded",
+                )))
+            } else {
+                Ok(app_state.primary_file_id())
+            }
+        }
+    }
 }
 
 async fn post_api_thread_replies(
@@ -1264,10 +1400,16 @@ async fn post_api_drafts_new_thread(
         }
     };
 
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
+
     if request.text.trim().is_empty() {
         return clear_new_thread_draft(
             &app_state,
             ClearNewThreadDraftRequest {
+                file_id: Some(file_id),
                 anchor_start: request.anchor_start,
                 anchor_end: request.anchor_end,
             },
@@ -1280,12 +1422,11 @@ async fn post_api_drafts_new_thread(
         updated_at,
     };
 
+    let key = NewThreadDraftKey::new(file_id.clone(), request.anchor_start, request.anchor_end);
     if app_state
         .state
         .write()
-        .map(|mut state| {
-            state.upsert_new_thread_draft(request.anchor_start, request.anchor_end, draft.clone())
-        })
+        .map(|mut state| state.upsert_new_thread_draft(key, draft.clone()))
         .is_err()
     {
         return api_error_response(
@@ -1298,6 +1439,7 @@ async fn post_api_drafts_new_thread(
 
     let response = NewThreadDraftResponse {
         scope: "newThread",
+        file_id,
         anchor_start: request.anchor_start,
         anchor_end: request.anchor_end,
         text: draft.text,
@@ -1341,10 +1483,15 @@ async fn delete_api_drafts_new_thread(
 }
 
 fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequest) -> Response {
+    let file_id = match resolve_file_id(app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(error) => return *error,
+    };
+    let key = NewThreadDraftKey::new(file_id.clone(), request.anchor_start, request.anchor_end);
     if app_state
         .state
         .write()
-        .map(|mut state| state.clear_new_thread_draft(request.anchor_start, request.anchor_end))
+        .map(|mut state| state.clear_new_thread_draft(&key))
         .is_err()
     {
         return api_error_response(
@@ -1357,6 +1504,7 @@ fn clear_new_thread_draft(app_state: &AppState, request: ClearNewThreadDraftRequ
 
     let cleared = NewThreadDraftCleared {
         scope: "newThread",
+        file_id,
         anchor_start: request.anchor_start,
         anchor_end: request.anchor_end,
     };
@@ -1526,8 +1674,18 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
 }
 
 async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
+    let source = match app_state.current_source() {
+        Ok(source) => source,
+        Err(message) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                message,
+            );
+        }
+    };
     let transcript = match app_state.state.read() {
-        Ok(state) => build_transcript(&state),
+        Ok(state) => build_transcript_with_source(&state, &source),
         Err(_) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1564,6 +1722,7 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         let history_path = history::history_archive_path(
             app_state.history_dir.as_ref().as_path(),
             app_state.source_path.as_ref().as_deref(),
+            app_state.files_count(),
             emitted_at,
         );
         if let Err(error) = history::write_history_archive(&history_path, &payload) {
@@ -1640,30 +1799,62 @@ async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
 }
 
 fn render_root_page(app_state: &AppState) -> std::result::Result<String, String> {
-    let snapshot = app_state
-        .state
-        .read()
-        .map_err(|_| "state lock poisoned while rendering page".to_string())?
-        .snapshot();
+    let snapshot = app_state.snapshot_with_files()?;
     let initial_state_json = serde_json::to_string(&snapshot)
         .map_err(|error| format!("failed to serialize initial state: {error}"))?;
-    let markdown_source = app_state.current_markdown_source()?;
-    let rendered_markdown = render::render(markdown_source.as_ref());
+    let source = app_state.current_source()?;
+
+    // Every file is pre-rendered and seeded into the page so switching files
+    // in the sidebar is a client-side swap with no extra round trip.
+    let rendered_files: Vec<RenderedFile> = source
+        .files
+        .iter()
+        .map(|file| RenderedFile {
+            id: file.id.clone(),
+            html: render_file_html(file),
+        })
+        .collect();
+    let rendered_files_json = serde_json::to_string(&rendered_files)
+        .map_err(|error| format!("failed to serialize rendered files: {error}"))?;
+
+    let first_file_html = rendered_files
+        .first()
+        .map(|file| file.html.clone())
+        .unwrap_or_default();
 
     Ok(template::render_page(
-        &rendered_markdown,
+        &first_file_html,
         &initial_state_json,
+        &rendered_files_json,
     ))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderedFile {
+    id: FileId,
+    html: String,
+}
+
+/// Renders one source file to HTML: markdown files through the markdown
+/// renderer directly, diff files through a synthesized markdown document
+/// (heading + one fenced `diff-<lang>` block per hunk).
+fn render_file_html(file: &File) -> String {
+    match file.kind {
+        FileKind::Markdown => render::render(&file.content),
+        FileKind::Diff => render::render(&crate::diff::diff_content_to_markdown(
+            &file.path,
+            &file.content,
+        )),
+    }
+}
+
 async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
-    match app_state.state.read() {
-        Ok(state) => Json(state.snapshot()).into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "state lock poisoned while reading state",
-        )
-            .into_response(),
+    match app_state.snapshot_with_files() {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(message) => {
+            api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+        }
     }
 }
 

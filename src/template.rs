@@ -8,10 +8,17 @@ const INITIAL_STATE_SCRIPT_OPEN: &str = "<script id=\"discuss-initial-state\">";
 const INITIAL_STATE_SCRIPT_CLOSE: &str = "</script>";
 const MERMAID_SHIM_SCRIPT_OPEN: &str = "<script id=\"discuss-mermaid-shim\">";
 const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
+const RENDERED_FILES_SCRIPT_OPEN: &str = "<script id=\"discuss-rendered-files\">";
+const RENDERED_FILES_SCRIPT_CLOSE: &str = "</script>";
 
-pub fn render_page(rendered_markdown: &str, initial_state_json: &str) -> String {
+pub fn render_page(
+    rendered_markdown: &str,
+    initial_state_json: &str,
+    rendered_files_json: &str,
+) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
     let page = inject_initial_state(&page, initial_state_json);
+    let page = inject_rendered_files(&page, rendered_files_json);
     inject_mermaid_shim(&page)
 }
 
@@ -55,6 +62,15 @@ fn inject_initial_state(page: &str, initial_state_json: &str) -> String {
     );
 
     inject_before_main_script(page, &initial_state_script)
+}
+
+fn inject_rendered_files(page: &str, rendered_files_json: &str) -> String {
+    let rendered_files_script = format!(
+        "{RENDERED_FILES_SCRIPT_OPEN}\nwindow.__DISCUSS_RENDERED_FILES__ = {};\n{RENDERED_FILES_SCRIPT_CLOSE}\n\n",
+        js_safe_json(rendered_files_json)
+    );
+
+    inject_before_main_script(page, &rendered_files_script)
 }
 
 fn inject_mermaid_shim(page: &str) -> String {
@@ -122,12 +138,17 @@ mod tests {
     fn without_injected_scripts(html: &str) -> String {
         let html =
             without_injected_script(html, INITIAL_STATE_SCRIPT_OPEN, INITIAL_STATE_SCRIPT_CLOSE);
+        let html = without_injected_script(
+            &html,
+            RENDERED_FILES_SCRIPT_OPEN,
+            RENDERED_FILES_SCRIPT_CLOSE,
+        );
         without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE)
     }
 
     #[test]
     fn injects_rendered_markdown_inside_doc_content() {
-        let page = render_page("<h1>Injected</h1>\n<p>Body</p>\n", "{}");
+        let page = render_page("<h1>Injected</h1>\n<p>Body</p>\n", "{}", "[]");
 
         assert_eq!(
             doc_content_inner(&page),
@@ -137,7 +158,7 @@ mod tests {
 
     #[test]
     fn seeds_initial_state_json_before_main_script() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         let state_script_start = page
             .find(INITIAL_STATE_SCRIPT_OPEN)
@@ -154,7 +175,7 @@ mod tests {
     fn preserves_template_markup_outside_injection_points() {
         let rendered_markdown = "<h1>Injected</h1>\n";
         let expected_without_state = inject_doc_content(TEMPLATE, rendered_markdown);
-        let page = render_page(rendered_markdown, "{}");
+        let page = render_page(rendered_markdown, "{}", "[]");
 
         assert_eq!(without_injected_scripts(&page), expected_without_state);
     }
@@ -174,8 +195,26 @@ mod tests {
     }
 
     #[test]
+    fn seeds_rendered_files_json_before_main_script() {
+        let page = render_page("<p>Doc</p>", "{}", r#"[{"id":"f-1","html":"<h1>hi</h1>"}]"#);
+
+        let files_script_start = page
+            .find(RENDERED_FILES_SCRIPT_OPEN)
+            .expect("rendered-files script should be present");
+        let main_script_start = page
+            .find(INITIAL_STATE_INSERT_BEFORE)
+            .expect("main script should be present");
+
+        assert!(files_script_start < main_script_start);
+        assert!(page.contains(
+            r#"window.__DISCUSS_RENDERED_FILES__ = [{"id":"f-1","html":"\u003ch1>hi\u003c/h1>"}];"#
+        ));
+        assert_eq!(page.matches(RENDERED_FILES_SCRIPT_OPEN).count(), 1);
+    }
+
+    #[test]
     fn initial_state_json_is_safe_inside_script_tag() {
-        let page = render_page("<p>Doc</p>", r#"{"text":"</script><p>break</p>"}"#);
+        let page = render_page("<p>Doc</p>", r#"{"text":"</script><p>break</p>"}"#, "[]");
 
         assert!(page.contains(r#"{"text":"\u003c/script>\u003cp>break\u003c/p>"}"#));
         assert_eq!(page.matches(INITIAL_STATE_SCRIPT_OPEN).count(), 1);
@@ -183,7 +222,7 @@ mod tests {
 
     #[test]
     fn bundled_template_wires_prism_for_syntax_highlighting() {
-        let page = render_page("<p>Doc</p>", "{}");
+        let page = render_page("<p>Doc</p>", "{}", "[]");
 
         assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism.min.css"));
         assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css"));
@@ -206,7 +245,7 @@ mod tests {
 
     #[test]
     fn bundled_template_skips_prism_for_mermaid_blocks() {
-        let page = render_page("<p>Doc</p>", "{}");
+        let page = render_page("<p>Doc</p>", "{}", "[]");
 
         assert!(page.contains("function isMermaidPre(pre)"));
         assert!(page.contains("language-mermaid"));
@@ -217,7 +256,7 @@ mod tests {
 
     #[test]
     fn bundled_template_includes_theme_toggle_with_system_default() {
-        let page = render_page("<p>Doc</p>", "{}");
+        let page = render_page("<p>Doc</p>", "{}", "[]");
 
         assert!(page.contains(r#"id="theme-toggle""#));
         assert!(page.contains("theme-icon-system"));
@@ -245,6 +284,7 @@ mod tests {
         let page = render_page(
             "<pre><code class=\"language-mermaid\">flowchart TD</code></pre>",
             "{}",
+            "[]",
         );
 
         let shim_script_start = page
@@ -261,7 +301,7 @@ mod tests {
 
     #[test]
     fn bundled_template_hydrates_state_from_seed_or_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         let seed_check = page
             .find("if (stateSeed)")
@@ -293,7 +333,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_thread_mutations_to_rest_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("await apiJson('/api/threads'"));
         assert!(page.contains("await apiJson(threadApiPath(threadId, '/replies')"));
@@ -306,7 +346,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_draft_mutations_to_rest_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("function persistNewThreadDraft"));
         assert!(page.contains("function queueDraftRequest"));
@@ -320,7 +360,7 @@ mod tests {
 
     #[test]
     fn bundled_template_surfaces_rest_mutation_failures_inline() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains(".mutation-error"));
         assert!(page.contains("function showMutationError"));
@@ -337,7 +377,7 @@ mod tests {
 
     #[test]
     fn bundled_template_subscribes_to_sse_and_applies_incremental_events() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("new EventSource('/api/events')"));
         assert!(page.contains("'thread.created'"));
@@ -356,7 +396,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_browser_heartbeat() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("const HEARTBEAT_INTERVAL_MS = 30000"));
         assert!(page.contains("fetch('/api/heartbeat'"));
@@ -375,7 +415,7 @@ mod tests {
 
     #[test]
     fn bundled_template_interleaves_takes_and_replies_chronologically() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("return sortCommentsByCreatedAt(items);"));
         assert!(page.contains("function sortCommentsByCreatedAt(items)"));
@@ -386,7 +426,7 @@ mod tests {
 
     #[test]
     fn bundled_template_marks_thread_contributor_state() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains(".thread-marker.kind-mixed"));
         assert!(page.contains("function markerKindForThread(state, threadId, prep)"));
@@ -398,7 +438,7 @@ mod tests {
 
     #[test]
     fn bundled_template_finishes_session_through_done_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#);
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("Done \u{2014} send to chat"));
         assert!(page.contains("You can close this tab."));

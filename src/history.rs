@@ -15,12 +15,13 @@ pub fn default_history_dir() -> PathBuf {
 pub fn history_archive_path(
     history_dir: &Path,
     source_path: Option<&Path>,
+    files_count: usize,
     completed_at: DateTime<Utc>,
 ) -> PathBuf {
     let timestamp = completed_at.to_rfc3339_opts(SecondsFormat::Secs, true);
 
     history_dir
-        .join(source_name_for_history(source_path))
+        .join(source_name_for_history(source_path, files_count))
         .join(format!("{timestamp}.json"))
 }
 
@@ -33,7 +34,11 @@ pub fn write_history_archive(path: &Path, transcript_json: &Value) -> io::Result
     fs::write(path, bytes)
 }
 
-fn source_name_for_history(source_path: Option<&Path>) -> String {
+fn source_name_for_history(source_path: Option<&Path>, files_count: usize) -> String {
+    if files_count > 1 {
+        return format!("multi-{files_count}-files");
+    }
+
     let Some(source_path) = source_path else {
         return "unnamed".to_string();
     };
@@ -77,6 +82,7 @@ mod tests {
         let path = history_archive_path(
             Path::new("/tmp/history"),
             Some(Path::new("docs/review:plan.md")),
+            1,
             timestamp(),
         );
 
@@ -90,12 +96,29 @@ mod tests {
 
     #[test]
     fn archive_path_falls_back_to_unnamed_without_source_path() {
-        let path = history_archive_path(Path::new("/tmp/history"), None, timestamp());
+        let path = history_archive_path(Path::new("/tmp/history"), None, 1, timestamp());
 
         assert_eq!(
             path,
             PathBuf::from("/tmp/history")
                 .join("unnamed")
+                .join("2026-04-23T02:30:00Z.json")
+        );
+    }
+
+    #[test]
+    fn archive_path_uses_multi_label_when_files_count_above_one() {
+        let path = history_archive_path(
+            Path::new("/tmp/history"),
+            Some(Path::new("docs/first.md")),
+            3,
+            timestamp(),
+        );
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/history")
+                .join("multi-3-files")
                 .join("2026-04-23T02:30:00Z.json")
         );
     }

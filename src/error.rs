@@ -65,6 +65,12 @@ pub enum DiscussError {
 
     #[error("update failed: {message}")]
     UpdateError { message: String },
+
+    #[error("duplicate file argument: {path} - each input path can only be passed once")]
+    DuplicateInputPath { path: PathBuf },
+
+    #[error("diff error: {message}")]
+    DiffError { message: String },
 }
 
 #[cfg(test)]
