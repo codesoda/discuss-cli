@@ -11,6 +11,7 @@ use axum::Json;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State as AxumState;
 use axum::extract::rejection::JsonRejection;
 use axum::http::Request;
@@ -29,6 +30,7 @@ use tokio::time::MissedTickBehavior;
 use tower_http::trace::TraceLayer;
 
 use crate::assets;
+use crate::blocks;
 use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
@@ -88,6 +90,33 @@ struct ThreadAnchorResponse {
     anchor_start: usize,
     anchor_end: usize,
     orphaned: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockQuery {
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BlockUpdateRequest {
+    markdown: String,
+    source_version: u64,
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockResponse {
+    markdown: String,
+    file_id: FileId,
+    source_version: u64,
+    line_start: usize,
+    line_end: usize,
+    kind: blocks::BlockKind,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +213,16 @@ impl AppState {
             .read()
             .map(|source| source.files.iter().map(|file| file.id.clone()).collect())
             .unwrap_or_default()
+    }
+
+    fn file_by_id(&self, file_id: &FileId) -> Option<File> {
+        self.source.read().ok().and_then(|source| {
+            source
+                .files
+                .iter()
+                .find(|file| &file.id == file_id)
+                .cloned()
+        })
     }
 
     fn files_count(&self) -> usize {
@@ -513,6 +552,10 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_drafts_followup).delete(delete_api_drafts_followup),
         )
         .route("/api/source", post(post_api_source))
+        .route(
+            "/api/blocks/{anchor_idx}",
+            get(get_api_block).patch(patch_api_block),
+        )
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -833,8 +876,27 @@ async fn post_api_source(
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();
+    source_updated_response(
+        &app_state,
+        &updated_file,
+        markdown,
+        &threads,
+        source_version,
+    )
+}
 
-    let rendered_html = render_file_html(&updated_file);
+/// Render the updated file, broadcast `source.updated` over SSE and stdout,
+/// and return the payload — the shared tail of every source-mutating
+/// endpoint.
+fn source_updated_response(
+    app_state: &AppState,
+    updated_file: &File,
+    markdown: String,
+    threads: &[Thread],
+    source_version: u64,
+) -> Response {
+    let file_id = updated_file.id.clone();
+    let rendered_html = render_file_html(updated_file);
     let thread_anchors = threads
         .iter()
         .filter(|thread| thread.file_id == file_id)
@@ -886,6 +948,263 @@ async fn post_api_source(
     }
 
     Json(payload).into_response()
+}
+
+/// `GET /api/blocks/{anchor_idx}` — the raw markdown behind one anchored
+/// block, so a client can edit it in source form.
+async fn get_api_block(
+    AxumState(app_state): AxumState<AppState>,
+    Path(anchor_idx): Path<usize>,
+    Query(query): Query<BlockQuery>,
+) -> Response {
+    let file_id = match resolve_file_id(&app_state, query.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+    let Some(file) = app_state.file_by_id(&file_id) else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_file",
+            format!("unknown fileId: {}", file_id.0),
+        );
+    };
+    if file.kind != FileKind::Markdown {
+        return uneditable_file_response(&file);
+    }
+    let source_version = match app_state.state.read() {
+        Ok(state) => state.source_version(),
+        Err(_) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while reading block",
+            );
+        }
+    };
+
+    let map = blocks::anchor_blocks(&file.content);
+    let Some(block) = map.get(anchor_idx).copied() else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("block not found: {anchor_idx}"),
+        );
+    };
+    if !map.is_reliable(anchor_idx) {
+        return unmappable_block_response(anchor_idx);
+    }
+
+    Json(BlockResponse {
+        markdown: blocks::block_source(&file.content, &block),
+        file_id,
+        source_version,
+        line_start: block.line_start,
+        line_end: block.line_end,
+        kind: block.kind,
+    })
+    .into_response()
+}
+
+/// `PATCH /api/blocks/{anchor_idx}` — replace one anchored block's markdown,
+/// splice it into the source, and mechanically re-anchor comment threads on
+/// the same file. Broadcasts the same `source.updated` payload as
+/// `POST /api/source`.
+async fn patch_api_block(
+    AxumState(app_state): AxumState<AppState>,
+    Path(anchor_idx): Path<usize>,
+    payload: std::result::Result<Json<BlockUpdateRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+
+    let (updated_file, new_markdown, threads, source_version) = {
+        let mut state = match app_state.state.write() {
+            Ok(state) => state,
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "state lock poisoned while updating block",
+                );
+            }
+        };
+
+        let current_version = state.source_version();
+        if request.source_version != current_version {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "stale_source_version",
+                format!(
+                    "sourceVersion {} is stale; the document is now at version {current_version}, re-fetch the block against the current source",
+                    request.source_version
+                ),
+            );
+        }
+
+        let Some(file) = app_state.file_by_id(&file_id) else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "unknown_file",
+                format!("unknown fileId: {}", file_id.0),
+            );
+        };
+        if file.kind != FileKind::Markdown {
+            return uneditable_file_response(&file);
+        }
+        let old_map = blocks::anchor_blocks(&file.content);
+        let Some(block) = old_map.get(anchor_idx).copied() else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("block not found: {anchor_idx}"),
+            );
+        };
+        if !old_map.is_reliable(anchor_idx) {
+            return unmappable_block_response(anchor_idx);
+        }
+
+        let new_markdown = match blocks::splice(
+            &file.content,
+            block.line_start,
+            block.line_end,
+            &request.markdown,
+        ) {
+            Ok(markdown) => markdown,
+            Err(error) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("block map produced an unspliceable range: {error}"),
+                );
+            }
+        };
+
+        // The edit is confined to one anchor block, so the change in total
+        // anchor count is exactly what the replacement text produced there
+        // (0 = deleted, 1 = still one block, N = split into N). Threads on
+        // this file are carried mechanically off that delta; anchors that
+        // can't be carried orphan, matching POST /api/source semantics. (A
+        // replacement that restructures *following* blocks — say an
+        // unterminated code fence — renders correctly, but threads in the
+        // swallowed region orphan or drift; the reliable map protects the
+        // next edit.) Threads on other files live in different anchor
+        // spaces and are untouched.
+        let new_map = blocks::anchor_blocks(&new_markdown);
+        let delta = new_map.blocks.len() as isize - old_map.blocks.len() as isize;
+        let new_total = new_map.blocks.len();
+
+        let snapshot = state.get_threads();
+        for existing in &snapshot {
+            if existing.orphaned || existing.file_id != file_id {
+                continue;
+            }
+            let carried = blocks::carry_anchor_across_edit(
+                existing.anchor_start,
+                existing.anchor_end,
+                anchor_idx,
+                delta,
+                new_total,
+            );
+            let Some(thread) = state.thread_mut(&existing.id) else {
+                continue;
+            };
+            match carried {
+                Some((anchor_start, anchor_end)) => {
+                    thread.anchor_start = anchor_start;
+                    thread.anchor_end = anchor_end;
+                    thread.line_range = line_range_for(&new_map, anchor_start, anchor_end);
+                }
+                None => thread.orphaned = true,
+            }
+        }
+
+        // Swap the file content while still holding the state write lock so
+        // no reader can observe new anchors against the old source or vice
+        // versa.
+        let updated_file = match app_state.source.write() {
+            Ok(mut source) => {
+                let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+                    return api_error_response(
+                        StatusCode::NOT_FOUND,
+                        "unknown_file",
+                        format!("unknown fileId: {}", file_id.0),
+                    );
+                };
+                file.content = new_markdown.clone();
+                file.clone()
+            }
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "source lock poisoned while updating block",
+                );
+            }
+        };
+
+        let source_version = state.bump_source_version();
+        (
+            updated_file,
+            new_markdown,
+            state.get_threads(),
+            source_version,
+        )
+    };
+    app_state.record_mutation();
+    source_updated_response(
+        &app_state,
+        &updated_file,
+        new_markdown,
+        &threads,
+        source_version,
+    )
+}
+
+fn uneditable_file_response(file: &File) -> Response {
+    api_error_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "uneditable_file",
+        format!(
+            "only markdown files support block editing; {} is a diff",
+            file.path
+        ),
+    )
+}
+
+fn unmappable_block_response(anchor_idx: usize) -> Response {
+    api_error_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unmappable_block",
+        format!(
+            "block {anchor_idx} sits at or after a raw HTML block whose anchors can't be mapped to source lines; edit the file directly instead"
+        ),
+    )
+}
+
+/// The source lines a carried anchor range spans in the new document, when
+/// both endpoints resolve to mapped blocks.
+fn line_range_for(
+    map: &blocks::BlockMap,
+    anchor_start: usize,
+    anchor_end: usize,
+) -> Option<LineRange> {
+    let start_block = map.get(anchor_start)?;
+    let end_block = map.get(anchor_end)?;
+    let start = u32::try_from(start_block.line_start).ok()?;
+    let end = u32::try_from(end_block.line_end.max(start_block.line_start)).ok()?;
+    Some(LineRange { start, end })
 }
 
 async fn post_api_threads(

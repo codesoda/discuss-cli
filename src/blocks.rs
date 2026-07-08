@@ -26,7 +26,8 @@ use comrak::{Arena, parse_document};
 use crate::render::{render_options, split_frontmatter};
 
 /// What kind of source block an anchor element came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum BlockKind {
     /// The YAML front-matter block (rendered as a collapsible `<details>`
     /// whose inner `<pre>` gets wrapped in a commentable `.pre-wrap`).
@@ -176,6 +177,60 @@ fn visit_top_level<'a>(node: &'a AstNode<'a>, line_offset: usize, map: &mut Bloc
         NodeValue::Table(_) | NodeValue::ThematicBreak => {}
         _ => {}
     }
+}
+
+/// Mechanically carry a comment thread's anchor range across an edit of the
+/// block at `edited_idx`. `delta` is the change in total anchor count — the
+/// edited block turned into `1 + delta` anchors. Anchors before the edit
+/// stay put; anchors after it shift by `delta`; a range touching the edited
+/// block stretches or shrinks with it. `None` means the range can't be
+/// carried (its content is gone) and the thread should orphan.
+pub fn carry_anchor_across_edit(
+    anchor_start: usize,
+    anchor_end: usize,
+    edited_idx: usize,
+    delta: isize,
+    new_total: usize,
+) -> Option<(usize, usize)> {
+    // A single-block edit can at most remove that block's own anchor
+    // (delta >= -1). A more negative delta means the replacement
+    // restructured *following* blocks too — say an unterminated code fence
+    // swallowing the rest of the document — and ranges touching or past the
+    // edit can't be carried mechanically. Ranges fully before it are safe:
+    // a splice never changes earlier lines, and markdown block structure
+    // never depends on later content.
+    if delta < -1 && anchor_end >= edited_idx {
+        return None;
+    }
+    let new_start = if anchor_start > edited_idx {
+        anchor_start as isize + delta
+    } else {
+        anchor_start as isize
+    };
+    let new_end = if anchor_end >= edited_idx {
+        anchor_end as isize + delta
+    } else {
+        anchor_end as isize
+    };
+    if new_start < 1 || new_end < new_start || new_end > new_total as isize {
+        return None;
+    }
+    Some((new_start as usize, new_end as usize))
+}
+
+/// The source text of one anchor block, without the final line's newline —
+/// the shape an editor wants. Splicing the same text back (via [`splice`],
+/// which restores the trailing newline) reproduces the document exactly.
+pub fn block_source(markdown: &str, block: &AnchorBlock) -> String {
+    if block.line_end < block.line_start {
+        return String::new();
+    }
+    let text: String = markdown
+        .split_inclusive('\n')
+        .skip(block.line_start - 1)
+        .take(block.line_end - block.line_start + 1)
+        .collect();
+    text.strip_suffix('\n').map(str::to_owned).unwrap_or(text)
 }
 
 /// Replace the inclusive 1-based line range `[line_start, line_end]` with
@@ -757,6 +812,22 @@ uses a note[^n]
     }
 
     #[test]
+    fn block_source_roundtrips_through_splice_for_every_anchor() {
+        let map = anchor_blocks(KITCHEN_SINK);
+        for block in &map.blocks {
+            let source = block_source(KITCHEN_SINK, block);
+            assert!(!source.ends_with('\n'));
+            let spliced = splice(KITCHEN_SINK, block.line_start, block.line_end, &source)
+                .expect("identity splice should be in range");
+            assert_eq!(
+                spliced, KITCHEN_SINK,
+                "block_source of anchor {} ({:?}) must splice back losslessly",
+                block.anchor_idx, block.kind
+            );
+        }
+    }
+
+    #[test]
     fn identity_splice_renders_identically() {
         let map = anchor_blocks(KITCHEN_SINK);
         let block = map.get(4).expect("anchor 4 exists");
@@ -869,5 +940,50 @@ uses a note[^n]
     #[test]
     fn splice_into_empty_document_appends() {
         assert_eq!(splice("", 1, 0, "hello").expect("in range"), "hello");
+    }
+
+    #[test]
+    fn carry_anchor_leaves_ranges_before_the_edit_alone() {
+        assert_eq!(carry_anchor_across_edit(1, 2, 3, 1, 6), Some((1, 2)));
+        assert_eq!(carry_anchor_across_edit(1, 2, 3, -1, 4), Some((1, 2)));
+    }
+
+    #[test]
+    fn carry_anchor_shifts_ranges_after_the_edit_by_delta() {
+        assert_eq!(carry_anchor_across_edit(4, 5, 3, 1, 6), Some((5, 6)));
+        assert_eq!(carry_anchor_across_edit(4, 5, 3, -1, 4), Some((3, 4)));
+        assert_eq!(carry_anchor_across_edit(4, 5, 3, 0, 5), Some((4, 5)));
+    }
+
+    #[test]
+    fn carry_anchor_stretches_a_range_over_a_split_block() {
+        // Point thread on the edited block: covers all replacement anchors.
+        assert_eq!(carry_anchor_across_edit(3, 3, 3, 2, 7), Some((3, 5)));
+        // Range ending at the edited block stretches with it.
+        assert_eq!(carry_anchor_across_edit(2, 3, 3, 1, 6), Some((2, 4)));
+        // Range starting at the edited block keeps its start.
+        assert_eq!(carry_anchor_across_edit(3, 4, 3, 1, 6), Some((3, 5)));
+    }
+
+    #[test]
+    fn carry_anchor_orphans_a_point_thread_on_a_deleted_block() {
+        assert_eq!(carry_anchor_across_edit(3, 3, 3, -1, 4), None);
+    }
+
+    #[test]
+    fn carry_anchor_shrinks_ranges_spanning_a_deleted_block() {
+        assert_eq!(carry_anchor_across_edit(2, 3, 3, -1, 4), Some((2, 2)));
+        assert_eq!(carry_anchor_across_edit(3, 4, 3, -1, 4), Some((3, 3)));
+        assert_eq!(carry_anchor_across_edit(2, 4, 3, -1, 4), Some((2, 3)));
+    }
+
+    #[test]
+    fn carry_anchor_orphans_ranges_that_fall_off_the_document() {
+        // Replacement swallowed following blocks (e.g. unterminated fence):
+        // a thread whose range no longer fits the new total orphans instead
+        // of drifting onto the wrong block.
+        assert_eq!(carry_anchor_across_edit(4, 5, 3, -3, 2), None);
+        // Document emptied entirely.
+        assert_eq!(carry_anchor_across_edit(1, 1, 1, -1, 0), None);
     }
 }
