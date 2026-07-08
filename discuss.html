@@ -1735,6 +1735,7 @@
     'draft.updated',
     'draft.cleared',
     'source.updated',
+    'source.save_failed',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
@@ -1811,6 +1812,14 @@
         break;
       case 'source.updated':
         applySourceUpdatedEvent(payload);
+        break;
+      case 'source.save_failed':
+        showNoticeToast(
+          payload && payload.reason === 'external_change'
+            ? 'File changed outside discuss — edit not written'
+            : 'Edit not written to file',
+          (payload && payload.message) || ''
+        );
         break;
     }
   }
@@ -4269,7 +4278,7 @@
     container.innerHTML = `
       <textarea spellcheck="false" aria-label="Edit block markdown"></textarea>
       <div class="block-editor-foot">
-        <span class="block-editor-hint">⌘⏎ save · Esc cancel</span>
+        <span class="block-editor-hint">⌘⏎ save · Esc cancel${block.persisted === false ? ' · not saved to file' : ''}</span>
         <span class="block-editor-error" hidden></span>
       </div>
     `;

@@ -2806,6 +2806,211 @@ async fn block_endpoints_reject_missing_unknown_and_diff_file_ids() {
         .expect("server shutdown should succeed");
 }
 
+/// A single markdown file backed by a real path on disk, as the CLI builds
+/// for `discuss doc.md` (canonicalized absolute path).
+fn file_backed_source(path: &Path, content: &str) -> discuss::state::Source {
+    use discuss::state::{File, FileKind, Source};
+
+    Source {
+        files: vec![File {
+            id: default_file_id(),
+            path: path.to_string_lossy().into_owned(),
+            kind: FileKind::Markdown,
+            content: content.to_string(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn patch_api_block_persists_to_disk_atomically() {
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::for_process().with_source(file_backed_source(&doc_path, BLOCK_DOC));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // Two rapid edits: the debounce coalesces them and the file ends at the
+    // second edit's content.
+    let body = json!({ "markdown": "Edited once.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = json!({ "markdown": "Edited twice.", "sourceVersion": 1 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let on_disk = fs::read_to_string(&doc_path).expect("read doc");
+        if on_disk.contains("Edited twice.") {
+            assert!(!on_disk.contains("Edited once."));
+            assert!(on_disk.contains("# Title"));
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "file was not updated in time: {on_disk}"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
+        .expect("read tempdir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("discuss-tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_never_clobbers_an_external_file_change() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source(file_backed_source(&doc_path, BLOCK_DOC));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // The file changes in another app while the review is open.
+    fs::write(&doc_path, "# Rewritten elsewhere\n").expect("external write");
+
+    let body = json!({ "markdown": "In-memory edit.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Wait past the debounce: the external content must survive and the
+    // failure must be visible to agents on stdout.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if stdout_string(&stdout).contains("\"source.save_failed\"") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "source.save_failed was not emitted; stdout: {}",
+            stdout_string(&stdout)
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        fs::read_to_string(&doc_path).expect("read doc"),
+        "# Rewritten elsewhere\n"
+    );
+    assert!(stdout_string(&stdout).contains("external_change"));
+
+    // The in-memory edit still applied.
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 1);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn no_save_runs_edit_in_memory_only() {
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::for_process()
+        .with_source(file_backed_source(&doc_path, BLOCK_DOC))
+        .with_no_save(true);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let block = response_json(&get_path(addr, "/api/blocks/2").await);
+    assert_eq!(block["persisted"], false);
+
+    let body = json!({ "markdown": "Memory only.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    sleep(Duration::from_millis(800)).await;
+    assert_eq!(
+        fs::read_to_string(&doc_path).expect("read doc"),
+        BLOCK_DOC,
+        "no-save run must not touch the file"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn block_responses_report_whether_edits_persist() {
+    // File-backed markdown files persist edits.
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, "# Doc\n").expect("write fixture");
+    let app_state = AppState::for_process().with_source(file_backed_source(&doc_path, "# Doc\n"));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let block = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(block["persisted"], true);
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    // Stdin docs have no file to write back to.
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let block = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(block["persisted"], false);
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn multi_file_source() -> discuss::state::Source {
     use discuss::state::{File, FileId, FileKind, Source};
 

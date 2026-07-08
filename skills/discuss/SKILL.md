@@ -246,6 +246,8 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
 | POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
+| GET | `/api/blocks/{idx}` | — (`?fileId=` with multiple files) | One block's markdown source + `sourceVersion` (used by the browser's edit mode) |
+| PATCH | `/api/blocks/{idx}` | `{markdown, sourceVersion, fileId?}` | Replace one block; server re-anchors that file's threads mechanically (see below) |
 
 ### Live source updates (`POST /api/source`)
 
@@ -263,6 +265,14 @@ If you regenerate the markdown mid-session (e.g. the user fixed code under revie
 
 Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
 
+### Live block editing (the user edits too)
+
+The browser has an edit mode: the user clicks a block, edits its markdown, and the server splices it into that file's source, re-anchors the file's threads itself, bumps `sourceVersion`, and broadcasts the same `source.updated` event. Diff panes are read-only; editing applies to markdown files. Consequences for you:
+
+- **`sourceVersion` moves without you.** Always read anchors/snippets from the latest `source.updated` payload (or re-fetch `/api/state`) before computing a `POST /api/source` push, and expect `409 stale_source_version` races on `POST /api/threads` — retry against the fresh state.
+- **The file on disk follows the session.** Each applied edit is written back to the edited file atomically (debounced ~500 ms). If a file changes *outside* discuss, writes to it stop rather than clobber it and `source.save_failed {reason: "external_change"}` is emitted — from then on the in-session document (from `source.updated` / the PATCH responses) is the truth, not the file. With `--no-save` or stdin input, edits stay in memory and the user sees a "not saved to file" hint.
+- You normally have no reason to call `PATCH /api/blocks/{idx}` yourself — `POST /api/source` with explicit re-anchors is your protocol; the block endpoint exists so the browser doesn't have to re-anchor.
+
 ## Stdout event kinds
 
 - `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
@@ -272,7 +282,8 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
-- `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, or another agent's)
+- `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, another agent's, or a user block edit in the browser)
+- `source.save_failed` → `{reason, message, path}` — a user edit could not be written back to its source file (`reason`: `"external_change"` or `"io_error"`); the in-session document remains the truth
 - `prompt.suggest_done` → lifecycle; informational
 
 **Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.

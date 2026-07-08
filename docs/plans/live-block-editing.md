@@ -1,8 +1,10 @@
 # Live block editing — edit the doc without leaving discuss
 
-**Status:** Plan for review, 2026-07-07.
-**Branch:** `feat/live-block-editing` (worktree off `origin/main` @ `c7d3997`).
+**Status:** Plan for review, 2026-07-07. Implemented and rebased onto v0.5.0 on 2026-07-08.
+**Branch:** `feat/live-block-editing` (worktree off `origin/main` @ `c7d3997`; rebased onto v0.5.0).
 **Supersedes:** the A-vs-B fork in [document-editing.md](document-editing.md) — Keith picked in-app editing (Approach A), block level.
+
+> **v0.5.0 adaptation note (2026-07-08).** Multi-file sessions and `discuss diff` landed upstream after this plan was written. The implementation is file-aware where the plan below says "the document": `GET`/`PATCH /api/blocks/{idx}` take `fileId` (required with several files loaded), the block map and thread re-anchoring are scoped to the edited file, diff panes are read-only (`422 uneditable_file`, edit-mode clicks fall through to commenting), disk write-behind runs per file against `File.path`, and the browser stashes an open editor's draft per file across re-renders *and* sidebar file switches. The global `persistence` state field described below became a per-block `persisted` flag on `GET /api/blocks` responses.
 
 ---
 
