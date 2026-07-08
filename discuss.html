@@ -920,6 +920,40 @@
   #selection-popup.shown { display: block; }
   #selection-popup:hover { background: var(--accent); color: white; }
 
+  /* ---------- Edit mode ---------- */
+  body.edit-mode:not(.edit-file-readonly) #doc-content [data-anchor-idx] { cursor: text; }
+  body.edit-mode:not(.edit-file-readonly) #doc-content [data-anchor-idx]:hover {
+    outline: 1px dashed var(--accent-dashed);
+    outline-offset: 4px;
+    border-radius: 2px;
+  }
+  .block-editor { position: relative; }
+  .block-editor textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 0;
+    resize: none;
+    overflow: hidden;
+    outline: none;
+  }
+  .block-editor textarea:disabled { opacity: 0.6; }
+  .block-editor-foot {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    margin: 4px 2px 10px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .block-editor-error { color: #b3261e; }
+  .block-editor-error[hidden] { display: none; }
+
   /* --- Right pane: threads --- */
   .pane-right .empty-state {
     color: var(--muted);
@@ -1293,6 +1327,7 @@
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
   </a>
+  <button class="toggle" id="edit-mode-toggle" title="Edit mode: click any block to edit its markdown (E)">Edit</button>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
@@ -1667,7 +1702,10 @@
       const message = data && data.error && data.error.message
         ? data.error.message
         : `${method} ${path} returned ${response.status}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      error.code = data && data.error && data.error.code ? data.error.code : null;
+      throw error;
     }
     return data;
   }
@@ -1784,14 +1822,23 @@
     if (!payload || typeof payload.renderedHtml !== 'string') return;
     const doc = document.getElementById('doc-content');
     if (!doc) return;
+    // A PATCH response and its SSE broadcast both land here; the second
+    // delivery of the same version is a no-op.
+    const incomingVersion = parseInt(payload.sourceVersion, 10);
+    if (Number.isFinite(incomingVersion) && incomingVersion <= (loadState().sourceVersion || 0)) {
+      return;
+    }
     const updatedFileId = payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID;
     // Keep the pre-rendered copy fresh so switching to this file later shows
     // the updated content.
     renderedFileHtml.set(updatedFileId, payload.renderedHtml);
     const isActiveFile = updatedFileId === activeFileId;
+    let editorStash = null;
     if (isActiveFile) {
       // In-flight new-thread selections anchor into the old source; drop them.
       if (typeof closeNewThreadEditor === 'function') closeNewThreadEditor();
+      // An open block editor survives the re-render with its draft intact.
+      editorStash = stashBlockEditorForRerender();
       doc.innerHTML = payload.renderedHtml;
       wrapCollapsibleSectionsDom();
       assignAnchorIndices();
@@ -1828,6 +1875,7 @@
     highlightCodeBlocks();
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
     renderAllThreads();
+    restoreBlockEditorAfterRerender(editorStash);
     scheduleReposition();
     setTimeout(scheduleReposition, 600);
   }
@@ -1879,6 +1927,8 @@
       eventSource = null;
     }
     if (newThreadEditor) closeNewThreadEditor();
+    if (blockEditor) cancelBlockEditor();
+    setEditMode(false);
     document.querySelectorAll('button, textarea').forEach(control => {
       control.disabled = true;
     });
@@ -2640,6 +2690,9 @@
     const doc = document.getElementById('doc-content');
     if (!doc) return;
     if (typeof closeNewThreadEditor === 'function' && newThreadEditor) closeNewThreadEditor();
+    // A draft in an open block editor survives the switch: it's stashed per
+    // file and re-opened when the user returns to this file.
+    stashBlockEditorForRerender();
     activeFileId = id;
     doc.innerHTML = renderedFileHtml.get(id);
     wrapCollapsibleSectionsDom();
@@ -2648,6 +2701,8 @@
     highlightCodeBlocks();
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
     renderAllThreads();
+    syncEditReadonlyClass();
+    restoreBlockEditorAfterRerender(blockEditorStashes.get(id) || null);
     const workspace = document.querySelector('.workspace');
     if (workspace) workspace.scrollTo({ top: 0 });
     updateFileSidebar();
@@ -4082,6 +4137,8 @@
     return line;
   }
   function updateSelectionPopup() {
+    // Selecting text in edit mode is editing, not commenting.
+    if (editMode && activeFileIsEditable()) { selectionPopup.classList.remove('shown'); return; }
     const info = selectionRange();
     if (!info) { selectionPopup.classList.remove('shown'); return; }
     const { rect } = info;
@@ -4120,6 +4177,305 @@
     window.getSelection()?.removeAllRanges?.();
     openNewThreadEditor(startIdx, endIdx, { lineRange });
   });
+
+  // ---------- Edit mode (live block editing) ----------
+  // Review mode is the default and behaves exactly as before. Edit mode
+  // repurposes clicks inside #doc-content: a click on an anchored block swaps
+  // it for a textarea holding that block's markdown source (fetched from
+  // GET /api/blocks/{idx}), and ⌘Enter or blur commits it through
+  // PATCH /api/blocks/{idx}. The server splices, re-anchors every thread on
+  // the file, and broadcasts source.updated — the same event agents use — so
+  // this tab and every other one re-render through the existing handler.
+  // Diff panes are read-only: edit-mode clicks there fall through to
+  // commenting.
+  const editModeToggle = document.getElementById('edit-mode-toggle');
+  let editMode = false;
+  let blockEditor = null; // { el, textarea, target, fileId, anchorIdx, sourceVersion, original, committing, cancelled }
+  const blockEditorStashes = new Map(); // fileId -> draft stashed across re-renders and file switches
+
+  function activeFileIsEditable() {
+    const files = loadState().files || [];
+    const meta = files.find(f => String(f.id) === activeFileId);
+    return !meta || meta.kind === 'markdown';
+  }
+
+  function syncEditReadonlyClass() {
+    document.body.classList.toggle('edit-file-readonly', !activeFileIsEditable());
+  }
+
+  function setEditMode(on) {
+    if (reviewComplete) on = false;
+    if (editMode === on) return;
+    editMode = on;
+    document.body.classList.toggle('edit-mode', on);
+    syncEditReadonlyClass();
+    editModeToggle.classList.toggle('on', on);
+    editModeToggle.textContent = on ? 'Editing' : 'Edit';
+    if (on) {
+      closeNewThreadEditor();
+      selectionPopup.classList.remove('shown');
+    } else if (blockEditor && !blockEditor.committing) {
+      commitBlockEditor('mode-exit');
+    }
+  }
+
+  editModeToggle.addEventListener('click', () => setEditMode(!editMode));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'e' && e.key !== 'E') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (reviewComplete) return;
+    e.preventDefault();
+    setEditMode(!editMode);
+  });
+
+  // Capture-phase so edit-mode clicks in the document pane never reach the
+  // comment dispatch below (or the per-code-line handler).
+  document.addEventListener('click', (e) => {
+    if (!editMode || reviewComplete) return;
+    if (!activeFileIsEditable()) return; // diff pane: commenting works as usual
+    if (!e.target.closest('#pane-left')) return; // header, threads, toasts work as usual
+    if (e.target.closest('.block-editor')) return;
+    e.stopImmediatePropagation();
+    const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
+    if (anchorEl) {
+      openBlockEditor(parseInt(anchorEl.getAttribute('data-anchor-idx'), 10), anchorEl);
+    }
+  }, true);
+
+  async function openBlockEditor(anchorIdx, targetEl, { draft = null, priorOriginal } = {}) {
+    if (blockEditor) {
+      if (blockEditor.anchorIdx === anchorIdx && blockEditor.fileId === activeFileId) return;
+      commitBlockEditor('switch-block');
+      if (blockEditor) return; // commit in flight; let it finish first
+    }
+    const fileId = activeFileId;
+    let block;
+    try {
+      block = await apiJson(`/api/blocks/${anchorIdx}?fileId=${encodeURIComponent(fileId)}`, { method: 'GET' });
+    } catch (error) {
+      showNoticeToast(
+        error.code === 'unmappable_block' ? "This block can't be edited here" : 'Block unavailable',
+        error.message
+      );
+      return;
+    }
+    // Raced a re-render or a file switch while fetching.
+    if (blockEditor || fileId !== activeFileId || !document.contains(targetEl)) return;
+
+    const container = document.createElement('div');
+    container.className = 'block-editor';
+    container.innerHTML = `
+      <textarea spellcheck="false" aria-label="Edit block markdown"></textarea>
+      <div class="block-editor-foot">
+        <span class="block-editor-hint">⌘⏎ save · Esc cancel</span>
+        <span class="block-editor-error" hidden></span>
+      </div>
+    `;
+    const textarea = container.querySelector('textarea');
+    textarea.value = draft !== null ? draft : block.markdown;
+
+    // Inherit the block's own typography so editing feels in-place — the
+    // syntax shows, the shape doesn't jump. Code-ish blocks sample the inner
+    // <pre> and get the mono stack.
+    const sample = targetEl.querySelector('pre, code') || targetEl;
+    const cs = getComputedStyle(sample);
+    ['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'letterSpacing'].forEach(p => {
+      textarea.style[p] = cs[p];
+    });
+
+    targetEl.style.display = 'none';
+    targetEl.parentNode.insertBefore(container, targetEl);
+    blockEditor = {
+      el: container,
+      textarea,
+      target: targetEl,
+      fileId,
+      anchorIdx,
+      sourceVersion: block.sourceVersion,
+      original: block.markdown,
+      committing: false,
+      cancelled: false,
+    };
+    if (priorOriginal !== undefined && block.markdown !== priorOriginal) {
+      setBlockEditorError('Document changed under you — review before saving.');
+    }
+
+    const autosize = () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = textarea.scrollHeight + 'px';
+    };
+    textarea.addEventListener('input', autosize);
+    autosize();
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelBlockEditor();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        commitBlockEditor('shortcut');
+      }
+    });
+    textarea.addEventListener('blur', () => {
+      // Give Esc/⌘Enter handlers a beat; commit only if still open and idle.
+      setTimeout(() => {
+        if (blockEditor && blockEditor.textarea === textarea
+            && !blockEditor.committing && !blockEditor.cancelled) {
+          commitBlockEditor('blur');
+        }
+      }, 0);
+    });
+  }
+
+  function setBlockEditorError(message) {
+    if (!blockEditor) return;
+    const slot = blockEditor.el.querySelector('.block-editor-error');
+    if (!slot) return;
+    slot.textContent = message || '';
+    slot.hidden = !message;
+  }
+
+  function cancelBlockEditor() {
+    if (!blockEditor || blockEditor.committing) return;
+    blockEditor.cancelled = true;
+    blockEditorStashes.delete(blockEditor.fileId);
+    closeBlockEditor(true);
+  }
+
+  function closeBlockEditor(restoreTarget) {
+    if (!blockEditor) return;
+    const { el, target } = blockEditor;
+    blockEditor = null;
+    el.remove();
+    if (restoreTarget && target) target.style.display = '';
+  }
+
+  async function commitBlockEditor(reason) {
+    if (!blockEditor || blockEditor.committing) return;
+    const editor = blockEditor;
+    const value = editor.textarea.value;
+    if (value === editor.original) {
+      blockEditorStashes.delete(editor.fileId);
+      closeBlockEditor(true);
+      return;
+    }
+    editor.committing = true;
+    editor.textarea.disabled = true;
+    setBlockEditorError(null);
+    try {
+      const payload = await apiJson(`/api/blocks/${editor.anchorIdx}`, {
+        method: 'PATCH',
+        body: { markdown: value, sourceVersion: editor.sourceVersion, fileId: editor.fileId },
+      });
+      blockEditorStashes.delete(editor.fileId);
+      // The SSE broadcast may have re-rendered already (it closes the editor
+      // via the committing flag); if not, apply the response directly — the
+      // version guard makes the duplicate a no-op.
+      if (blockEditor === editor) closeBlockEditor(false);
+      applySourceUpdatedEvent(payload);
+    } catch (error) {
+      if (!blockEditor || blockEditor !== editor) return; // re-render took over
+      editor.committing = false;
+      editor.textarea.disabled = false;
+      if (error.code === 'stale_source_version') {
+        await rebaseBlockEditor(editor, value, reason);
+      } else {
+        setBlockEditorError(error.message);
+        editor.textarea.focus();
+      }
+    }
+  }
+
+  // The document moved under an open editor (agent push). Re-fetch the block
+  // at our anchor: if its text is unchanged the edit still applies cleanly —
+  // retry once with the fresh version. Otherwise keep the draft and let the
+  // user decide with the conflict shown.
+  async function rebaseBlockEditor(editor, value, reason) {
+    let fresh;
+    try {
+      fresh = await apiJson(`/api/blocks/${editor.anchorIdx}?fileId=${encodeURIComponent(editor.fileId)}`, { method: 'GET' });
+    } catch (error) {
+      setBlockEditorError(`Document changed and the block can't be re-fetched: ${error.message}`);
+      return;
+    }
+    if (blockEditor !== editor) return;
+    editor.sourceVersion = fresh.sourceVersion;
+    if (fresh.markdown === editor.original) {
+      commitBlockEditor(reason);
+      return;
+    }
+    editor.original = fresh.markdown; // next unchanged-compare is against reality
+    setBlockEditorError('Document changed under you — saving again overwrites the newer block, Esc discards your text.');
+    editor.textarea.focus();
+  }
+
+  // A re-render or file switch is about to replace #doc-content. Keep the
+  // user's draft alive across it: remember it per file, re-open afterwards.
+  function stashBlockEditorForRerender() {
+    if (!blockEditor) return null;
+    if (blockEditor.committing) {
+      closeBlockEditor(false); // our own commit landing; new render shows it
+      return null;
+    }
+    const stash = {
+      fileId: blockEditor.fileId,
+      anchorIdx: blockEditor.anchorIdx,
+      draft: blockEditor.textarea.value,
+      original: blockEditor.original,
+    };
+    closeBlockEditor(false);
+    blockEditorStashes.set(stash.fileId, stash);
+    return stash;
+  }
+
+  function restoreBlockEditorAfterRerender(stash) {
+    if (!stash || !editMode) return;
+    if (stash.fileId !== activeFileId) return; // restored when its file is switched back to
+    blockEditorStashes.delete(stash.fileId);
+    const el = document.querySelector(`#doc-content [data-anchor-idx="${stash.anchorIdx}"]`);
+    if (!el) {
+      console.warn('discuss: block being edited disappeared; draft:', stash.draft);
+      showNoticeToast(
+        'The block you were editing is gone',
+        'Your draft is preserved in the browser console.'
+      );
+      return;
+    }
+    openBlockEditor(stash.anchorIdx, el, {
+      draft: stash.draft,
+      priorOriginal: stash.original,
+    });
+  }
+
+  function showNoticeToast(title, sub) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `
+      <span class="toast-dot"></span>
+      <div class="toast-body">
+        <div class="toast-title">${escapeHtml(title)}</div>
+        <div class="toast-sub">${escapeHtml(sub || '')}</div>
+      </div>
+      <button class="toast-close" type="button" aria-label="Dismiss">×</button>
+    `;
+    host.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('shown'));
+    const dismiss = () => {
+      toast.classList.remove('shown');
+      setTimeout(() => toast.remove(), 300);
+    };
+    toast.querySelector('.toast-close').addEventListener('click', dismiss);
+    setTimeout(dismiss, 6000);
+  }
 
   // ---------- Click dispatch ----------
   document.addEventListener('click', (e) => {
