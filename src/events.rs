@@ -17,11 +17,12 @@ pub enum EventKind {
     ReplyAdded,
     PromptSuggestDone,
     SourceUpdated,
+    SourceSaveFailed,
     SessionDone,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::SessionStarted,
         Self::ThreadCreated,
         Self::ThreadDeleted,
@@ -30,6 +31,7 @@ impl EventKind {
         Self::ReplyAdded,
         Self::PromptSuggestDone,
         Self::SourceUpdated,
+        Self::SourceSaveFailed,
         Self::SessionDone,
     ];
 
@@ -43,6 +45,7 @@ impl EventKind {
             Self::ReplyAdded => "reply.added",
             Self::PromptSuggestDone => "prompt.suggest_done",
             Self::SourceUpdated => "source.updated",
+            Self::SourceSaveFailed => "source.save_failed",
             Self::SessionDone => "session.done",
         }
     }
@@ -79,6 +82,7 @@ impl<'de> Deserialize<'de> for EventKind {
             "reply.added" => Ok(Self::ReplyAdded),
             "prompt.suggest_done" => Ok(Self::PromptSuggestDone),
             "source.updated" => Ok(Self::SourceUpdated),
+            "source.save_failed" => Ok(Self::SourceSaveFailed),
             "session.done" => Ok(Self::SessionDone),
             _ => Err(de::Error::unknown_variant(
                 &raw,
@@ -91,6 +95,7 @@ impl<'de> Deserialize<'de> for EventKind {
                     "reply.added",
                     "prompt.suggest_done",
                     "source.updated",
+                    "source.save_failed",
                     "session.done",
                 ],
             )),
@@ -226,6 +231,7 @@ mod tests {
             EventKind::ReplyAdded,
             EventKind::PromptSuggestDone,
             EventKind::SourceUpdated,
+            EventKind::SourceSaveFailed,
             EventKind::SessionDone,
         ];
 
