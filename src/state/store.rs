@@ -4,6 +4,8 @@ use std::sync::{Arc, RwLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::verdict::VerdictConfig;
+
 use super::{
     Draft, Drafts, FileMeta, NewThreadDraftKey, Reply, Resolution, Take, Thread, ThreadId,
 };
@@ -33,6 +35,8 @@ pub struct StateSnapshot {
     pub source_version: u64,
     #[serde(default)]
     pub files: Vec<FileMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_config: Option<VerdictConfig>,
 }
 
 impl State {
@@ -158,6 +162,7 @@ impl State {
             },
             source_version: self.source_version,
             files: Vec::new(),
+            verdict_config: None,
         }
     }
 }

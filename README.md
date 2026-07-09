@@ -137,6 +137,18 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
 | `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
+| `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `\|`, e.g. `approved:Approve\|declined:Decline:negative!` |
+| `--verdict-prompt <TEXT>` | default prompt | Custom prompt text shown above verdict options; without `--verdict-options` it only warns on stderr |
+
+Verdict flags are global and must appear before `diff`; shell-quote specs containing `|` or `!`. IDs use `[a-z0-9_-]+`, labels default from title-cased IDs, style defaults to `neutral`, and trailing `!` requires feedback. Specs need at least 2 options, unique IDs, and case-insensitively unique labels; invalid specs exit 2.
+
+Example:
+
+```sh
+discuss --verdict-options 'approved:Approve|declined:Decline:negative!' plan.md
+```
+
+For diff mode, put verdict flags before the `diff` subcommand. Use single quotes because `|` is a pipe and `!` can trigger history expansion in double quotes.
 
 ## HTTP API
 
@@ -144,13 +156,14 @@ While the server is running:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files |
+| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files, verdictConfig |
 | `GET` | `/api/events` | SSE event stream (browser UI) |
 | `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded) |
 | `POST` | `/api/threads/{id}/replies` | Add a **human** reply |
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
+| `POST` | `/api/done` | Finish the review; requires a verdict body when verdict options are configured |
 | `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` only) |
 
 ## Stdout events
@@ -165,7 +178,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |
 | `thread.deleted` | Soft-delete |
 | `prompt.suggest_done` | Idle timeout fired |
-| `session.done` | Server exited cleanly |
+| `session.done` | Final transcript payload; includes optional verdict object when `--verdict-options` was used |
 
 Draft keystrokes and agent takes broadcast via SSE only — they never surface on stdout.
 

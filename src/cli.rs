@@ -45,6 +45,20 @@ pub struct Args {
     pub history_dir: Option<PathBuf>,
 
     #[arg(
+        long,
+        value_name = "SPEC",
+        help = "Configure review-finish verdict options. Must appear before the diff subcommand; quote '|' in shells."
+    )]
+    pub verdict_options: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Prompt shown above verdict options. Ignored unless --verdict-options is also set."
+    )]
+    pub verdict_prompt: Option<String>,
+
+    #[arg(
         value_name = "FILE",
         help = "One or more files to review together. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin. Multiple paths open a single session with a file sidebar."
     )]
@@ -146,6 +160,8 @@ mod tests {
         assert!(!args.no_open);
         assert!(!args.no_save);
         assert_eq!(args.history_dir, None);
+        assert_eq!(args.verdict_options, None);
+        assert_eq!(args.verdict_prompt, None);
         assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
         assert!(args.command.is_none());
     }
@@ -273,6 +289,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_verdict_flags_before_file() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "--verdict-options",
+            "approved:Approve:positive|declined:Decline:negative!",
+            "--verdict-prompt",
+            "Final verdict?",
+            "plan.md",
+        ])
+        .expect("verdict args should parse");
+
+        assert_eq!(
+            args.verdict_options,
+            Some("approved:Approve:positive|declined:Decline:negative!".to_string())
+        );
+        assert_eq!(args.verdict_prompt, Some("Final verdict?".to_string()));
+        assert_eq!(args.files, vec![PathBuf::from("plan.md")]);
+    }
+
+    #[test]
+    fn parses_verdict_flags_before_diff_subcommand() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "--verdict-options",
+            "approved|declined",
+            "diff",
+            "HEAD~1..HEAD",
+        ])
+        .expect("verdict args before diff should parse");
+
+        assert_eq!(args.verdict_options, Some("approved|declined".to_string()));
+        let Some(Commands::Diff(diff_args)) = args.command else {
+            panic!("expected diff subcommand");
+        };
+        assert_eq!(diff_args.args, vec!["HEAD~1..HEAD".to_string()]);
+    }
+
+    #[test]
     fn parses_no_open_flag() {
         let args = Args::try_parse_from(["discuss", "--no-open", "plan.md"])
             .expect("no-open arg should parse");
@@ -378,6 +432,8 @@ mod tests {
             "LLM ref:",
             "--no-save",
             "--history-dir",
+            "--verdict-options",
+            "--verdict-prompt",
         ] {
             assert!(
                 help.contains(expected),
