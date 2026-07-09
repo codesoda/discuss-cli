@@ -137,6 +137,10 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
 | `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
+| `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `|`, e.g. `approved:Approve:positive|declined:Decline:negative!` |
+| `--verdict-prompt <TEXT>` | default prompt | Custom prompt text shown above verdict options |
+
+Verdict flags are global and must appear before `diff`; shell-quote specs containing `|`.
 
 ## HTTP API
 
@@ -144,13 +148,14 @@ While the server is running:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files |
+| `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files, verdictConfig |
 | `GET` | `/api/events` | SSE event stream (browser UI) |
 | `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded) |
 | `POST` | `/api/threads/{id}/replies` | Add a **human** reply |
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
+| `POST` | `/api/done` | Finish the review; requires a verdict body when verdict options are configured |
 | `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` only) |
 
 ## Stdout events
@@ -165,7 +170,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |
 | `thread.deleted` | Soft-delete |
 | `prompt.suggest_done` | Idle timeout fired |
-| `session.done` | Server exited cleanly |
+| `session.done` | Final transcript payload; includes optional verdict when `--verdict-options` was used |
 
 Draft keystrokes and agent takes broadcast via SSE only — they never surface on stdout.
 
