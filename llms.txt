@@ -81,7 +81,7 @@ Example `discuss.config.toml`:
 - `stdout` is reserved for JSONL events.
 - `stderr` is reserved for status and error text.
 - The first stdout event for a normal session is `session.started`.
-- When the review finishes, discuss emits `session.done` with the final transcript payload.
+- When the review finishes, discuss emits `session.done` with the final transcript payload. With `--verdict-options`, finishing requires the human to pick a verdict, which is included in that payload.
 - After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
 - Logs are written under `~/.discuss/logs`.
 
