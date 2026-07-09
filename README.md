@@ -137,7 +137,7 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
 | `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
-| `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `|`, e.g. `approved:Approve:positive|declined:Decline:negative!` |
+| `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `\|`, e.g. `approved:Approve:positive\|declined:Decline:negative!` |
 | `--verdict-prompt <TEXT>` | default prompt | Custom prompt text shown above verdict options |
 
 Verdict flags are global and must appear before `diff`; shell-quote specs containing `|`.
