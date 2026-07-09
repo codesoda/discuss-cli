@@ -51,6 +51,26 @@ discuss plan.md diff          # markdown file(s) + diff in one session
 - Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
 - Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
 
+### Verdict options
+
+When the user wants an explicit final review decision (for example, "review this plan, then tell me approved or declined"), pass `--verdict-options` before any `diff` subcommand. Keep it to 2-4 short labels; decline/blocker-style options should usually require feedback with `!` so the transcript explains why.
+
+DSL grammar: `id[:label][:style][!]` separated by `|`.
+
+- `id` is required and must match `[a-z0-9_-]+`; it becomes `optionId`.
+- `label` defaults to the title-cased id.
+- `style` is `positive`, `neutral`, or `negative`; default is `neutral`.
+- trailing `!` makes feedback required for that option.
+- specs need at least 2 options; duplicate ids and case-insensitive duplicate labels are rejected with exit code 2.
+
+```
+discuss --verdict-options 'approved:Approve|declined:Decline:negative!' plan.md
+```
+
+Use `--verdict-prompt "..."` only when the default finish-review prompt needs project-specific wording; without `--verdict-options` it warns on stderr and does nothing. Shell-quote the options because the DSL uses `|` between choices and `!` for required feedback, and both are shell metacharacters.
+
+When `session.done` arrives, read `payload.verdict` if present: `optionId` is the stable choice id, `label` is the displayed button text, `feedback` is the human explanation when supplied, and `decidedAt` is the decision timestamp.
+
 ## Preflight: Ensure `discuss` is installed
 
 Run `command -v discuss` (via Bash). If it resolves to a path, skip ahead to Step 0.
@@ -237,7 +257,7 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 
 | Method | Path | Body | Purpose |
 |---|---|---|---|
-| GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts |
+| GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
 | GET | `/api/events` | — | SSE stream (alternative to stdout) |
 | POST | `/api/threads` | `{fileId?, anchorStart, anchorEnd, snippet, text}` | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
@@ -246,6 +266,7 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
 | POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
+| POST | `/api/done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
 
 ### Live source updates (`POST /api/source`)
 
@@ -266,7 +287,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 ## Stdout event kinds
 
 - `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
-- `session.done` → `{}` — emitted when discuss exits cleanly
+- `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
 - `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::Path;
 use axum::extract::State as AxumState;
 use axum::extract::rejection::JsonRejection;
@@ -37,6 +37,7 @@ use crate::state::{
     Source, State, Take, Thread, ThreadId, ThreadKind, default_file_id,
 };
 use crate::transcript::build_transcript_with_source;
+use crate::verdict::{Verdict, VerdictConfig};
 use crate::{Config, DiscussError, Result, render, template};
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -102,6 +103,7 @@ pub struct AppState {
     shutdown: ShutdownSignal,
     activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
+    verdict_config: Arc<Option<VerdictConfig>>,
     next_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
@@ -124,6 +126,7 @@ impl AppState {
             shutdown: ShutdownSignal::new(),
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
+            verdict_config: Arc::new(None),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
@@ -207,6 +210,7 @@ impl AppState {
             .iter()
             .map(crate::state::FileMeta::from)
             .collect();
+        snapshot.verdict_config = self.verdict_config.as_ref().clone();
         Ok(snapshot)
     }
 
@@ -222,6 +226,12 @@ impl AppState {
 
     pub fn with_no_save(self, no_save: bool) -> Self {
         self.no_save.store(no_save, Ordering::Relaxed);
+
+        self
+    }
+
+    pub fn with_verdict_config(mut self, verdict_config: Option<VerdictConfig>) -> Self {
+        self.verdict_config = Arc::new(verdict_config);
 
         self
     }
@@ -1673,7 +1683,27 @@ fn clear_followup_draft(app_state: &AppState, request: ClearFollowupDraftRequest
     Json(OkResponse { ok: true }).into_response()
 }
 
-async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DoneRequest {
+    verdict: DoneVerdictRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DoneVerdictRequest {
+    option_id: String,
+    #[serde(default)]
+    feedback: Option<String>,
+}
+
+async fn post_api_done(AxumState(app_state): AxumState<AppState>, body: Bytes) -> Response {
+    let emitted_at = Utc::now();
+    let verdict = match validate_done_verdict(&app_state, &body, emitted_at) {
+        Ok(verdict) => verdict,
+        Err(response) => return *response,
+    };
+
     let source = match app_state.current_source() {
         Ok(source) => source,
         Err(message) => {
@@ -1685,7 +1715,13 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         }
     };
     let transcript = match app_state.state.read() {
-        Ok(state) => build_transcript_with_source(&state, &source),
+        Ok(state) => {
+            let transcript = build_transcript_with_source(&state, &source);
+            match verdict {
+                Some(verdict) => transcript.with_verdict(verdict),
+                None => transcript,
+            }
+        }
         Err(_) => {
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1704,7 +1740,6 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
             );
         }
     };
-    let emitted_at = Utc::now();
 
     if let Err(error) = app_state.emitter.emit(&Event {
         kind: EventKind::SessionDone,
@@ -1738,6 +1773,67 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>) -> Response {
         message: "transcript emitted",
     })
     .into_response()
+}
+
+fn validate_done_verdict(
+    app_state: &AppState,
+    body: &[u8],
+    decided_at: DateTime<Utc>,
+) -> std::result::Result<Option<Verdict>, Box<Response>> {
+    let Some(config) = app_state.verdict_config.as_ref() else {
+        return Ok(None);
+    };
+
+    if body.is_empty() {
+        return Err(Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "verdict request body is required",
+        )));
+    }
+
+    let request = serde_json::from_slice::<DoneRequest>(body).map_err(|error| {
+        Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            format!("invalid verdict request body: {error}"),
+        ))
+    })?;
+
+    let Some(option) = config
+        .options
+        .iter()
+        .find(|option| option.id == request.verdict.option_id)
+    else {
+        return Err(Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            format!("unknown verdict optionId: {}", request.verdict.option_id),
+        )));
+    };
+
+    let feedback = request
+        .verdict
+        .feedback
+        .as_deref()
+        .map(str::trim)
+        .filter(|feedback| !feedback.is_empty())
+        .map(ToOwned::to_owned);
+
+    if option.feedback_required && feedback.is_none() {
+        return Err(Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            format!("feedback is required for verdict optionId: {}", option.id),
+        )));
+    }
+
+    Ok(Some(Verdict {
+        option_id: option.id.clone(),
+        label: option.label.clone(),
+        feedback,
+        decided_at,
+    }))
 }
 
 fn warn_history_archive_failure(path: &FsPath, error: &io::Error) {

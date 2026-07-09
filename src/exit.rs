@@ -8,9 +8,9 @@ pub const EXIT_INTERRUPTED: i32 = 5;
 
 pub fn exit_code_for_error(error: &DiscussError) -> i32 {
     match error {
-        DiscussError::ConfigParseError { .. } | DiscussError::DuplicateInputPath { .. } => {
-            EXIT_CONFIG_ERROR
-        }
+        DiscussError::ConfigParseError { .. }
+        | DiscussError::DuplicateInputPath { .. }
+        | DiscussError::VerdictSpecError { .. } => EXIT_CONFIG_ERROR,
         DiscussError::PortInUse { .. } | DiscussError::ServerBindError { .. } => EXIT_SERVER_ERROR,
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
@@ -65,6 +65,12 @@ mod tests {
                 EXIT_CONFIG_ERROR,
             ),
             (
+                DiscussError::VerdictSpecError {
+                    message: "duplicate verdict option id: approved".to_string(),
+                },
+                EXIT_CONFIG_ERROR,
+            ),
+            (
                 DiscussError::RenderError {
                     source: Box::new(io::Error::other("render failed")),
                 },
@@ -93,6 +99,12 @@ mod tests {
             (
                 DiscussError::UpdateError {
                     message: "stdin is not a TTY - rerun with `discuss update -y`".to_string(),
+                },
+                EXIT_GENERIC_FAILURE,
+            ),
+            (
+                DiscussError::DiffError {
+                    message: "no changes to review".to_string(),
                 },
                 EXIT_GENERIC_FAILURE,
             ),

@@ -24,12 +24,12 @@ Pin the port and suppress browser auto-open:
 When discuss starts it binds `127.0.0.1` and prints:
   listening on http://127.0.0.1:<port>
 
-Open that URL in a browser. When the review is complete, click Done to finish the session.
+Open that URL in a browser. When the review is complete, click Finish review to finish the session.
 
 ## CLI
 
 Main command:
-  discuss [--port N] [--no-open] [--no-save] [--history-dir PATH] FILE
+  discuss [--port N] [--no-open] [--no-save] [--history-dir PATH] [--verdict-options SPEC] [--verdict-prompt TEXT] FILE
 
 Update check:
   discuss update --check
@@ -39,6 +39,8 @@ Flags:
   --no-open           Do not open the browser automatically after the server starts.
   --no-save           Do not write a history archive when the review is done.
   --history-dir PATH  Write history archives under this directory for this invocation.
+  --verdict-options SPEC  Offer finish-review choices; grammar is id[:label][:style][!] separated by |. Use single quotes because | is a pipe and ! can trigger history expansion, e.g. 'approved:Approve|declined:Decline:negative!'. Must precede diff.
+  --verdict-prompt TEXT   Custom prompt above verdict options; without --verdict-options it warns on stderr.
 
 `discuss update --check` checks GitHub Releases for a newer version. Discuss never checks automatically.
 
@@ -79,7 +81,7 @@ Example `discuss.config.toml`:
 - `stdout` is reserved for JSONL events.
 - `stderr` is reserved for status and error text.
 - The first stdout event for a normal session is `session.started`.
-- When the review finishes, discuss emits `session.done` with the final transcript payload.
+- When the review finishes, discuss emits `session.done` with the final transcript payload. With `--verdict-options`, finishing requires the human to pick a verdict, which is included in that payload.
 - After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
 - Logs are written under `~/.discuss/logs`.
 
@@ -104,7 +106,7 @@ Unless `--no-save` or `no_save = true` is set, discuss writes the final transcri
 Example:
   ~/.discuss/history/review_plan/2026-04-23T02:30:00Z.json
 
-The `session.done` payload and the saved archive use the same transcript shape:
+The `session.done` payload and the saved archive use the same transcript shape; when verdict options are used it may include an optional verdict object:
   {
     "threads": [
       {
@@ -121,7 +123,13 @@ The `session.done` payload and the saved archive use the same transcript shape:
         "createdAt": "2026-04-23T02:30:02Z",
         "deletedAt": null
       }
-    ]
+    ],
+    "verdict": {
+      "optionId": "declined",
+      "label": "Decline",
+      "feedback": "needs a migration plan for step 3",
+      "decidedAt": "2026-04-23T02:30:20Z"
+    }
   }
 
 ## Exit Codes

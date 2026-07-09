@@ -243,7 +243,7 @@
   header .theme-menu-item.active .theme-icon { color: var(--accent); }
   header .theme-menu-item .check { margin-left: auto; color: var(--accent); width: 14px; height: 14px; }
   header .theme-menu-item:not(.active) .check { visibility: hidden; }
-  #copy-all {
+  #finish-review {
     font: inherit;
     padding: 7px 14px;
     border: 1px solid var(--accent);
@@ -254,9 +254,9 @@
     font-weight: 500;
     font-size: 13px;
   }
-  #copy-all:hover { opacity: 0.92; }
-  #copy-all.ok { background: #2e7d32; border-color: #2e7d32; }
-  #copy-all:disabled { opacity: 0.65; cursor: default; }
+  #finish-review:hover { opacity: 0.92; }
+  #finish-review.ok { background: #2e7d32; border-color: #2e7d32; }
+  #finish-review:disabled { opacity: 0.65; cursor: default; }
   .done-control {
     position: relative;
     display: inline-flex;
@@ -286,6 +286,95 @@
     font-weight: 600;
   }
   .done-banner.shown { display: flex; }
+  .done-banner.with-feedback { flex-direction: column; align-items: center; gap: 5px; }
+  .done-banner .feedback-toggle {
+    font: inherit;
+    font-size: 12px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .done-banner .verdict-feedback {
+    max-width: 720px;
+    white-space: pre-wrap;
+    font-weight: 400;
+    color: #245f31;
+  }
+  .verdict-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 180;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(255, 255, 255, 0.32);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .verdict-modal[hidden] { display: none; }
+  html[data-theme="dark"] .verdict-modal { background: rgba(40, 40, 40, 0.32); }
+  .verdict-dialog {
+    width: min(520px, 100%);
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.20);
+    padding: 20px;
+  }
+  .verdict-prompt { margin: 0 0 14px; font-weight: 600; }
+  .verdict-feedback-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .verdict-feedback-text {
+    width: 100%;
+    min-height: 100px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 14px;
+    resize: vertical;
+    background: white;
+    color: var(--ink);
+  }
+  html[data-theme="dark"] .verdict-feedback-text { background: #1f1f1f; }
+  .verdict-feedback-text:focus { outline: none; border-color: var(--accent); }
+  .verdict-validation { min-height: 18px; margin-top: 5px; color: #c62828; font-size: 12px; }
+  .verdict-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .verdict-option-button, .verdict-submit, .verdict-cancel {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .verdict-option-button:hover, .verdict-submit:hover, .verdict-cancel:hover { background: var(--accent-hover); }
+  html[data-theme="dark"] .verdict-option-button:hover,
+  html[data-theme="dark"] .verdict-submit:hover,
+  html[data-theme="dark"] .verdict-cancel:hover { background: var(--accent-soft); }
+  .verdict-option-button.positive, .verdict-submit.positive { background: #2e7d32; border-color: #2e7d32; color: white; }
+  .verdict-option-button.negative, .verdict-submit.negative { background: #c62828; border-color: #c62828; color: white; }
+  .verdict-option-button.neutral, .verdict-submit.neutral { background: #666; border-color: #666; color: white; }
+  .verdict-option-button:disabled, .verdict-submit:disabled, .verdict-cancel:disabled, .verdict-select:disabled { opacity: 0.65; cursor: default; }
+  .verdict-select-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+  .verdict-select {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--ink);
+  }
+  .verdict-error .mutation-error { margin-top: 12px; }
   body.review-complete .workspace { pointer-events: none; opacity: 0.72; }
 
   .workspace {
@@ -1319,12 +1408,23 @@
     </div>
   </span>
   <span class="done-control" id="done-control">
-    <button id="copy-all" title="Finish the review and send the transcript to the agent">Finish review</button>
+    <button id="finish-review" title="Finish the review and send the transcript to the agent">Finish review</button>
   </span>
 </header>
 
 <div class="done-banner" id="done-banner" role="status" aria-live="polite">
   You can close this tab.
+</div>
+
+<div class="verdict-modal" id="verdict-modal" hidden>
+  <div class="verdict-dialog" role="dialog" aria-modal="true" aria-labelledby="verdict-prompt">
+    <p class="verdict-prompt" id="verdict-prompt"></p>
+    <label class="verdict-feedback-label" id="verdict-feedback-label" for="verdict-feedback">Feedback (optional)</label>
+    <textarea class="verdict-feedback-text" id="verdict-feedback" aria-describedby="verdict-validation"></textarea>
+    <div class="verdict-validation" id="verdict-validation" aria-live="polite"></div>
+    <div class="verdict-actions" id="verdict-actions"></div>
+    <div class="verdict-error" id="verdict-error"></div>
+  </div>
 </div>
 
 <div class="workspace" id="workspace">
@@ -1470,6 +1570,7 @@
       drafts: { newThread: {}, followup: {} },
       sourceVersion: 0,
       files: [],
+      verdictConfig: null,
     };
   }
   function normalizeState(raw) {
@@ -1486,7 +1587,28 @@
     const sourceVersion = parseInt(raw.sourceVersion, 10);
     state.sourceVersion = Number.isFinite(sourceVersion) && sourceVersion >= 0 ? sourceVersion : 0;
     state.files = normalizeFilesList(raw.files);
+    state.verdictConfig = normalizeVerdictConfig(raw.verdictConfig);
     return state;
+  }
+  function normalizeVerdictConfig(rawConfig) {
+    if (!rawConfig || typeof rawConfig !== 'object' || !Array.isArray(rawConfig.options)) return null;
+    const options = rawConfig.options
+      .filter(option => option && typeof option === 'object' && typeof option.id === 'string' && typeof option.label === 'string')
+      .map(option => {
+        const style = ['positive', 'neutral', 'negative'].includes(option.style) ? option.style : 'neutral';
+        return {
+          id: option.id,
+          label: option.label,
+          style,
+          feedbackRequired: option.feedbackRequired === true,
+        };
+      })
+      .filter(option => option.id && option.label);
+    if (!options.length) return null;
+    return {
+      prompt: typeof rawConfig.prompt === 'string' ? rawConfig.prompt : null,
+      options,
+    };
   }
   function normalizeFilesList(rawFiles) {
     if (!Array.isArray(rawFiles)) return [];
@@ -1860,13 +1982,40 @@
     heartbeatTimer = null;
   }
 
-  function showDoneBanner() {
+  function showDoneBanner(verdictSummary = null) {
     const banner = document.getElementById('done-banner');
     if (!banner) return;
+    banner.classList.remove('with-feedback');
+    if (verdictSummary && verdictSummary.label) {
+      banner.textContent = '';
+      const summary = document.createElement('span');
+      summary.textContent = `Review finished — ${verdictSummary.label} ✓`;
+      banner.appendChild(summary);
+      if (verdictSummary.feedback) {
+        banner.classList.add('with-feedback');
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'feedback-toggle';
+        toggle.textContent = 'view your feedback';
+        toggle.setAttribute('aria-expanded', 'false');
+        const feedback = document.createElement('div');
+        feedback.className = 'verdict-feedback';
+        feedback.textContent = verdictSummary.feedback;
+        feedback.hidden = true;
+        toggle.addEventListener('click', () => {
+          const expanded = toggle.getAttribute('aria-expanded') === 'true';
+          toggle.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          toggle.textContent = expanded ? 'view your feedback' : 'hide your feedback';
+          feedback.hidden = expanded;
+        });
+        banner.append(toggle, feedback);
+      }
+    }
     banner.classList.add('shown');
   }
 
   function markReviewComplete() {
+    const verdictSummary = arguments.length > 0 ? arguments[0] : null;
     reviewComplete = true;
     document.body.classList.add('review-complete');
     stopHeartbeat();
@@ -1882,12 +2031,12 @@
     document.querySelectorAll('button, textarea').forEach(control => {
       control.disabled = true;
     });
-    const btn = document.getElementById('copy-all');
+    const btn = document.getElementById('finish-review');
     if (btn) {
       btn.textContent = 'Finished ✓';
       btn.classList.add('ok');
     }
-    showDoneBanner();
+    showDoneBanner(verdictSummary);
   }
 
   function blockCompletedInteraction(event) {
@@ -1895,6 +2044,12 @@
     if (event.target.closest && event.target.closest('#done-banner')) return;
     event.preventDefault();
     event.stopPropagation();
+  }
+
+  function updateFinishReviewButtonLabel() {
+    const btn = document.getElementById('finish-review');
+    if (!btn || reviewComplete) return;
+    btn.textContent = loadState().verdictConfig ? 'Finish review…' : 'Finish review';
   }
 
   function normalizeThreadPayload(payload) {
@@ -4123,7 +4278,8 @@
 
   // ---------- Click dispatch ----------
   document.addEventListener('click', (e) => {
-    if (e.target.closest('#copy-all')) return;
+    if (e.target.closest('#finish-review')) return;
+    if (e.target.closest('#verdict-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('.thread-marker')) return;
     if (e.target.closest('.thread')) return;
@@ -4162,6 +4318,7 @@
   // Escape closes
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (isVerdictModalOpen()) { closeVerdictModal(); return; }
       if (newThreadEditor) { closeNewThreadEditor(); return; }
       if (!showAllBtn.classList.contains('on')) closeAllThreads();
     }
@@ -4208,10 +4365,237 @@
   });
 
   // ---------- Done ----------
-  document.getElementById('copy-all').addEventListener('click', async () => {
-    const btn = document.getElementById('copy-all');
+  const DEFAULT_VERDICT_PROMPT = 'How should this review be closed out?';
+  const verdictModalState = {
+    config: null,
+    selectedOption: null,
+    focusedOptionId: null,
+    hoveredOptionId: null,
+    submitting: false,
+  };
+
+  function verdictOptionById(optionId) {
+    const options = verdictModalState.config ? verdictModalState.config.options : [];
+    return options.find(option => option.id === optionId) || null;
+  }
+
+  function isVerdictModalOpen() {
+    const modal = document.getElementById('verdict-modal');
+    return !!modal && !modal.hidden;
+  }
+
+  function updateVerdictFeedbackLabel(option) {
+    const label = document.getElementById('verdict-feedback-label');
+    if (!label || !option) return;
+    label.textContent = option.feedbackRequired ? 'Feedback (required)' : 'Feedback (optional)';
+  }
+
+  function clearVerdictValidation() {
+    const validation = document.getElementById('verdict-validation');
+    if (validation) validation.textContent = '';
+  }
+
+  function refreshVerdictButtonFeedbackLabel() {
+    updateVerdictFeedbackLabel(
+      verdictOptionById(verdictModalState.hoveredOptionId)
+        || verdictOptionById(verdictModalState.focusedOptionId)
+        || verdictModalState.selectedOption
+    );
+  }
+
+  function setSelectedVerdictOption(option) {
+    verdictModalState.selectedOption = option;
+    refreshVerdictButtonFeedbackLabel();
+    const submit = document.querySelector('#verdict-actions .verdict-submit');
+    if (submit && option) {
+      submit.textContent = `Submit: ${option.label}`;
+      submit.classList.remove('positive', 'neutral', 'negative');
+      submit.classList.add(option.style);
+    }
+  }
+
+  function setVerdictSubmitting(submitting, activeControl = null) {
+    verdictModalState.submitting = submitting;
+    document.querySelectorAll('#verdict-actions button, #verdict-actions select').forEach(control => {
+      control.disabled = submitting;
+    });
+    if (submitting && activeControl) {
+      activeControl.textContent = 'Sending…';
+    } else if (!submitting) {
+      document.querySelectorAll('#verdict-actions .verdict-option-button').forEach(button => {
+        const option = verdictOptionById(button.dataset.optionId);
+        if (option) button.textContent = option.label;
+      });
+      setSelectedVerdictOption(verdictModalState.selectedOption);
+    }
+  }
+
+  function findVerdictControl(option) {
+    return Array.from(document.querySelectorAll('#verdict-actions .verdict-option-button'))
+      .find(button => button.dataset.optionId === option.id)
+      || document.querySelector('#verdict-actions .verdict-submit');
+  }
+
+  async function submitVerdict(option, activeControl = null) {
+    if (reviewComplete || verdictModalState.submitting || !option) return;
+    const textarea = document.getElementById('verdict-feedback');
+    const errorContainer = document.getElementById('verdict-error');
+    const feedback = textarea ? textarea.value.trim() : '';
+    clearVerdictValidation();
+    clearMutationError(errorContainer);
+    if (option.feedbackRequired && !feedback) {
+      const validation = document.getElementById('verdict-validation');
+      if (validation) validation.textContent = 'Feedback is required for this option.';
+      if (textarea) textarea.focus();
+      return;
+    }
+    const control = activeControl || findVerdictControl(option);
+    setVerdictSubmitting(true, control);
+    const verdict = { optionId: option.id };
+    if (feedback) verdict.feedback = feedback;
+    try {
+      await apiJson('/api/done', { body: { verdict } });
+      verdictModalState.submitting = false;
+      closeVerdictModal({ restoreFocus: false });
+      markReviewComplete({ label: option.label, feedback });
+    } catch (error) {
+      console.error('Failed to finish review:', error);
+      setVerdictSubmitting(false);
+      showMutationError(errorContainer, "couldn't finish — retry?", () => {
+        submitVerdict(option, findVerdictControl(option));
+      });
+    }
+  }
+
+  function renderVerdictOptions(config) {
+    const actions = document.getElementById('verdict-actions');
+    if (!actions) return;
+    actions.textContent = '';
+    if (config.options.length <= 3) {
+      config.options.forEach(option => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `verdict-option-button ${option.style}`;
+        button.dataset.optionId = option.id;
+        button.textContent = option.label;
+        button.addEventListener('focus', () => {
+          verdictModalState.focusedOptionId = option.id;
+          refreshVerdictButtonFeedbackLabel();
+        });
+        button.addEventListener('blur', () => {
+          if (verdictModalState.focusedOptionId === option.id) verdictModalState.focusedOptionId = null;
+          refreshVerdictButtonFeedbackLabel();
+        });
+        button.addEventListener('mouseenter', () => {
+          verdictModalState.hoveredOptionId = option.id;
+          refreshVerdictButtonFeedbackLabel();
+        });
+        button.addEventListener('mouseleave', () => {
+          if (verdictModalState.hoveredOptionId === option.id) verdictModalState.hoveredOptionId = null;
+          refreshVerdictButtonFeedbackLabel();
+        });
+        button.addEventListener('click', () => submitVerdict(option, button));
+        actions.appendChild(button);
+      });
+    } else {
+      const row = document.createElement('div');
+      row.className = 'verdict-select-row';
+      const select = document.createElement('select');
+      select.className = 'verdict-select';
+      config.options.forEach(option => {
+        const item = document.createElement('option');
+        item.value = option.id;
+        item.textContent = option.label;
+        select.appendChild(item);
+      });
+      const submit = document.createElement('button');
+      submit.type = 'button';
+      submit.className = 'verdict-submit';
+      select.addEventListener('change', () => {
+        setSelectedVerdictOption(verdictOptionById(select.value) || config.options[0]);
+        clearVerdictValidation();
+      });
+      submit.addEventListener('click', () => submitVerdict(verdictModalState.selectedOption, submit));
+      row.append(select, submit);
+      actions.appendChild(row);
+      setSelectedVerdictOption(config.options[0]);
+    }
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'verdict-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => closeVerdictModal());
+    actions.appendChild(cancel);
+    if (config.options.length <= 3) setSelectedVerdictOption(config.options[0]);
+  }
+
+  function openVerdictModal(config) {
+    if (!config || !config.options || !config.options.length) return;
+    const modal = document.getElementById('verdict-modal');
+    const prompt = document.getElementById('verdict-prompt');
+    const textarea = document.getElementById('verdict-feedback');
+    const errorContainer = document.getElementById('verdict-error');
+    if (!modal || !prompt || !textarea) return;
+    verdictModalState.config = config;
+    verdictModalState.selectedOption = config.options[0];
+    verdictModalState.focusedOptionId = null;
+    verdictModalState.hoveredOptionId = null;
+    verdictModalState.submitting = false;
+    prompt.textContent = config.prompt || DEFAULT_VERDICT_PROMPT;
+    textarea.value = '';
+    clearVerdictValidation();
+    clearMutationError(errorContainer);
+    renderVerdictOptions(config);
+    modal.hidden = false;
+    textarea.focus();
+  }
+
+  function closeVerdictModal({ restoreFocus = true } = {}) {
+    if (verdictModalState.submitting) return;
+    const modal = document.getElementById('verdict-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    clearVerdictValidation();
+    clearMutationError(document.getElementById('verdict-error'));
+    if (restoreFocus) document.getElementById('finish-review')?.focus();
+  }
+
+  function verdictModalFocusableControls() {
+    const modal = document.getElementById('verdict-modal');
+    if (!modal || modal.hidden) return [];
+    return Array.from(modal.querySelectorAll('textarea, select, button'))
+      .filter(control => !control.disabled && !control.hidden);
+  }
+
+  document.getElementById('verdict-modal')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) closeVerdictModal();
+  });
+  document.getElementById('verdict-modal')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    const controls = verdictModalFocusableControls();
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  document.getElementById('verdict-feedback')?.addEventListener('input', clearVerdictValidation);
+
+  document.getElementById('finish-review').addEventListener('click', async () => {
+    const btn = document.getElementById('finish-review');
     const doneControl = document.getElementById('done-control');
     if (reviewComplete || !btn) return;
+    const verdictConfig = loadState().verdictConfig;
+    if (verdictConfig) {
+      clearMutationError(doneControl);
+      openVerdictModal(verdictConfig);
+      return;
+    }
     clearMutationError(doneControl);
     const original = btn.textContent;
     btn.disabled = true;
@@ -4383,6 +4767,7 @@
   hydrateState().then(() => {
     discussFiles = loadState().files || [];
     if (discussFiles.length) activeFileId = String(discussFiles[0].id);
+    updateFinishReviewButtonLabel();
     initFileSidebar();
     highlightCodeBlocks();
     renderAllThreads();
