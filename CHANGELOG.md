@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-09
+
 ### Added
 
 - **Finish-review verdict options** — `--verdict-options <SPEC>` and `--verdict-prompt <TEXT>` let sessions collect an overall review decision at Done time. The DSL is `id[:label][:style][!]` separated by shell-quoted `|` (for example `approved:Approve|declined:Decline:negative!`), with 2+ unique ids/labels, `positive` / `neutral` / `negative` cosmetic styles, and `!` marking feedback-required choices; invalid specs fail fast at startup with exit 2. The browser button is now `#finish-review` (renamed from `#copy-all`): without verdict options behavior is unchanged, while configured sessions open a modal with prompt, always-visible feedback, direct buttons for up to 3 options, or a dropdown plus submit for 4+ options. `/api/state` exposes `verdictConfig`; `/api/done` requires a verdict body only when configured and rejects missing bodies with 400 `bad_request` or unknown options / missing required feedback with 400 `validation_error`, where every rejected verdict is a total no-op (no `session.done`, no history write, no shutdown). Accepted `session.done` payloads and archives gain optional `verdict { optionId, label, feedback?, decidedAt }`.
