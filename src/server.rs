@@ -1698,7 +1698,8 @@ struct DoneVerdictRequest {
 }
 
 async fn post_api_done(AxumState(app_state): AxumState<AppState>, body: Bytes) -> Response {
-    let verdict = match validate_done_verdict(&app_state, &body) {
+    let emitted_at = Utc::now();
+    let verdict = match validate_done_verdict(&app_state, &body, emitted_at) {
         Ok(verdict) => verdict,
         Err(response) => return *response,
     };
@@ -1739,7 +1740,6 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>, body: Bytes) -
             );
         }
     };
-    let emitted_at = Utc::now();
 
     if let Err(error) = app_state.emitter.emit(&Event {
         kind: EventKind::SessionDone,
@@ -1778,6 +1778,7 @@ async fn post_api_done(AxumState(app_state): AxumState<AppState>, body: Bytes) -
 fn validate_done_verdict(
     app_state: &AppState,
     body: &[u8],
+    decided_at: DateTime<Utc>,
 ) -> std::result::Result<Option<Verdict>, Box<Response>> {
     let Some(config) = app_state.verdict_config.as_ref() else {
         return Ok(None);
@@ -1831,7 +1832,7 @@ fn validate_done_verdict(
         option_id: option.id.clone(),
         label: option.label.clone(),
         feedback,
-        decided_at: Utc::now(),
+        decided_at,
     }))
 }
 

@@ -2058,6 +2058,10 @@ async fn post_api_done_with_verdict_config_accepts_valid_body_and_emits_verdict(
     assert_eq!(events[0]["payload"]["verdict"]["label"], "Approve");
     assert_eq!(events[0]["payload"]["verdict"]["feedback"], "ship it");
     assert!(events[0]["payload"]["verdict"]["decidedAt"].is_string());
+    assert_eq!(
+        events[0]["payload"]["verdict"]["decidedAt"],
+        events[0]["at"]
+    );
 }
 
 #[tokio::test]
