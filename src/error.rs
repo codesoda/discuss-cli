@@ -69,6 +69,9 @@ pub enum DiscussError {
     #[error("duplicate file argument: {path} - each input path can only be passed once")]
     DuplicateInputPath { path: PathBuf },
 
+    #[error("verdict options error: {message}")]
+    VerdictSpecError { message: String },
+
     #[error("diff error: {message}")]
     DiffError { message: String },
 }

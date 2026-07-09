@@ -268,6 +268,34 @@ fn cli_no_save_flag_suppresses_history_archive() {
     );
 }
 
+#[test]
+fn cli_bad_verdict_options_exits_two_and_reports_message() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--verdict-options")
+        .arg("approved")
+        .arg(&markdown_path)
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("spawn discuss binary");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should be reserved for JSON events"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("verdict options error"));
+    assert!(stderr.contains("at least 2 options"));
+}
+
 fn free_port() -> u16 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind free listener");
 

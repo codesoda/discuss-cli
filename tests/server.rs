@@ -12,8 +12,8 @@ use discuss::state::{
     Draft, NewThreadDraftKey, Resolution, State, Thread, ThreadId, ThreadKind, default_file_id,
 };
 use discuss::{
-    AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript, serve,
-    serve_with_ready,
+    AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript,
+    VerdictConfig, VerdictOption, VerdictStyle, serve, serve_with_ready,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2014,6 +2014,167 @@ async fn post_api_done_no_save_emits_transcript_without_history_archive() {
 }
 
 #[tokio::test]
+async fn post_api_done_with_verdict_config_accepts_valid_body_and_emits_verdict() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0)
+    .with_verdict_config(Some(test_verdict_config()));
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/done",
+        r#"{"verdict":{"optionId":"approved","feedback":"  ship it  "}}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(
+        response_json(&response),
+        json!({ "ok": true, "message": "transcript emitted" })
+    );
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    let stdout = stdout_string(&stdout);
+    let events = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("stdout line should be JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1, "expected one event, got {stdout}");
+    assert_eq!(events[0]["kind"], "session.done");
+    assert_eq!(events[0]["payload"]["verdict"]["optionId"], "approved");
+    assert_eq!(events[0]["payload"]["verdict"]["label"], "Approve");
+    assert_eq!(events[0]["payload"]["verdict"]["feedback"], "ship it");
+    assert!(events[0]["payload"]["verdict"]["decidedAt"].is_string());
+}
+
+#[tokio::test]
+async fn get_api_state_includes_configured_verdict_config() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_idle_timeout_secs(0)
+        .with_verdict_config(Some(test_verdict_config()));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["verdictConfig"]["prompt"], "Final verdict?");
+    assert_eq!(state["verdictConfig"]["options"][0]["id"], "approved");
+    assert_eq!(state["verdictConfig"]["options"][0]["style"], "positive");
+    assert_eq!(
+        state["verdictConfig"]["options"][1]["feedbackRequired"],
+        true
+    );
+
+    shutdown_tx.send(()).expect("send shutdown");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_done_with_verdict_config_rejects_unknown_option_without_side_effects() {
+    assert_verdict_rejection_is_noop_then_valid(
+        r#"{"verdict":{"optionId":"missing","feedback":"nope"}}"#,
+        "validation_error",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn post_api_done_with_verdict_config_rejects_missing_body_without_side_effects() {
+    assert_verdict_rejection_is_noop_then_valid("", "bad_request").await;
+}
+
+#[tokio::test]
+async fn post_api_done_with_verdict_config_rejects_missing_required_feedback_without_side_effects()
+{
+    assert_verdict_rejection_is_noop_then_valid(
+        r#"{"verdict":{"optionId":"declined","feedback":"   "}}"#,
+        "validation_error",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn post_api_done_without_verdict_config_ignores_stray_body() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/done", "not json at all").await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(
+        response_json(&response),
+        json!({ "ok": true, "message": "transcript emitted" })
+    );
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+    assert!(stdout_string(&stdout).contains("session.done"));
+}
+
+#[tokio::test]
+async fn post_api_done_without_verdict_config_accepts_browser_empty_request() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_path_no_body(addr, "/api/done").await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(
+        response_json(&response),
+        json!({ "ok": true, "message": "transcript emitted" })
+    );
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+    assert!(stdout_string(&stdout).contains("session.done"));
+}
+
+#[tokio::test]
 async fn busy_port_maps_to_port_in_use() {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
     let addr = listener.local_addr().expect("busy listener addr");
@@ -2681,10 +2842,106 @@ async fn get_path(addr: SocketAddr, path: &str) -> String {
     response
 }
 
+fn test_verdict_config() -> VerdictConfig {
+    VerdictConfig {
+        prompt: Some("Final verdict?".to_string()),
+        options: vec![
+            VerdictOption {
+                id: "approved".to_string(),
+                label: "Approve".to_string(),
+                style: VerdictStyle::Positive,
+                feedback_required: false,
+            },
+            VerdictOption {
+                id: "declined".to_string(),
+                label: "Decline".to_string(),
+                style: VerdictStyle::Negative,
+                feedback_required: true,
+            },
+        ],
+    }
+}
+
+async fn assert_verdict_rejection_is_noop_then_valid(invalid_body: &str, expected_code: &str) {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0)
+    .with_verdict_config(Some(test_verdict_config()));
+    let server = tokio::spawn(serve(addr, app_state, pending()));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(addr, "/api/done", invalid_body).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request"),
+        "expected 400 response, got {response}"
+    );
+    assert_eq!(response_json(&response)["error"]["code"], expected_code);
+    assert!(
+        stdout_string(&stdout).is_empty(),
+        "rejected verdict must not emit session.done"
+    );
+
+    let state_response = get_path(addr, "/api/state").await;
+    assert!(
+        state_response.starts_with("HTTP/1.1 200 OK"),
+        "server should still be alive after rejection: {state_response}"
+    );
+
+    let response = post_json_path(
+        addr,
+        "/api/done",
+        r#"{"verdict":{"optionId":"declined","feedback":"needs work"}}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    let stdout = stdout_string(&stdout);
+    assert!(
+        stdout.contains("session.done"),
+        "valid retry should emit session.done: {stdout}"
+    );
+    assert!(
+        stdout.contains("needs work"),
+        "valid retry should carry verdict feedback: {stdout}"
+    );
+}
+
 async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
     try_post_json_path(addr, path, body)
         .await
         .expect("POST request should succeed")
+}
+
+async fn post_path_no_body(addr: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    String::from_utf8(response).expect("response should be utf-8")
 }
 
 async fn try_post_json_path(addr: SocketAddr, path: &str, body: &str) -> io::Result<String> {

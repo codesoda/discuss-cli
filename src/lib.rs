@@ -28,6 +28,7 @@ pub mod state;
 pub mod template;
 pub mod transcript;
 pub mod update;
+pub mod verdict;
 
 pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
@@ -42,6 +43,7 @@ pub use template::render_page;
 pub use transcript::{
     Transcript, TranscriptThread, build_transcript, build_transcript_with_source,
 };
+pub use verdict::{Verdict, VerdictConfig, VerdictOption, VerdictStyle};
 
 pub const DEFAULT_PORT: u16 = 7777;
 
@@ -58,6 +60,8 @@ where
         no_open,
         no_save,
         history_dir,
+        verdict_options,
+        verdict_prompt,
         files,
         command,
     } = args;
@@ -77,6 +81,15 @@ where
     init_tracing(&config)?;
     tracing::debug!("tracing initialized");
 
+    let verdict_config = if let Some(spec) = verdict_options {
+        Some(verdict::parse_verdict_config(&spec, verdict_prompt)?)
+    } else {
+        if verdict_prompt.is_some() {
+            eprintln!("warning: --verdict-prompt ignored without --verdict-options");
+        }
+        None
+    };
+
     match command {
         Some(cli::Commands::Update(update_args)) => {
             if update_args.check {
@@ -88,15 +101,16 @@ where
             Ok(())
         }
         Some(cli::Commands::Diff(diff_args)) => {
-            run_review_session(files, Some(diff_args), &config, shutdown).await
+            run_review_session(files, Some(diff_args), verdict_config, &config, shutdown).await
         }
-        None => run_review_session(files, None, &config, shutdown).await,
+        None => run_review_session(files, None, verdict_config, &config, shutdown).await,
     }
 }
 
 async fn run_review_session<F>(
     files: Vec<PathBuf>,
     diff_args: Option<cli::DiffArgs>,
+    verdict_config: Option<verdict::VerdictConfig>,
     config: &Config,
     shutdown: F,
 ) -> Result<()>
@@ -188,6 +202,7 @@ where
 
     let mut app_state = AppState::for_process()
         .with_source(source)
+        .with_verdict_config(verdict_config)
         .with_no_save(config.no_save)
         .with_idle_timeout_secs(config.idle_timeout_secs);
     if let Some(source_path) = primary_source_path {

@@ -5,6 +5,7 @@ use crate::state::{
     FileId, FileMeta, LineRange, Reply, Resolution, Source, State, Take, ThreadId, ThreadKind,
     default_file_id,
 };
+use crate::verdict::Verdict;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +13,15 @@ pub struct Transcript {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileMeta>,
     pub threads: Vec<TranscriptThread>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+}
+
+impl Transcript {
+    pub fn with_verdict(mut self, verdict: Verdict) -> Self {
+        self.verdict = Some(verdict);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -87,6 +97,7 @@ fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
     Transcript {
         files: files.to_vec(),
         threads,
+        verdict: None,
     }
 }
 
@@ -274,6 +285,64 @@ mod tests {
         let value = serde_json::to_value(&transcript).expect("serialize");
         assert_eq!(value["threads"][0]["lineRange"]["start"], 2);
         assert_eq!(value["threads"][0]["lineRange"]["end"], 4);
+    }
+
+    #[test]
+    fn old_archive_without_verdict_deserializes() {
+        let value = json!({
+            "threads": [{
+                "id": "u-1",
+                "fileId": "f-1",
+                "anchorStart": 2,
+                "anchorEnd": 3,
+                "snippet": "snippet u-1",
+                "breadcrumb": "Overview > Goals",
+                "text": "initial comment u-1",
+                "kind": "user",
+                "replies": [],
+                "takes": [],
+                "resolution": null,
+                "createdAt": "2026-04-23T02:30:02Z",
+                "deletedAt": null
+            }]
+        });
+
+        let transcript: Transcript =
+            serde_json::from_value(value).expect("old transcript should deserialize");
+
+        assert!(transcript.verdict.is_none());
+    }
+
+    #[test]
+    fn transcript_without_verdict_serializes_without_key() {
+        let mut state = State::default();
+        state.add_thread(thread("u-1", 1, 1));
+
+        let value = serde_json::to_value(build_transcript(&state)).expect("serialize transcript");
+
+        assert!(value.get("verdict").is_none());
+    }
+
+    #[test]
+    fn transcript_with_verdict_serializes_camel_case() {
+        let transcript = build_transcript(&State::default()).with_verdict(Verdict {
+            option_id: "declined".to_string(),
+            label: "Decline".to_string(),
+            feedback: Some("needs tests".to_string()),
+            decided_at: timestamp(20),
+        });
+
+        let value = serde_json::to_value(transcript).expect("serialize transcript");
+
+        assert_eq!(
+            value["verdict"],
+            json!({
+                "optionId": "declined",
+                "label": "Decline",
+                "feedback": "needs tests",
+                "decidedAt": "2026-04-23T02:30:20Z"
+            })
+        );
     }
 
     #[test]
