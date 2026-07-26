@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dark mode contrast** — the dark theme re-defined the `:root` palette under `html[data-theme="dark"]`, but roughly 25 rules in `discuss.html` bypassed the tokens with literal light-mode colours, so they kept rendering dark-on-dark once the theme flipped. Worst offenders were `#doc-content h3` / `h4` (`#333` / `#444`, measuring 1.4:1 and 1.8:1 against `--bg`) and `#doc-content blockquote` (`#333` at 1.3:1) — body text that was effectively invisible. Also fixed: the resolve/resolved greens (`#2e7d32` on `--decision`, 2.6:1), `.verdict-validation` red on `--card` (2.7:1), the open-thread anchor highlight (`rgba(255,236,139,0.55)` washed out to a pale olive that `--ink` could not sit on, 2.7:1), and a set of light islands in an otherwise dark UI — `.followup` and `.new-thread-editor` textareas and buttons (`background: white`), the `.new-thread-editor` panel (`#fff4f7`), `.mutation-error`, `#doc-content .mermaid-error`, and the `.done-banner`. The fix adds the missing semantic tokens to both palettes (`--ink-soft`, `--ink-softer`, `--field`, `--field-hover`, `--ok-ink`, `--ok-bg-hover`, `--danger`, `--danger-ink`, `--danger-bg`, `--danger-bg-hover`, `--danger-border`, `--teal`, `--grip`, `--highlight-active`, `--accent-dashed-strong`) and points those rules at them, rather than stacking per-rule dark overrides — so a rule added later inherits the right colour instead of reintroducing the bug. Every fixed surface now clears WCAG AA (4.5:1); measured in-page, the three from the original report went 1.4→10.5:1, 1.8→9.1:1, and 1.3→9.0:1. Light mode is unchanged: each new token's light value is the literal it replaced, verified by resolving the light palette and diffing against the previous stylesheet. The `.done-banner` keeps a scoped `html[data-theme="dark"]` override instead of four global tokens, since its greens are used by that one component.
+
 ## [0.6.0] - 2026-07-09
 
 ### Added

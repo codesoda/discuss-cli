@@ -101,6 +101,24 @@
     --marker-blue: #3b82f6;
     --marker-yellow: #e9b949;
     --marker-pink: #d75d82;
+    /* Secondary text, form surfaces, and status colours. These exist so no rule
+       has to hardcode a literal colour: anything hardcoded stops responding to
+       the theme and turns into dark-on-dark once data-theme="dark" is set. */
+    --ink-soft: #333;
+    --ink-softer: #444;
+    --field: #ffffff;
+    --field-hover: #f5f5f5;
+    --ok-ink: #2e7d32;
+    --ok-bg-hover: #d8e8d8;
+    --danger: #c62828;
+    --danger-ink: #8a1f14;
+    --danger-bg: #fff2f0;
+    --danger-bg-hover: #ffe3df;
+    --danger-border: #e0aaa4;
+    --accent-dashed-strong: rgba(11, 95, 255, 0.5);
+    --teal: #0d9488;
+    --grip: rgba(0, 0, 0, 0.2);
+    --highlight-active: rgba(255, 236, 139, 0.55);
     --header-h: 54px;
     --left-w: 60%;
     --divider-w: 6px;
@@ -136,6 +154,25 @@
     --marker-blue: #5a9bff;
     --marker-yellow: #f0c860;
     --marker-pink: #e87a9c;
+    /* Dark counterparts. Text tokens clear WCAG AA (4.5:1) against --bg and
+       --card; --ok-ink is also checked against --decision, which it sits on. */
+    --ink-soft: #d6d6d2;
+    --ink-softer: #c8c8c4;
+    --field: #2e2e2c;
+    --field-hover: #3a3a38;
+    --ok-ink: #7fc98a;
+    --ok-bg-hover: #2a4633;
+    --danger: #f08a80;
+    --danger-ink: #f2b8b0;
+    --danger-bg: #3a1f1c;
+    --danger-bg-hover: #4a2822;
+    --danger-border: #7a3a33;
+    --accent-dashed-strong: rgba(90, 155, 255, 0.6);
+    --teal: #3fbfae;
+    --grip: rgba(255, 255, 255, 0.28);
+    /* Dimmer and warmer than the light tint: at 55% the light yellow washes out
+       to a pale olive that --ink can no longer sit on legibly (2.7:1). */
+    --highlight-active: rgba(240, 200, 96, 0.22);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -303,6 +340,14 @@
     font-weight: 400;
     color: #245f31;
   }
+  /* Scoped rather than tokenised: four correlated greens used by this banner
+     alone, so global tokens would carry them further than they belong. */
+  html[data-theme="dark"] .done-banner {
+    background: #1f3526;
+    border-bottom-color: #3f6b4d;
+    color: #8fd49a;
+  }
+  html[data-theme="dark"] .done-banner .verdict-feedback { color: #b0dcb8; }
   .verdict-modal {
     position: fixed;
     inset: 0;
@@ -337,12 +382,11 @@
     font: inherit;
     font-size: 14px;
     resize: vertical;
-    background: white;
+    background: var(--field);
     color: var(--ink);
   }
-  html[data-theme="dark"] .verdict-feedback-text { background: #1f1f1f; }
   .verdict-feedback-text:focus { outline: none; border-color: var(--accent); }
-  .verdict-validation { min-height: 18px; margin-top: 5px; color: #c62828; font-size: 12px; }
+  .verdict-validation { min-height: 18px; margin-top: 5px; color: var(--danger); font-size: 12px; }
   .verdict-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   .verdict-option-button, .verdict-submit, .verdict-cancel {
     font: inherit;
@@ -514,7 +558,7 @@
     transform: translate(-50%, -50%);
     width: 2px;
     height: 32px;
-    background: rgba(0,0,0,0.2);
+    background: var(--grip);
     border-radius: 1px;
   }
   body.dragging, body.dragging * { user-select: none !important; cursor: col-resize !important; }
@@ -522,8 +566,8 @@
   /* --- Left-pane content --- */
   #doc-content h1 { font-size: 22px; margin: 0 0 16px 0; font-weight: 700; }
   #doc-content h2 { font-size: 19px; margin: 24px 0 10px 0; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-  #doc-content h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; color: #333; }
-  #doc-content h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; color: #444; }
+  #doc-content h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; color: var(--ink-soft); }
+  #doc-content h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; color: var(--ink-softer); }
   #doc-content p { margin: 8px 0; }
   #doc-content ul, #doc-content ol { padding-left: 22px; margin: 8px 0; }
   #doc-content li { margin: 3px 0; }
@@ -565,9 +609,9 @@
   #doc-content .mermaid-error {
     margin: 6px 0 14px;
     padding: 8px 12px;
-    border-left: 3px solid #c62828;
-    background: #fff2f0;
-    color: #8a1f14;
+    border-left: 3px solid var(--danger);
+    background: var(--danger-bg);
+    color: var(--danger-ink);
     font-family: var(--mono);
     font-size: 12px;
     white-space: pre-wrap;
@@ -685,7 +729,7 @@
     border-left: 3px solid var(--accent);
     padding: 4px 12px;
     background: var(--accent-hover);
-    color: #333;
+    color: var(--ink-soft);
     font-style: italic;
   }
   #doc-content .quote {
@@ -828,7 +872,7 @@
   }
   #doc-content [data-anchor-idx].in-range {
     background: var(--accent-range);
-    outline: 1px dashed rgba(11, 95, 255, 0.5);
+    outline: 1px dashed var(--accent-dashed-strong);
     outline-offset: 2px;
   }
   #doc-content [data-anchor-idx].has-thread {
@@ -836,7 +880,7 @@
   }
   #doc-content [data-anchor-idx].thread-active,
   #doc-content [data-anchor-idx].thread-active code {
-    background: rgba(255, 236, 139, 0.55);
+    background: var(--highlight-active);
   }
   #doc-content [data-anchor-idx].thread-active {
     outline: 2px solid var(--accent);
@@ -988,7 +1032,7 @@
   .followup button.clear.hidden { display: none; }
   /* Meta-status segments. The header subtitle interpolates these spans
      into the running comma-separated string of session counts. */
-  .meta-stat-draft { color: #0d9488; }
+  .meta-stat-draft { color: var(--teal); }
   .meta-stat-pending { color: var(--pending-dark); }
 
   #selection-popup {
@@ -1080,7 +1124,7 @@
     text-transform: uppercase;
   }
   .thread-close:hover,
-  .thread-delete:hover { color: #c62828; }
+  .thread-delete:hover { color: var(--danger); }
   .thread-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
   .thread-sub.placeholder { font-style: italic; color: var(--pending-dark); }
   .thread-decision {
@@ -1144,7 +1188,8 @@
     font: inherit;
     font-size: 13px;
     resize: vertical;
-    background: white;
+    background: var(--field);
+    color: var(--ink);
   }
   .followup textarea:focus { outline: none; border-color: var(--accent); }
   .followup .actions { display: flex; gap: 6px; margin-top: 5px; align-items: center; }
@@ -1154,18 +1199,19 @@
     padding: 3px 10px;
     border-radius: 4px;
     border: 1px solid var(--line);
-    background: white;
+    background: var(--field);
+    color: var(--ink);
     cursor: pointer;
   }
-  .followup button:hover { background: #f5f5f5; }
+  .followup button:hover { background: var(--field-hover); }
   .followup button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   .followup button.resolve {
     background: var(--decision);
-    color: #2e7d32;
+    color: var(--ok-ink);
     border-color: var(--decision-border);
     font-weight: 500;
   }
-  .followup button.resolve:hover { background: #d8e8d8; }
+  .followup button.resolve:hover { background: var(--ok-bg-hover); }
   .enter-to-send { display: flex; align-items: center; gap: 3px; margin-left: auto; cursor: pointer; font-size: 11px; color: var(--muted); user-select: none; }
   .enter-to-send input { margin: 0; cursor: pointer; }
   .mutation-error {
@@ -1174,10 +1220,10 @@
     gap: 8px;
     margin-top: 8px;
     padding: 6px 8px;
-    background: #fff2f0;
-    border-left: 3px solid #c62828;
+    background: var(--danger-bg);
+    border-left: 3px solid var(--danger);
     border-radius: 0 4px 4px 0;
-    color: #8a1f14;
+    color: var(--danger-ink);
     font-size: 12px;
   }
   .mutation-error span { flex: 1; }
@@ -1185,17 +1231,17 @@
     font: inherit;
     font-size: 11px;
     padding: 2px 8px;
-    border: 1px solid #e0aaa4;
+    border: 1px solid var(--danger-border);
     border-radius: 4px;
-    background: white;
-    color: #8a1f14;
+    background: var(--field);
+    color: var(--danger-ink);
     cursor: pointer;
   }
-  .mutation-error button:hover { background: #ffe3df; }
+  .mutation-error button:hover { background: var(--danger-bg-hover); }
 
   /* --- Resolution banner --- */
   .thread.resolved { opacity: 0.85; }
-  .thread.resolved .thread-head { color: #2e7d32; }
+  .thread.resolved .thread-head { color: var(--ok-ink); }
   .resolution-banner { display: none; margin-top: 10px; }
   .resolution-banner.shown { display: block; }
   .thread-resolved {
@@ -1211,7 +1257,7 @@
     margin-bottom: 4px;
     font-size: 11px;
     font-weight: 600;
-    color: #2e7d32;
+    color: var(--ok-ink);
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
@@ -1219,16 +1265,16 @@
     font: inherit;
     font-size: 11px;
     padding: 2px 8px;
-    background: white;
+    background: var(--field);
     border: 1px solid var(--decision-border);
     border-radius: 4px;
     cursor: pointer;
     text-transform: none;
     letter-spacing: 0;
     font-weight: 500;
-    color: #2e7d32;
+    color: var(--ok-ink);
   }
-  .resolved-head button.unresolve:hover { background: #f5f5f5; }
+  .resolved-head button.unresolve:hover { background: var(--field-hover); }
   .resolved-decision {
     font-size: 13px;
     line-height: 1.5;
@@ -1267,7 +1313,7 @@
      gutter row(s) so the user sees which lines the open thread is about,
      instead of painting the whole code block. */
   .line-numbers-rows > span.thread-active-line {
-    background: rgba(255, 236, 139, 0.55);
+    background: var(--highlight-active);
     box-shadow: inset -3px 0 0 0 var(--accent);
   }
   /* Click-to-comment per line: each Prism line-number row is a click target.
@@ -1330,7 +1376,7 @@
     position: absolute;
     left: 24px;
     right: 24px;
-    background: #fff4f7;
+    background: var(--user-note);
     border: 1px solid var(--user-note-border);
     border-radius: 6px;
     padding: 10px 12px;
@@ -1353,7 +1399,8 @@
     font: inherit;
     font-size: 13px;
     resize: vertical;
-    background: white;
+    background: var(--field);
+    color: var(--ink);
   }
   .new-thread-editor textarea:focus { outline: none; border-color: var(--accent); }
   .new-thread-editor .actions { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
@@ -1363,7 +1410,8 @@
     padding: 3px 10px;
     border-radius: 4px;
     border: 1px solid var(--line);
-    background: white;
+    background: var(--field);
+    color: var(--ink);
     cursor: pointer;
   }
   .new-thread-editor button.primary { background: var(--accent); color: white; border-color: var(--accent); }
