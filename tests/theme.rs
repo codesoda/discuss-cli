@@ -37,19 +37,30 @@ const THEMED_PROPERTIES: &[&str] = &[
 /// Named colours the stylesheet actually uses. Extend if a new one appears.
 const NAMED_COLOURS: &[&str] = &["white", "black"];
 
-/// Declarations that hardcode a colour and are *correct* doing so, because the
-/// colour works on both backgrounds or the rule has a dark-scoped counterpart.
+/// Declarations that hardcode a colour and are *correct* doing so.
 ///
-/// Broadly: white/light text on a saturated fill (accent, green, red, grey),
-/// the thread markers, and the handful of composite surfaces that carry their
-/// own `html[data-theme="dark"]` override (`.done-banner`, `#thread-tooltip`,
-/// `.verdict-modal`, `.heading-minimap::before`, `.hm-bar`).
+/// Three grounds for being here, and only these three:
+///
+/// 1. The fill underneath is itself a fixed literal, identical in both palettes
+///    — the greens (`#2e7d32`), red (`#c62828`) and grey (`#666`). White on a
+///    fill that never changes cannot break when the theme flips.
+/// 2. The rule has its own `html[data-theme="dark"]` counterpart that supplies
+///    the dark value (`.done-banner`, `#thread-tooltip`, `.verdict-modal`,
+///    `.heading-minimap::before`, `.hm-bar`).
+/// 3. The value is imperceptible either way — the 7% warm `.has-thread` tint.
+///
+/// Note what is deliberately NOT grounds: "it sits on a saturated fill". The
+/// accent and marker colours are *lightened* by the dark palette so they read
+/// against a dark page, which pushes white text on them the wrong way — white on
+/// `--accent` measures 5.1:1 light but 2.8:1 dark. Those controls use
+/// `--accent-ink` instead. The `.thread-marker` entries below are a known gap
+/// rather than a justification: white on the marker fills is under 4.5:1 in
+/// *both* themes, so it is a pre-existing issue for upstream, not a theme bug.
 const ALLOWED: &[&str] = &[
     "#doc-content [data-anchor-idx].has-thread | background:rgba(231, 178, 122, 0.07)",
-    "#finish-review | color:white",
     "#finish-review.ok | background:#2e7d32",
     "#finish-review.ok | border-color:#2e7d32",
-    "#selection-popup:hover | color:white",
+    "#finish-review.ok | color:white",
     "#thread-tooltip .tt-kind | background:rgba(255,255,255,0.18)",
     "#thread-tooltip .tt-quote | color:#fcdca9",
     "#thread-tooltip | color:white",
@@ -59,10 +70,8 @@ const ALLOWED: &[&str] = &[
     ".done-banner | color:#1f6b2f",
     ".file-item .file-count | color:#fff",
     ".file-sidebar .file-sidebar-title | color:var(--muted, #888)",
-    ".followup button.primary | color:white",
     ".heading-minimap::before | background:rgba(255, 255, 255, 0.32)",
     ".hm-bar | background:rgba(0,0,0,0.22)",
-    ".new-thread-editor button.primary | color:white",
     ".thread-marker | border:2px solid white",
     ".thread-marker | color:white",
     ".thread-marker.has-draft::before | background:#0d9488",
@@ -83,7 +92,6 @@ const ALLOWED: &[&str] = &[
     ".verdict-option-button.positive, .verdict-submit.positive | background:#2e7d32",
     ".verdict-option-button.positive, .verdict-submit.positive | border-color:#2e7d32",
     ".verdict-option-button.positive, .verdict-submit.positive | color:white",
-    "header .toggle.on | color:white",
 ];
 
 fn style_block(html: &str) -> &str {

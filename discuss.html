@@ -106,6 +106,10 @@
        the theme and turns into dark-on-dark once data-theme="dark" is set. */
     --ink-soft: #333;
     --ink-softer: #444;
+    /* Text sitting ON an --accent fill. Not simply white: the dark palette
+       lightens --accent so it reads against a dark page, which drops white text
+       on it to 2.8:1. The ink has to darken as the fill lightens. */
+    --accent-ink: #ffffff;
     --field: #ffffff;
     --field-hover: #f5f5f5;
     --ok-ink: #2e7d32;
@@ -158,6 +162,7 @@
        --card; --ok-ink is also checked against --decision, which it sits on. */
     --ink-soft: #d6d6d2;
     --ink-softer: #c8c8c4;
+    --accent-ink: #0a1a33;
     --field: #2e2e2c;
     --field-hover: #3a3a38;
     --ok-ink: #7fc98a;
@@ -211,7 +216,7 @@
   }
   header .toggle:hover { background: var(--accent-hover); }
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
-  header .toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
+  header .toggle.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   header .header-icon-link {
     display: inline-flex;
     align-items: center;
@@ -285,14 +290,16 @@
     padding: 7px 14px;
     border: 1px solid var(--accent);
     background: var(--accent);
-    color: white;
+    color: var(--accent-ink);
     border-radius: 6px;
     cursor: pointer;
     font-weight: 500;
     font-size: 13px;
   }
   #finish-review:hover { opacity: 0.92; }
-  #finish-review.ok { background: #2e7d32; border-color: #2e7d32; }
+  /* The success state swaps to a fixed green that is dark in both themes, so it
+     restates white rather than inheriting --accent-ink. */
+  #finish-review.ok { background: #2e7d32; border-color: #2e7d32; color: white; }
   #finish-review:disabled { opacity: 0.65; cursor: default; }
   .done-control {
     position: relative;
@@ -1051,7 +1058,7 @@
     transition: background 0.12s, color 0.12s;
   }
   #selection-popup.shown { display: block; }
-  #selection-popup:hover { background: var(--accent); color: white; }
+  #selection-popup:hover { background: var(--accent); color: var(--accent-ink); }
 
   /* --- Right pane: threads --- */
   .pane-right .empty-state {
@@ -1204,7 +1211,7 @@
     cursor: pointer;
   }
   .followup button:hover { background: var(--field-hover); }
-  .followup button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .followup button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .followup button.resolve {
     background: var(--decision);
     color: var(--ok-ink);
@@ -1414,7 +1421,7 @@
     color: var(--ink);
     cursor: pointer;
   }
-  .new-thread-editor button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .new-thread-editor button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(-3px); }
     to   { opacity: 1; transform: translateY(0); }
