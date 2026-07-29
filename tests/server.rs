@@ -2555,6 +2555,627 @@ async fn post_api_threads_rejects_stale_source_version() {
         .expect("server shutdown should succeed");
 }
 
+/// Five anchors: heading(1), paragraph(2), two list items(3, 4), paragraph(5).
+const BLOCK_DOC: &str =
+    "# Title\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph.\n";
+
+#[tokio::test]
+async fn get_api_block_returns_block_source_line_range_and_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source(BLOCK_DOC);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/blocks/2").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["markdown"], "First paragraph.");
+    assert_eq!(payload["sourceVersion"], 0);
+    assert_eq!(payload["lineStart"], 3);
+    assert_eq!(payload["lineEnd"], 3);
+    assert_eq!(payload["kind"], "paragraph");
+
+    let payload = response_json(&get_path(addr, "/api/blocks/4").await);
+    assert_eq!(payload["markdown"], "- item two");
+    assert_eq!(payload["kind"], "listItem");
+    assert_eq!(payload["lineStart"], 6);
+
+    for missing in ["/api/blocks/0", "/api/blocks/99"] {
+        let response = get_path(addr, missing).await;
+        assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+        assert_eq!(response_json(&response)["error"]["code"], "not_found");
+    }
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_block_maps_frontmatter_to_anchor_one() {
+    let addr = free_loopback_addr();
+    let app_state =
+        AppState::for_process().with_markdown_source("---\ntitle: Demo\n---\n# Heading\n\npara\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let payload = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(payload["markdown"], "title: Demo");
+    assert_eq!(payload["kind"], "frontmatter");
+    assert_eq!(payload["lineStart"], 2);
+    assert_eq!(payload["lineEnd"], 2);
+    let payload = response_json(&get_path(addr, "/api/blocks/2").await);
+    assert_eq!(payload["markdown"], "# Heading");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_markdown_source(BLOCK_DOC);
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        state.add_thread(thread("u-early", 1)); // anchors (1, 2)
+        state.add_thread(thread("u-tail", 4)); // anchors (4, 5)
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state.clone(), async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    // Split "item one" (anchor 3) into two items: every later anchor shifts
+    // by one, threads before the edit stay put.
+    let body = json!({ "markdown": "- item 1a\n- item 1b", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/3", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_json_headers(&response);
+
+    let payload = response_json(&response);
+    assert_eq!(
+        payload["markdown"],
+        "# Title\n\nFirst paragraph.\n\n- item 1a\n- item 1b\n- item two\n\nLast paragraph.\n"
+    );
+    assert_eq!(payload["fileId"], default_file_id().0);
+    assert!(
+        payload["renderedHtml"]
+            .as_str()
+            .expect("renderedHtml string")
+            .contains("<li>item 1a</li>")
+    );
+    assert_eq!(payload["sourceVersion"], 1);
+    assert_eq!(payload["orphanedThreadIds"], json!([]));
+    let anchors = payload["threadAnchors"]
+        .as_array()
+        .expect("threadAnchors array");
+    let early = anchors
+        .iter()
+        .find(|a| a["threadId"] == "u-early")
+        .expect("u-early anchor");
+    assert_eq!(
+        (early["anchorStart"].clone(), early["anchorEnd"].clone()),
+        (json!(1), json!(2))
+    );
+    let tail = anchors
+        .iter()
+        .find(|a| a["threadId"] == "u-tail")
+        .expect("u-tail anchor");
+    assert_eq!(
+        (tail["anchorStart"].clone(), tail["anchorEnd"].clone()),
+        (json!(5), json!(6))
+    );
+
+    // SSE and stdout both carry source.updated.
+    let event = read_until(&mut sse, "\n\n").await;
+    assert!(event.contains("event: source.updated"), "event: {event}");
+    assert!(event.contains("<li>item 1a</li>"));
+    let stdout_line = stdout_string(&stdout);
+    assert!(
+        stdout_line.contains("\"source.updated\""),
+        "stdout: {stdout_line}"
+    );
+
+    // Root page renders the spliced source; state carries shifted anchors
+    // and refreshed line ranges (item two is now line 7, last para line 9).
+    let response = get_root(addr).await;
+    assert!(doc_content(response_body(&response)).contains("<li>item 1a</li>"));
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 1);
+    let threads = state["threads"].as_array().expect("threads array");
+    let tail = threads
+        .iter()
+        .find(|t| t["id"] == "u-tail")
+        .expect("u-tail thread");
+    assert_eq!(tail["anchorStart"], 5);
+    assert_eq!(tail["anchorEnd"], 6);
+    assert_eq!(tail["lineRange"], json!({ "start": 7, "end": 9 }));
+
+    // The shifted block is fetchable at its new index and version.
+    let payload = response_json(&get_path(addr, "/api/blocks/6").await);
+    assert_eq!(payload["markdown"], "Last paragraph.");
+    assert_eq!(payload["sourceVersion"], 1);
+    assert_eq!(payload["lineStart"], 9);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_deleting_a_block_orphans_its_thread() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source(BLOCK_DOC);
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        let mut on_block = thread("u-on-block", 3);
+        on_block.anchor_end = 3; // exactly the edited block
+        state.add_thread(on_block);
+        state.add_thread(thread("u-tail", 4)); // anchors (4, 5)
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let body = json!({ "markdown": "", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/3", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    let payload = response_json(&response);
+    assert_eq!(payload["orphanedThreadIds"], json!(["u-on-block"]));
+    assert!(
+        !payload["markdown"]
+            .as_str()
+            .expect("markdown string")
+            .contains("item one")
+    );
+    let anchors = payload["threadAnchors"]
+        .as_array()
+        .expect("threadAnchors array");
+    let tail = anchors
+        .iter()
+        .find(|a| a["threadId"] == "u-tail")
+        .expect("u-tail anchor");
+    assert_eq!(tail["anchorStart"], 3);
+    assert_eq!(tail["anchorEnd"], 4);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_rejects_stale_version_unknown_index_and_bad_json() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source(BLOCK_DOC);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let body = json!({ "markdown": "x", "sourceVersion": 5 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "stale_source_version"
+    );
+
+    let body = json!({ "markdown": "x", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/99", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "not_found");
+
+    // Missing sourceVersion is a client bug, not an implicit force-write.
+    let response = patch_json_path(addr, "/api/blocks/2", r#"{"markdown":"x"}"#).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "bad_request");
+
+    // Nothing applied: still version 0, original content served.
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 0);
+    let response = get_root(addr).await;
+    assert!(doc_content(response_body(&response)).contains("First paragraph."));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn block_endpoints_refuse_blocks_past_unmappable_raw_html() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("reliable\n\n<div class=\"banner\">?</div>\n\nunreliable\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // Before the raw HTML block the map is exact.
+    let payload = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(payload["markdown"], "reliable");
+
+    // At or past it, both endpoints refuse.
+    let response = get_path(addr, "/api/blocks/2").await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "unmappable_block"
+    );
+    let body = json!({ "markdown": "x", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "unmappable_block"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_scopes_edit_and_thread_carry_to_one_file() {
+    use discuss::state::FileId;
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    {
+        let mut state = app_state
+            .state
+            .write()
+            .expect("state lock should not be poisoned");
+        let mut on_alpha = thread("u-alpha", 1); // anchors (1, 2) on f-1
+        on_alpha.file_id = FileId("f-1".to_string());
+        state.add_thread(on_alpha);
+        let mut on_beta = thread("u-beta", 2); // on f-2
+        on_beta.file_id = FileId("f-2".to_string());
+        on_beta.anchor_end = 2; // exactly the beta paragraph
+        state.add_thread(on_beta);
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // Split beta's paragraph (anchor 2 on f-2) into two paragraphs.
+    let body = json!({
+        "markdown": "Beta one.\n\nBeta two.",
+        "sourceVersion": 0,
+        "fileId": "f-2"
+    });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // The payload is scoped to f-2: beta's thread stretched with the split,
+    // alpha's thread is not in it.
+    let payload = response_json(&response);
+    assert_eq!(payload["fileId"], "f-2");
+    assert_eq!(payload["markdown"], "# Beta\n\nBeta one.\n\nBeta two.\n");
+    let anchors = payload["threadAnchors"]
+        .as_array()
+        .expect("threadAnchors array");
+    assert_eq!(anchors.len(), 1);
+    assert_eq!(anchors[0]["threadId"], "u-beta");
+    assert_eq!(anchors[0]["anchorStart"], 2);
+    assert_eq!(anchors[0]["anchorEnd"], 3);
+
+    // Alpha's file content and thread anchors are untouched.
+    let alpha = response_json(&get_path(addr, "/api/blocks/2?fileId=f-1").await);
+    assert_eq!(alpha["markdown"], "Alpha body.");
+    let state = response_json(&get_path(addr, "/api/state").await);
+    let threads = state["threads"].as_array().expect("threads array");
+    let alpha_thread = threads
+        .iter()
+        .find(|t| t["id"] == "u-alpha")
+        .expect("u-alpha thread");
+    assert_eq!(alpha_thread["anchorStart"], 1);
+    assert_eq!(alpha_thread["anchorEnd"], 2);
+    assert_ne!(alpha_thread["orphaned"], true);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn block_endpoints_reject_missing_unknown_and_diff_file_ids() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // fileId is required when several files are loaded.
+    let response = get_path(addr, "/api/blocks/2").await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "missing_file_id");
+    let body = json!({ "markdown": "x", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "missing_file_id");
+
+    // Unknown ids are 404s.
+    let response = get_path(addr, "/api/blocks/2?fileId=f-9").await;
+    assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "unknown_file");
+
+    // Diff panes are read-only: their anchors don't map to editable source.
+    let response = get_path(addr, "/api/blocks/1?fileId=f-3").await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "uneditable_file");
+    let body = json!({ "markdown": "x", "sourceVersion": 0, "fileId": "f-3" });
+    let response = patch_json_path(addr, "/api/blocks/1", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "uneditable_file");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+/// A single markdown file backed by a real path on disk, as the CLI builds
+/// for `discuss doc.md` (canonicalized absolute path).
+fn file_backed_source(path: &Path, content: &str) -> discuss::state::Source {
+    use discuss::state::{File, FileKind, Source};
+
+    Source {
+        files: vec![File {
+            id: default_file_id(),
+            path: path.to_string_lossy().into_owned(),
+            kind: FileKind::Markdown,
+            content: content.to_string(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn patch_api_block_persists_to_disk_atomically() {
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::for_process().with_source(file_backed_source(&doc_path, BLOCK_DOC));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // Two rapid edits: the debounce coalesces them and the file ends at the
+    // second edit's content.
+    let body = json!({ "markdown": "Edited once.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = json!({ "markdown": "Edited twice.", "sourceVersion": 1 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let on_disk = fs::read_to_string(&doc_path).expect("read doc");
+        if on_disk.contains("Edited twice.") {
+            assert!(!on_disk.contains("Edited once."));
+            assert!(on_disk.contains("# Title"));
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "file was not updated in time: {on_disk}"
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
+        .expect("read tempdir")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("discuss-tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_never_clobbers_an_external_file_change() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source(file_backed_source(&doc_path, BLOCK_DOC));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    // The file changes in another app while the review is open.
+    fs::write(&doc_path, "# Rewritten elsewhere\n").expect("external write");
+
+    let body = json!({ "markdown": "In-memory edit.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Wait past the debounce: the external content must survive and the
+    // failure must be visible to agents on stdout.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if stdout_string(&stdout).contains("\"source.save_failed\"") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "source.save_failed was not emitted; stdout: {}",
+            stdout_string(&stdout)
+        );
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        fs::read_to_string(&doc_path).expect("read doc"),
+        "# Rewritten elsewhere\n"
+    );
+    assert!(stdout_string(&stdout).contains("external_change"));
+
+    // The in-memory edit still applied.
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 1);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn no_save_runs_edit_in_memory_only() {
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let app_state = AppState::for_process()
+        .with_source(file_backed_source(&doc_path, BLOCK_DOC))
+        .with_no_save(true);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let block = response_json(&get_path(addr, "/api/blocks/2").await);
+    assert_eq!(block["persisted"], false);
+
+    let body = json!({ "markdown": "Memory only.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    sleep(Duration::from_millis(800)).await;
+    assert_eq!(
+        fs::read_to_string(&doc_path).expect("read doc"),
+        BLOCK_DOC,
+        "no-save run must not touch the file"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn block_responses_report_whether_edits_persist() {
+    // File-backed markdown files persist edits.
+    let addr = free_loopback_addr();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, "# Doc\n").expect("write fixture");
+    let app_state = AppState::for_process().with_source(file_backed_source(&doc_path, "# Doc\n"));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let block = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(block["persisted"], true);
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    // Stdin docs have no file to write back to.
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let block = response_json(&get_path(addr, "/api/blocks/1").await);
+    assert_eq!(block["persisted"], false);
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn multi_file_source() -> discuss::state::Source {
     use discuss::state::{File, FileId, FileKind, Source};
 
@@ -2960,6 +3581,25 @@ async fn try_post_json_path(addr: SocketAddr, path: &str, body: &str) -> io::Res
     stream.read_to_string(&mut response).await?;
 
     Ok(response)
+}
+
+async fn patch_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!(
+        "PATCH {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn delete_path(addr: SocketAddr, path: &str) -> String {

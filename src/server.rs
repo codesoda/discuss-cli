@@ -11,6 +11,7 @@ use axum::Json;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State as AxumState;
 use axum::extract::rejection::JsonRejection;
 use axum::http::Request;
@@ -29,6 +30,7 @@ use tokio::time::MissedTickBehavior;
 use tower_http::trace::TraceLayer;
 
 use crate::assets;
+use crate::blocks;
 use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::sse::{BroadcastEvent, EventBus};
@@ -45,6 +47,7 @@ const ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
 const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+const SOURCE_WRITE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -91,6 +94,48 @@ struct ThreadAnchorResponse {
     orphaned: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockQuery {
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BlockUpdateRequest {
+    markdown: String,
+    source_version: u64,
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockResponse {
+    markdown: String,
+    file_id: FileId,
+    source_version: u64,
+    line_start: usize,
+    line_end: usize,
+    kind: blocks::BlockKind,
+    /// Whether committed edits reach the file on disk (false for stdin docs
+    /// and --no-save runs; the editor shows "not saved to file").
+    persisted: bool,
+}
+
+/// Write-behind bookkeeping for persisting user block edits to their files.
+#[derive(Debug, Default)]
+struct SourceSyncState {
+    /// Per file: the content we believe is on disk — what we loaded at
+    /// launch or last wrote. The external-change guard compares the file
+    /// against this before every write.
+    last_synced: HashMap<FileId, Arc<str>>,
+    /// Per file: bumped per scheduled write; a sleeping writer only runs if
+    /// it is still the newest, which debounces rapid edits into one write.
+    write_generations: HashMap<FileId, u64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppState {
     pub state: SharedState,
@@ -98,6 +143,7 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     source: Arc<std::sync::RwLock<Source>>,
     source_path: Arc<Option<PathBuf>>,
+    source_sync: Arc<Mutex<SourceSyncState>>,
     history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
     shutdown: ShutdownSignal,
@@ -121,6 +167,7 @@ impl AppState {
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
             source_path: Arc::new(None),
+            source_sync: Arc::new(Mutex::new(SourceSyncState::default())),
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
             shutdown: ShutdownSignal::new(),
@@ -142,6 +189,15 @@ impl AppState {
     }
 
     pub fn with_source(self, source: Source) -> Self {
+        if let Ok(mut sync) = self.source_sync.lock() {
+            sync.last_synced.clear();
+            for file in &source.files {
+                if persistable_file_path(file).is_some() {
+                    sync.last_synced
+                        .insert(file.id.clone(), Arc::from(file.content.as_str()));
+                }
+            }
+        }
         if let Ok(mut current) = self.source.write() {
             *current = source;
         }
@@ -187,6 +243,150 @@ impl AppState {
             .read()
             .map(|source| source.files.iter().map(|file| file.id.clone()).collect())
             .unwrap_or_default()
+    }
+
+    fn file_by_id(&self, file_id: &FileId) -> Option<File> {
+        self.source.read().ok().and_then(|source| {
+            source
+                .files
+                .iter()
+                .find(|file| &file.id == file_id)
+                .cloned()
+        })
+    }
+
+    /// Whether user edits to this file reach its path on disk. Diff panes,
+    /// stdin docs, and --no-save runs live only in this process.
+    fn file_persisted(&self, file: &File) -> bool {
+        !self.no_save() && persistable_file_path(file).is_some()
+    }
+
+    /// Debounced write-behind: bump the file's generation and let only the
+    /// newest scheduled writer actually persist, so a burst of edits becomes
+    /// one disk write per file.
+    fn schedule_source_write(&self, file: &File) {
+        if self.no_save() {
+            return;
+        }
+        let Some(path) = persistable_file_path(file) else {
+            return;
+        };
+        let file_id = file.id.clone();
+        let generation = {
+            let Ok(mut sync) = self.source_sync.lock() else {
+                return;
+            };
+            let slot = sync.write_generations.entry(file_id.clone()).or_insert(0);
+            *slot += 1;
+            *slot
+        };
+        let app_state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(SOURCE_WRITE_DEBOUNCE).await;
+            let still_newest = app_state
+                .source_sync
+                .lock()
+                .map(|sync| sync.write_generations.get(&file_id) == Some(&generation))
+                .unwrap_or(false);
+            if !still_newest {
+                return;
+            }
+            app_state.persist_source(file_id, path).await;
+        });
+    }
+
+    async fn persist_source(self, file_id: FileId, path: PathBuf) {
+        // The newest content wins: read it fresh at write time rather than
+        // capturing it at schedule time.
+        let Some(file) = self.file_by_id(&file_id) else {
+            return;
+        };
+        let current: Arc<str> = Arc::from(file.content.as_str());
+        let last_synced = match self.source_sync.lock() {
+            Ok(sync) => sync.last_synced.get(&file_id).cloned(),
+            Err(_) => {
+                self.emit_save_failed("io_error", "synced source lock poisoned".to_string(), &path);
+                return;
+            }
+        };
+
+        // External-change guard: never clobber an edit made in another app.
+        // A missing file is ours to recreate; anything else unreadable is an
+        // error worth surfacing.
+        match tokio::fs::read_to_string(&path).await {
+            Ok(on_disk) => {
+                if last_synced.as_deref() != Some(on_disk.as_str()) {
+                    self.emit_save_failed(
+                        "external_change",
+                        format!(
+                            "{} changed outside discuss; edits stay in memory until the review is restarted",
+                            path.display()
+                        ),
+                        &path,
+                    );
+                    return;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to read {}: {error}", path.display()),
+                    &path,
+                );
+                return;
+            }
+        }
+
+        // Atomic replace: temp file in the same directory, then rename, so a
+        // crash mid-write can never truncate the document.
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "source".to_string());
+        let temp_path =
+            path.with_file_name(format!(".{file_name}.{}.discuss-tmp", std::process::id()));
+        if let Err(error) = tokio::fs::write(&temp_path, current.as_bytes()).await {
+            self.emit_save_failed(
+                "io_error",
+                format!("failed to write {}: {error}", temp_path.display()),
+                &path,
+            );
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return;
+        }
+        if let Err(error) = tokio::fs::rename(&temp_path, &path).await {
+            self.emit_save_failed(
+                "io_error",
+                format!("failed to replace {}: {error}", path.display()),
+                &path,
+            );
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return;
+        }
+        if let Ok(mut sync) = self.source_sync.lock() {
+            sync.last_synced.insert(file_id, current);
+        }
+    }
+
+    fn emit_save_failed(&self, reason: &str, message: String, path: &FsPath) {
+        tracing::warn!(reason, %message, "source save failed");
+        let payload = serde_json::json!({
+            "reason": reason,
+            "message": message,
+            "path": path.to_string_lossy(),
+        });
+        self.bus.publish(BroadcastEvent {
+            kind: EventKind::SourceSaveFailed.to_string(),
+            payload: payload.clone(),
+        });
+        if let Err(error) = self.emitter.emit(&Event {
+            kind: EventKind::SourceSaveFailed,
+            at: Utc::now(),
+            payload,
+        }) {
+            tracing::warn!(error = %error, "failed to emit source.save_failed event");
+        }
     }
 
     fn files_count(&self) -> usize {
@@ -523,6 +723,10 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_drafts_followup).delete(delete_api_drafts_followup),
         )
         .route("/api/source", post(post_api_source))
+        .route(
+            "/api/blocks/{anchor_idx}",
+            get(get_api_block).patch(patch_api_block),
+        )
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -843,8 +1047,27 @@ async fn post_api_source(
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();
+    source_updated_response(
+        &app_state,
+        &updated_file,
+        markdown,
+        &threads,
+        source_version,
+    )
+}
 
-    let rendered_html = render_file_html(&updated_file);
+/// Render the updated file, broadcast `source.updated` over SSE and stdout,
+/// and return the payload — the shared tail of every source-mutating
+/// endpoint.
+fn source_updated_response(
+    app_state: &AppState,
+    updated_file: &File,
+    markdown: String,
+    threads: &[Thread],
+    source_version: u64,
+) -> Response {
+    let file_id = updated_file.id.clone();
+    let rendered_html = render_file_html(updated_file);
     let thread_anchors = threads
         .iter()
         .filter(|thread| thread.file_id == file_id)
@@ -896,6 +1119,267 @@ async fn post_api_source(
     }
 
     Json(payload).into_response()
+}
+
+/// `GET /api/blocks/{anchor_idx}` — the raw markdown behind one anchored
+/// block, so a client can edit it in source form.
+async fn get_api_block(
+    AxumState(app_state): AxumState<AppState>,
+    Path(anchor_idx): Path<usize>,
+    Query(query): Query<BlockQuery>,
+) -> Response {
+    let file_id = match resolve_file_id(&app_state, query.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+    let Some(file) = app_state.file_by_id(&file_id) else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_file",
+            format!("unknown fileId: {}", file_id.0),
+        );
+    };
+    if file.kind != FileKind::Markdown {
+        return uneditable_file_response(&file);
+    }
+    let source_version = match app_state.state.read() {
+        Ok(state) => state.source_version(),
+        Err(_) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while reading block",
+            );
+        }
+    };
+
+    let map = blocks::anchor_blocks(&file.content);
+    let Some(block) = map.get(anchor_idx).copied() else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("block not found: {anchor_idx}"),
+        );
+    };
+    if !map.is_reliable(anchor_idx) {
+        return unmappable_block_response(anchor_idx);
+    }
+
+    Json(BlockResponse {
+        markdown: blocks::block_source(&file.content, &block),
+        file_id,
+        source_version,
+        line_start: block.line_start,
+        line_end: block.line_end,
+        kind: block.kind,
+        persisted: app_state.file_persisted(&file),
+    })
+    .into_response()
+}
+
+/// `PATCH /api/blocks/{anchor_idx}` — replace one anchored block's markdown,
+/// splice it into the source, and mechanically re-anchor comment threads on
+/// the same file. Broadcasts the same `source.updated` payload as
+/// `POST /api/source`.
+async fn patch_api_block(
+    AxumState(app_state): AxumState<AppState>,
+    Path(anchor_idx): Path<usize>,
+    payload: std::result::Result<Json<BlockUpdateRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+
+    let (updated_file, new_markdown, threads, source_version) = {
+        let mut state = match app_state.state.write() {
+            Ok(state) => state,
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "state lock poisoned while updating block",
+                );
+            }
+        };
+
+        let current_version = state.source_version();
+        if request.source_version != current_version {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "stale_source_version",
+                format!(
+                    "sourceVersion {} is stale; the document is now at version {current_version}, re-fetch the block against the current source",
+                    request.source_version
+                ),
+            );
+        }
+
+        let Some(file) = app_state.file_by_id(&file_id) else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "unknown_file",
+                format!("unknown fileId: {}", file_id.0),
+            );
+        };
+        if file.kind != FileKind::Markdown {
+            return uneditable_file_response(&file);
+        }
+        let old_map = blocks::anchor_blocks(&file.content);
+        let Some(block) = old_map.get(anchor_idx).copied() else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("block not found: {anchor_idx}"),
+            );
+        };
+        if !old_map.is_reliable(anchor_idx) {
+            return unmappable_block_response(anchor_idx);
+        }
+
+        let new_markdown = match blocks::splice(
+            &file.content,
+            block.line_start,
+            block.line_end,
+            &request.markdown,
+        ) {
+            Ok(markdown) => markdown,
+            Err(error) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("block map produced an unspliceable range: {error}"),
+                );
+            }
+        };
+
+        // The edit is confined to one anchor block, so the change in total
+        // anchor count is exactly what the replacement text produced there
+        // (0 = deleted, 1 = still one block, N = split into N). Threads on
+        // this file are carried mechanically off that delta; anchors that
+        // can't be carried orphan, matching POST /api/source semantics. (A
+        // replacement that restructures *following* blocks — say an
+        // unterminated code fence — renders correctly, but threads in the
+        // swallowed region orphan or drift; the reliable map protects the
+        // next edit.) Threads on other files live in different anchor
+        // spaces and are untouched.
+        let new_map = blocks::anchor_blocks(&new_markdown);
+        let delta = new_map.blocks.len() as isize - old_map.blocks.len() as isize;
+        let new_total = new_map.blocks.len();
+
+        let snapshot = state.get_threads();
+        for existing in &snapshot {
+            if existing.orphaned || existing.file_id != file_id {
+                continue;
+            }
+            let carried = blocks::carry_anchor_across_edit(
+                existing.anchor_start,
+                existing.anchor_end,
+                anchor_idx,
+                delta,
+                new_total,
+            );
+            let Some(thread) = state.thread_mut(&existing.id) else {
+                continue;
+            };
+            match carried {
+                Some((anchor_start, anchor_end)) => {
+                    thread.anchor_start = anchor_start;
+                    thread.anchor_end = anchor_end;
+                    thread.line_range = line_range_for(&new_map, anchor_start, anchor_end);
+                }
+                None => thread.orphaned = true,
+            }
+        }
+
+        // Swap the file content while still holding the state write lock so
+        // no reader can observe new anchors against the old source or vice
+        // versa.
+        let updated_file = match app_state.source.write() {
+            Ok(mut source) => {
+                let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+                    return api_error_response(
+                        StatusCode::NOT_FOUND,
+                        "unknown_file",
+                        format!("unknown fileId: {}", file_id.0),
+                    );
+                };
+                file.content = new_markdown.clone();
+                file.clone()
+            }
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "source lock poisoned while updating block",
+                );
+            }
+        };
+
+        let source_version = state.bump_source_version();
+        (
+            updated_file,
+            new_markdown,
+            state.get_threads(),
+            source_version,
+        )
+    };
+    app_state.record_mutation();
+    // User edits are born in discuss, so discuss owns writing them back to
+    // the file (unlike POST /api/source, where the agent already owns it).
+    app_state.schedule_source_write(&updated_file);
+    source_updated_response(
+        &app_state,
+        &updated_file,
+        new_markdown,
+        &threads,
+        source_version,
+    )
+}
+
+fn uneditable_file_response(file: &File) -> Response {
+    api_error_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "uneditable_file",
+        format!(
+            "only markdown files support block editing; {} is a diff",
+            file.path
+        ),
+    )
+}
+
+fn unmappable_block_response(anchor_idx: usize) -> Response {
+    api_error_response(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unmappable_block",
+        format!(
+            "block {anchor_idx} sits at or after a raw HTML block whose anchors can't be mapped to source lines; edit the file directly instead"
+        ),
+    )
+}
+
+/// The source lines a carried anchor range spans in the new document, when
+/// both endpoints resolve to mapped blocks.
+fn line_range_for(
+    map: &blocks::BlockMap,
+    anchor_start: usize,
+    anchor_end: usize,
+) -> Option<LineRange> {
+    let start_block = map.get(anchor_start)?;
+    let end_block = map.get(anchor_end)?;
+    let start = u32::try_from(start_block.line_start).ok()?;
+    let end = u32::try_from(end_block.line_end.max(start_block.line_start)).ok()?;
+    Some(LineRange { start, end })
 }
 
 async fn post_api_threads(
@@ -1935,6 +2419,20 @@ struct RenderedFile {
 /// Renders one source file to HTML: markdown files through the markdown
 /// renderer directly, diff files through a synthesized markdown document
 /// (heading + one fenced `diff-<lang>` block per hunk).
+/// The on-disk path a file's edits persist to: markdown files loaded from a
+/// real (absolute) path. Stdin docs (`<stdin>`) and diff panes have no
+/// writable source file.
+fn persistable_file_path(file: &File) -> Option<PathBuf> {
+    if file.kind != FileKind::Markdown {
+        return None;
+    }
+    let path = FsPath::new(&file.path);
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
 fn render_file_html(file: &File) -> String {
     match file.kind {
         FileKind::Markdown => render::render(&file.content),
