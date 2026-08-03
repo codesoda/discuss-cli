@@ -1,7 +1,7 @@
 ---
 name: discuss
-description: Launch the discuss CLI on a markdown file (or piped stdin), stream the event log via Monitor, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path> or when the user wants to review markdown content piped from another command.
-allowed-tools: Bash, Monitor, TaskStop, Read, ToolSearch
+description: Launch the discuss CLI on a markdown file (or piped stdin) through a monitor-type background tool, stream its event log, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path> or when the user wants to review markdown content piped from another command.
+allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
 # discuss — Interactive markdown review session
@@ -85,9 +85,19 @@ If it still doesn't resolve, fall back to the absolute install path: `~/.discuss
 
 If the user declines the install, stop.
 
-## Step 0: Load deferred tool schemas
+## Step 0: Find the monitor-type tool
 
-`Monitor` and `TaskStop` may be deferred tools. Before calling them, load their schemas:
+**discuss must be launched through a monitor-type tool whenever one exists.** A monitor-type tool is any primitive that (a) runs a long-lived command in the background and (b) delivers each stdout line back to you as a notification. That is exactly the contract discuss is built for: the process stays up for the whole review, and every newline-delimited JSON event it prints wakes you with the user's latest thread or reply. No polling, no log scraping, no blocked turn.
+
+Harnesses name these tools differently. Look for whichever pair exists in the current context:
+
+| Harness | Launch | Stop |
+|---|---|---|
+| Claude Code | `Monitor` | `TaskStop` |
+| pi | `monitor_start` | `monitor_stop` |
+| other | any "run in background + stream stdout to me" tool | its stop/kill call |
+
+In Claude Code, `Monitor` and `TaskStop` may be deferred tools. Load their schemas before calling them:
 
 ```
 ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
@@ -95,17 +105,22 @@ ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 
 ## Step 1: Launch discuss and choose an event strategy
 
-Always try Monitor (or an equivalent background-monitoring tool) first. Only if no such tool is available in the current context (e.g. ToolSearch finds nothing and invoking Monitor returns a tool-not-enabled error) fall back to the **polling fallback** described below. Do not use the poller when a monitor-type tool exists — Monitor delivers events push-style with no polling latency. The rest of the steps are the same once you have events flowing.
+Always launch through the monitor-type tool first. Only if no such tool is available in the current context (e.g. ToolSearch finds nothing and invoking it returns a tool-not-enabled error) fall back to the **polling fallback** described below. Do not use the poller when a monitor-type tool exists — it delivers events push-style with no polling latency. The rest of the steps are the same once you have events flowing.
 
-### Option A — Monitor (preferred)
+### Option A — monitor-type tool (preferred)
 
-Run `discuss` directly as the Monitor command — do NOT launch it via Bash with `run_in_background`. Monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
+Run `discuss` directly as the monitor's command. Two things NOT to do:
+
+- Do NOT launch it with a plain blocking Bash call — discuss is a server that runs until the user finishes the review, so the call would hold your turn hostage for the entire session.
+- Do NOT launch it via Bash with `run_in_background` — you would then have to poll a log file for events, which is the thing the monitor exists to avoid.
+
+The monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
 
 **Never pass `--no-open`** — the browser must open by default; the human reviews there. If a session seems to have started silently, check the flags before assuming a server problem.
 
 **The command string must start with `discuss`** — commands beginning with `discuss` are pre-approved and start immediately; any prefix (`cd … && discuss`, `VAR=x discuss`, `git … | discuss`) requires human approval before the monitor can start. Never prefix with `cd`: the monitor already runs in the session's working directory, so launch from the right cwd and pass repo-relative or absolute paths instead. When piping content in, prefer the heredoc form (`discuss - <<'EOF' … EOF`, which starts with `discuss`) over an upstream-command pipe.
 
-**File mode:**
+**File mode** (Claude Code):
 
 ```
 Monitor(
@@ -115,7 +130,18 @@ Monitor(
 )
 ```
 
-**Stdin mode** — pipe the markdown content into `discuss -`. Use a heredoc to keep the content readable in the Monitor command:
+The same launch in pi — same command string, same `persistent`, plus an `instruction` that rides along with every wake-up:
+
+```
+monitor_start(
+  description: "discuss events for <file>",
+  command: "discuss \"$ARGUMENTS\"",
+  persistent: true,
+  instruction: "Each line is a discuss event. Post a take on thread.created and a follow-up take on reply.added, per the discuss skill."
+)
+```
+
+**Stdin mode** — pipe the markdown content into `discuss -`. Use a heredoc to keep the content readable in the monitor command:
 
 ```
 Monitor(
@@ -129,15 +155,15 @@ Avoid piping another command's output in (`git diff … | discuss -`) — the co
 
 Notes:
 
-- `persistent: true` is required — discuss is a long-running server that only exits when the user is done.
-- Do NOT redirect stderr. Monitor sends stderr to the output file (readable via Read) and it never triggers notifications, so discuss's `listening on …` stderr line can't pollute the event stream.
-- Record the `task_id` returned by Monitor — you'll need it for `TaskStop` later.
-- If the port is already bound or the file doesn't exist, discuss exits immediately and Monitor ends without ever emitting a `session.started` event. Read the Monitor output file to surface the error, then stop.
+- `persistent: true` is required — discuss is a long-running server that only exits when the user is done. Without it the monitor will time out mid-review and take discuss down with it.
+- Do NOT redirect stderr. Monitor-type tools keep stderr out of the event stream (Claude Code writes it to the task output file, pi to a temp log), so discuss's `listening on …` stderr line can't pollute the JSON events — but `2>&1` would fold it in.
+- Record the id returned by the launch call (`task_id` from Monitor, monitor id from `monitor_start`) — you need it to stop the session later.
+- If the port is already bound or the file doesn't exist, discuss exits immediately and the monitor ends without ever emitting a `session.started` event. Read the monitor's stderr log to surface the error, then stop.
 - In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.
 
 ### Option B — Polling fallback (only when no monitor-type tool is available)
 
-Use this only when no Monitor-type background monitoring tool is enabled in the current context. If Monitor (or equivalent) is available, use Option A.
+Use this only when no monitor-type background tool is enabled in the current context. If one is available under any name, use Option A.
 
 **1. Start discuss in the background:**
 
@@ -175,7 +201,7 @@ On exit 0, stdout contains one line per changed thread, followed by a final `sna
 {"event": "snapshot", "baseline": {"<thread-id>": 2, "<thread-id>": 0}}
 ```
 
-Handle every `thread.created` and `thread.updated` line exactly as you would `thread.created` and `reply.added` Monitor events (see Step 3). On exit 2 the last line is `{"event": "session.done"}` — treat it as the signal to stop and summarize.
+Handle every `thread.created` and `thread.updated` line exactly as you would `thread.created` and `reply.added` monitor events (see Step 3). On exit 2 the last line is `{"event": "session.done"}` — treat it as the signal to stop and summarize.
 
 **Baseline handling:** always pass the `baseline` object from the `snapshot` line to the next poller invocation — do NOT re-fetch state to rebuild it yourself, or events that arrive in between will be silently dropped. If you post a reply or take while handling an event, bump that thread's count in the baseline first so your own post doesn't re-fire:
 
@@ -187,7 +213,7 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 
 ## Step 2: Confirm startup and capture URL
 
-The first Monitor notification should be a `session.started` event:
+The first notification from the monitor should be a `session.started` event:
 
 ```json
 {"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","source_file":"...","started_at":"..."}}
@@ -195,7 +221,7 @@ The first Monitor notification should be a `session.started` event:
 
 Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
 
-If Monitor ends without emitting `session.started`, discuss failed to start. Read the Monitor output file for the stderr error, report it, and stop.
+If the monitor ends without emitting `session.started`, discuss failed to start. Read its stderr log for the error, report it, and stop.
 
 Post a short message to chat:
 
@@ -203,7 +229,7 @@ Post a short message to chat:
 
 ## Step 3: Event loop
 
-Monitor notifications arrive on their own schedule — you don't poll. Each notification line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
+Notifications arrive on the monitor's own schedule — you don't poll. Each notification line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
 
 Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.deleted`. Lifecycle events (`session.started`, `session.done`, `thread.unresolved`, `prompt.suggest_done`) are informational — acknowledge in chat if useful but don't post to the API.
 
@@ -239,12 +265,12 @@ Acknowledge in chat ("`u-3` resolved" / "`u-2` deleted") but do not post anythin
 End the session and shut down when any of these happen:
 
 - The user types "stop", "end session", "kill it", or similar in chat.
-- The Monitor task exits on its own (user quit the browser, server crashed, `session.done` event arrived). No further notifications will arrive.
+- The monitored task exits on its own (user quit the browser, server crashed, `session.done` event arrived). No further notifications will arrive.
 - The user starts a new unrelated task — don't linger.
 
 On stop:
 
-1. Call `TaskStop(task_id: <monitor-task-id>)` to terminate the Monitor task (which in turn kills discuss).
+1. Stop the monitored task so discuss shuts down with it — `TaskStop(task_id: <id>)` in Claude Code, `monitor_stop(id: <id>)` in pi.
 2. Summarize: each thread, a one-line takeaway, resolution state.
 
 ## API reference
