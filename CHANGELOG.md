@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-03
+
 ### Changed
 
 - `src/server.rs` (2050 lines) split into a `src/server/` module tree — `mod.rs` (routing, `serve`/`serve_with_ready`, idle timer, shutdown middleware, `resolve_file_id`, bind helpers), `app_state.rs` (`AppState`, `ActivityTracker`, `ShutdownSignal`), `threads.rs`, `drafts.rs`, `source.rs`, `done.rs`, `pages.rs`, and `response.rs` (shared error/asset response helpers). Internal items moved to `pub(super)` visibility; the public surface (`AppState`, `serve`, `serve_with_ready`) and all HTTP behavior are unchanged.
