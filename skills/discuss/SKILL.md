@@ -101,6 +101,10 @@ Always try Monitor (or an equivalent background-monitoring tool) first. Only if 
 
 Run `discuss` directly as the Monitor command — do NOT launch it via Bash with `run_in_background`. Monitor treats each stdout line from its command as an event notification delivered to chat, which is exactly how discuss's newline-delimited JSON events are meant to be consumed.
 
+**Never pass `--no-open`** — the browser must open by default; the human reviews there. If a session seems to have started silently, check the flags before assuming a server problem.
+
+**The command string must start with `discuss`** — commands beginning with `discuss` are pre-approved and start immediately; any prefix (`cd … && discuss`, `VAR=x discuss`, `git … | discuss`) requires human approval before the monitor can start. Never prefix with `cd`: the monitor already runs in the session's working directory, so launch from the right cwd and pass repo-relative or absolute paths instead. When piping content in, prefer the heredoc form (`discuss - <<'EOF' … EOF`, which starts with `discuss`) over an upstream-command pipe.
+
 **File mode:**
 
 ```
@@ -121,15 +125,7 @@ Monitor(
 )
 ```
 
-Or pipe the output of another command:
-
-```
-Monitor(
-  description: "discuss events for staged-diff review",
-  command: "git diff --cached -U10 | render-as-markdown | discuss -",
-  persistent: true
-)
-```
+Avoid piping another command's output in (`git diff … | discuss -`) — the command no longer starts with `discuss` and needs human approval. For diffs use `discuss diff` (starts with `discuss`, pre-approved); otherwise capture the content first and use the heredoc form.
 
 Notes:
 
