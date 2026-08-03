@@ -20,6 +20,39 @@
     return blocks;
   }
 
+  // Turn the SVG markup mermaid returns into a real node instead of assigning
+  // innerHTML: parsing happens in an inert document, scripts and inline event
+  // handlers are stripped, and only the resulting <svg> element is adopted.
+  function parseSvg(markup) {
+    const parser = new DOMParser();
+    let doc = parser.parseFromString(markup, 'image/svg+xml');
+    let svg = doc.querySelector('parsererror') ? null : doc.documentElement;
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg') {
+      doc = parser.parseFromString(markup, 'text/html');
+      svg = doc.body ? doc.body.querySelector('svg') : null;
+    }
+    if (!svg) return null;
+    const imported = document.importNode(svg, true);
+    sanitize(imported);
+    return imported;
+  }
+
+  function sanitize(root) {
+    root.querySelectorAll('script').forEach(function (script) {
+      script.remove();
+    });
+    const nodes = [root].concat(Array.from(root.querySelectorAll('*')));
+    nodes.forEach(function (node) {
+      Array.from(node.attributes || []).forEach(function (attribute) {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim().toLowerCase();
+        if (name.startsWith('on') || value.startsWith('javascript:')) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+    });
+  }
+
   function reportError(pre, error) {
     pre.setAttribute('data-mermaid', 'error');
     const note = document.createElement('div');
@@ -48,7 +81,12 @@
         mermaid
           .render(id, source)
           .then(function (output) {
-            pre.innerHTML = output.svg;
+            const svg = parseSvg(output.svg || '');
+            if (!svg) {
+              reportError(pre, new Error('mermaid returned unparseable SVG'));
+              return;
+            }
+            pre.replaceChildren(svg);
             pre.setAttribute('data-mermaid', 'rendered');
           })
           .catch(function (error) {

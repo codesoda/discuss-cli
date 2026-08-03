@@ -1,4 +1,5 @@
 /target/
+.aislop/
 .DS_Store
 .claude/
 /plans/

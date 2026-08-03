@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `src/server.rs` (2050 lines) split into a `src/server/` module tree — `mod.rs` (routing, `serve`/`serve_with_ready`, idle timer, shutdown middleware, `resolve_file_id`, bind helpers), `app_state.rs` (`AppState`, `ActivityTracker`, `ShutdownSignal`), `threads.rs`, `drafts.rs`, `source.rs`, `done.rs`, `pages.rs`, and `response.rs` (shared error/asset response helpers). Internal items moved to `pub(super)` visibility; the public surface (`AppState`, `serve`, `serve_with_ready`) and all HTTP behavior are unchanged.
+
 ### Fixed
+
+- The mermaid hydration shim no longer assigns mermaid's rendered markup via `innerHTML`. `assets/mermaid-shim.js` now parses the SVG in an inert document with `DOMParser` (`image/svg+xml`, falling back to `text/html`), strips `<script>` elements and `on*` / `javascript:` attributes, imports only the resulting `<svg>` element, and inserts it with `replaceChildren`. Markup that fails to parse surfaces through the existing inline `.mermaid-error` note instead of being injected. Rendering behavior for valid diagrams is unchanged.
 
 - **Text on accent-filled controls in dark mode** — `Save`, the primary buttons in both comment editors, `#finish-review`, `header .toggle.on` and `#selection-popup:hover` fill with `--accent` and set `color: white`. That is 5.1:1 in light mode, but the dark palette lightens `--accent` from `#0b5fff` to `#5a9bff` so it reads against a dark page, which drops white text on it to **2.8:1**. Text on an accent fill now uses a new `--accent-ink` token (`#ffffff` light, `#0a1a33` dark) and measures 6.3:1. `#finish-review.ok` restates `color: white` because its success state swaps to a fixed `#2e7d32` green that is dark in both themes (5.1:1). Light mode is unchanged. The `tests/theme.rs` allowlist rationale was corrected at the same time: "sits on a saturated fill" is not grounds for hardcoding white — only a fill that is itself identical in both palettes is.
 
