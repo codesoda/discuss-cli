@@ -4,10 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to rebuild, for example v0.6.1"
+        required: true
+        type: string
 
 env:
   RUSTFLAGS: "-D warnings"
   CARGO_INCREMENTAL: "0"
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -19,10 +26,12 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runs_on: macos-15
-          # - target: x86_64-apple-darwin
-          #   runs_on: macos-15-intel
-          # - target: x86_64-unknown-linux-gnu
-          #   runs_on: ubuntu-24.04
+          - target: x86_64-apple-darwin
+            runs_on: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            runs_on: ubuntu-24.04
+          - target: x86_64-pc-windows-msvc
+            runs_on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -38,16 +47,27 @@ jobs:
       - name: cargo build --release --target ${{ matrix.target }}
         run: cargo build --release --target "${{ matrix.target }}"
 
-      - name: Package release tarball
+      - name: Package Unix release tarball
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           mkdir -p dist/package
           install -m 0755 "target/${{ matrix.target }}/release/discuss" dist/package/discuss
-          tar -C dist/package -czf "dist/discuss-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" discuss
+          tar -C dist/package -czf "dist/discuss-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz" discuss
+
+      - name: Package Windows release archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $packageDir = "dist/package"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/discuss.exe" "$packageDir/discuss.exe"
+          Compress-Archive -Path "$packageDir/discuss.exe" -DestinationPath "dist/discuss-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: dist/discuss-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          path: dist/discuss-${{ env.RELEASE_TAG }}-${{ matrix.target }}.*
           if-no-files-found: error
 
   publish:
@@ -69,11 +89,11 @@ jobs:
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum discuss-*.tar.gz > checksums-sha256.txt
+          sha256sum discuss-* > checksums-sha256.txt
 
       - name: Extract release notes from CHANGELOG.md
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           VERSION="${TAG#v}"
           PREFIX_TAG="## [${TAG}]"
@@ -99,8 +119,11 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          overwrite_files: true
           body_path: dist/release-notes.md
           files: |
             dist/discuss-*.tar.gz
+            dist/discuss-*.zip
             dist/checksums-sha256.txt
           fail_on_unmatched_files: true

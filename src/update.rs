@@ -15,6 +15,7 @@ use semver::Version;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use tempfile::{NamedTempFile, TempPath};
+use zip::ZipArchive;
 
 use crate::{DiscussError, Result};
 
@@ -76,7 +77,7 @@ pub fn install(yes: bool) -> Result<String> {
     let replacement = extract_binary(&archive_bytes, &asset_name)?;
     self_replace::self_replace(&replacement).map_err(|source| {
         update_install_error(format!(
-            "could not replace the running binary with {asset_name}: {source} - rerun `discuss update -y` or reinstall with `./install.sh`"
+            "could not replace the running binary with {asset_name}: {source} - rerun `discuss update -y` or reinstall with `install.sh` (Unix) or `install.ps1` (Windows)"
         ))
     })?;
 
@@ -198,14 +199,20 @@ fn target_triple_for(os: &str, arch: &str) -> Result<&'static str> {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
         ("linux", "x86_64") => Ok("x86_64-unknown-linux-gnu"),
+        ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
         _ => Err(update_install_error(format!(
-            "unsupported platform {os}/{arch} - supported targets are aarch64-apple-darwin, x86_64-apple-darwin, and x86_64-unknown-linux-gnu"
+            "unsupported platform {os}/{arch} - supported targets are aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu, and x86_64-pc-windows-msvc"
         ))),
     }
 }
 
 fn release_asset_name(tag: &str, target: &str) -> String {
-    format!("{BINARY_NAME}-{tag}-{target}.tar.gz")
+    let extension = if target == "x86_64-pc-windows-msvc" {
+        "zip"
+    } else {
+        "tar.gz"
+    };
+    format!("{BINARY_NAME}-{tag}-{target}.{extension}")
 }
 
 fn release_asset_url(tag: &str, asset_name: &str) -> String {
@@ -351,6 +358,14 @@ fn checksum_for_asset(checksums: &str, asset_name: &str) -> Result<String> {
 }
 
 fn extract_binary(archive_bytes: &[u8], asset_name: &str) -> Result<TempPath> {
+    if asset_name.ends_with(".zip") {
+        return extract_zip_binary(archive_bytes, asset_name);
+    }
+
+    extract_tar_binary(archive_bytes, asset_name)
+}
+
+fn extract_tar_binary(archive_bytes: &[u8], asset_name: &str) -> Result<TempPath> {
     let decoder = GzDecoder::new(Cursor::new(archive_bytes));
     let mut archive = Archive::new(decoder);
     let entries = archive.entries().map_err(|source| {
@@ -378,6 +393,34 @@ fn extract_binary(archive_bytes: &[u8], asset_name: &str) -> Result<TempPath> {
         return Ok(replacement);
     }
 
+    archive_missing_binary_error(asset_name)
+}
+
+fn extract_zip_binary(archive_bytes: &[u8], asset_name: &str) -> Result<TempPath> {
+    let mut archive = ZipArchive::new(Cursor::new(archive_bytes)).map_err(|source| {
+        update_install_error(format!(
+            "could not read {asset_name}: {source} - the published zip archive may be corrupt"
+        ))
+    })?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|source| {
+            update_install_error(format!(
+                "could not read {asset_name}: {source} - the published zip archive may be corrupt"
+            ))
+        })?;
+        if !binary_entry_matches(Path::new(entry.name())) {
+            continue;
+        }
+
+        let replacement = write_replacement_binary(&mut entry, asset_name)?;
+        return Ok(replacement);
+    }
+
+    archive_missing_binary_error(asset_name)
+}
+
+fn archive_missing_binary_error(asset_name: &str) -> Result<TempPath> {
     Err(update_install_error(format!(
         "archive {asset_name} did not contain a {BINARY_NAME} binary - rerun `discuss update --check` to confirm the published assets"
     )))
@@ -386,7 +429,7 @@ fn extract_binary(archive_bytes: &[u8], asset_name: &str) -> Result<TempPath> {
 fn binary_entry_matches(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == BINARY_NAME)
+        .is_some_and(|name| name == BINARY_NAME || name == format!("{BINARY_NAME}.exe"))
 }
 
 fn write_replacement_binary<R>(reader: &mut R, asset_name: &str) -> Result<TempPath>
@@ -520,6 +563,22 @@ mod tests {
             target_triple_for("linux", "x86_64").expect("linux target"),
             "x86_64-unknown-linux-gnu"
         );
+        assert_eq!(
+            target_triple_for("windows", "x86_64").expect("windows target"),
+            "x86_64-pc-windows-msvc"
+        );
+    }
+
+    #[test]
+    fn release_asset_names_use_zip_for_windows() {
+        assert_eq!(
+            release_asset_name("v1.2.3", "x86_64-pc-windows-msvc"),
+            "discuss-v1.2.3-x86_64-pc-windows-msvc.zip"
+        );
+        assert_eq!(
+            release_asset_name("v1.2.3", "x86_64-unknown-linux-gnu"),
+            "discuss-v1.2.3-x86_64-unknown-linux-gnu.tar.gz"
+        );
     }
 
     #[test]
@@ -530,6 +589,32 @@ mod tests {
             error
                 .to_string()
                 .contains("unsupported platform linux/aarch64")
+        );
+    }
+
+    #[test]
+    fn extracts_windows_binary_from_zip_archive() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "package/discuss.exe",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("zip entry should start");
+        writer
+            .write_all(b"binary-bytes")
+            .expect("zip entry should write");
+        let archive_bytes = writer
+            .finish()
+            .expect("zip archive should finish")
+            .into_inner();
+
+        let replacement =
+            extract_binary(&archive_bytes, "discuss-v1.2.3-x86_64-pc-windows-msvc.zip")
+                .expect("windows binary should extract");
+        assert_eq!(
+            fs::read(replacement).expect("replacement should be readable"),
+            b"binary-bytes"
         );
     }
 

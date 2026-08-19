@@ -30,7 +30,15 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh
 ```
 
-Downloads the latest release tarball from GitHub, installs the binary to `~/.discuss/bin/`, symlinks `~/.local/bin/discuss`, fetches the `/discuss` skill files into `~/.discuss/skills/discuss/`, and links them into every agent root present (`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/`).
+Downloads the latest platform release from GitHub, installs the binary to `~/.discuss/bin/`, symlinks `~/.local/bin/discuss`, fetches the `/discuss` skill files into `~/.discuss/skills/discuss/`, and links them into every agent root present (`~/.claude/skills/`, `~/.codex/skills/`, `~/.agents/skills/`). Supported Unix targets are macOS arm64, macOS x86_64, and Linux x86_64.
+
+### Windows PowerShell
+
+```powershell
+irm https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.ps1 | iex
+```
+
+Downloads and verifies the latest Windows x86_64 release, installs `discuss.exe` under `$HOME\.discuss\bin`, adds a command wrapper under `$HOME\.local\bin`, and updates the user PATH. Open a new terminal after installation.
 
 ### From a clone
 
