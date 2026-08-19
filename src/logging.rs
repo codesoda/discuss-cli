@@ -40,8 +40,10 @@ fn init_tracing_in_dir(config: &Config, log_dir: &Path) -> Result<()> {
 }
 
 fn default_log_dir() -> Result<PathBuf> {
-    BaseDirs::new()
-        .map(|base_dirs| base_dirs.home_dir().join(".discuss").join("logs"))
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| BaseDirs::new().map(|base_dirs| base_dirs.home_dir().to_path_buf()))
+        .map(|home_dir| home_dir.join(".discuss").join("logs"))
         .ok_or_else(|| {
             logging_init_error(
                 Path::new("~/.discuss/logs"),
