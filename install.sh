@@ -71,7 +71,7 @@ detect_target() {
       printf 'x86_64-unknown-linux-gnu'
       ;;
     *)
-      die "unsupported platform ${OS}/${ARCH}; supported targets are aarch64-apple-darwin, x86_64-apple-darwin, and x86_64-unknown-linux-gnu"
+      die "unsupported platform ${OS}/${ARCH}; supported Unix targets are aarch64-apple-darwin, x86_64-apple-darwin, and x86_64-unknown-linux-gnu. Windows users should run install.ps1 with PowerShell."
       ;;
   esac
 }

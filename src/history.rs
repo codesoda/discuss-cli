@@ -18,7 +18,7 @@ pub fn history_archive_path(
     files_count: usize,
     completed_at: DateTime<Utc>,
 ) -> PathBuf {
-    let timestamp = completed_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let timestamp = archive_timestamp(completed_at);
 
     history_dir
         .join(source_name_for_history(source_path, files_count))
@@ -32,6 +32,20 @@ pub fn write_history_archive(path: &Path, transcript_json: &Value) -> io::Result
 
     let bytes = serde_json::to_vec(transcript_json).map_err(io::Error::other)?;
     fs::write(path, bytes)
+}
+
+fn archive_timestamp(completed_at: DateTime<Utc>) -> String {
+    let timestamp = completed_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+
+    #[cfg(windows)]
+    {
+        timestamp.replace(':', "-")
+    }
+
+    #[cfg(not(windows))]
+    {
+        timestamp
+    }
 }
 
 fn source_name_for_history(source_path: Option<&Path>, files_count: usize) -> String {
@@ -90,7 +104,7 @@ mod tests {
             path,
             PathBuf::from("/tmp/history")
                 .join("review_plan")
-                .join("2026-04-23T02:30:00Z.json")
+                .join(format!("{}.json", archive_timestamp(timestamp())))
         );
     }
 
@@ -102,7 +116,7 @@ mod tests {
             path,
             PathBuf::from("/tmp/history")
                 .join("unnamed")
-                .join("2026-04-23T02:30:00Z.json")
+                .join(format!("{}.json", archive_timestamp(timestamp())))
         );
     }
 
@@ -119,7 +133,7 @@ mod tests {
             path,
             PathBuf::from("/tmp/history")
                 .join("multi-3-files")
-                .join("2026-04-23T02:30:00Z.json")
+                .join(format!("{}.json", archive_timestamp(timestamp())))
         );
     }
 
@@ -129,7 +143,7 @@ mod tests {
         let path = tempdir
             .path()
             .join("review")
-            .join("2026-04-23T02:30:00Z.json");
+            .join(format!("{}.json", archive_timestamp(timestamp())));
         let payload = json!({ "threads": [{ "id": "u-1" }] });
 
         write_history_archive(&path, &payload).expect("write archive");
