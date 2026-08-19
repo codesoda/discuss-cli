@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::env;
+#[cfg(unix)]
 use std::fs;
 use std::io::{self, Cursor, Write};
 #[cfg(unix)]
