@@ -143,7 +143,7 @@ mod tests {
         let path = tempdir
             .path()
             .join("review")
-            .join("2026-04-23T02:30:00Z.json");
+            .join(format!("{}.json", archive_timestamp(timestamp())));
         let payload = json!({ "threads": [{ "id": "u-1" }] });
 
         write_history_archive(&path, &payload).expect("write archive");
