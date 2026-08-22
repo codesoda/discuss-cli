@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{Event, EventKind};
 use crate::sse::BroadcastEvent;
-use crate::state::{FileId, LineRange, Reply, Resolution, Take, Thread, ThreadId, ThreadKind};
+use crate::state::{
+    FileId, FileKind, ImageAnchor, LineRange, Reply, Resolution, Take, Thread, ThreadId, ThreadKind,
+};
 
 use super::app_state::AppState;
 use super::resolve_file_id;
@@ -24,10 +26,16 @@ pub(super) struct CreateThreadRequest {
     /// (defaults to the only file), required when multiple files are loaded.
     #[serde(default)]
     file_id: Option<FileId>,
-    anchor_start: usize,
-    anchor_end: usize,
-    snippet: String,
-    text: String,
+    #[serde(default)]
+    anchor_start: Option<usize>,
+    #[serde(default)]
+    anchor_end: Option<usize>,
+    #[serde(default)]
+    image_anchor: Option<ImageAnchor>,
+    #[serde(default)]
+    snippet: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
     #[serde(default)]
     line_range: Option<LineRange>,
     /// Optional optimistic-concurrency guard: when set, the thread is only
@@ -42,6 +50,9 @@ pub(super) struct CreateThreadRequest {
 pub(super) struct CreateThreadResponse {
     id: ThreadId,
     file_id: FileId,
+    anchor_start: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_anchor: Option<ImageAnchor>,
     created_at: DateTime<Utc>,
 }
 
@@ -108,33 +119,154 @@ pub(super) async fn post_api_threads(
         Ok(file_id) => file_id,
         Err(error) => return *error,
     };
-    let created_at = Utc::now();
-    let thread = Thread {
-        id: app_state.next_user_thread_id(),
-        file_id: file_id.clone(),
-        anchor_start: request.anchor_start,
-        anchor_end: request.anchor_end,
-        snippet: request.snippet,
-        breadcrumb: String::new(),
-        text: request.text,
-        created_at,
-        kind: ThreadKind::User,
-        line_range: request.line_range,
-        orphaned: false,
+    let Some(file_kind) = app_state.file_kind(&file_id) else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_file",
+            format!("unknown fileId: {}", file_id.0),
+        );
     };
 
-    if app_state
-        .state
-        .write()
-        .map(|mut state| state.add_thread(thread.clone()))
-        .is_err()
-    {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "state lock poisoned while creating thread",
-        );
-    }
+    let (text_anchor, image_anchor, snippet, text, line_range) = if file_kind == FileKind::Image {
+        let Some(image_anchor) = request.image_anchor else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "imageAnchor is required for image files",
+            );
+        };
+        if image_anchor.x_pct > 10_000 || image_anchor.y_pct > 10_000 {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "imageAnchor coordinates must be between 0 and 10000 basis points",
+            );
+        }
+        if request.line_range.is_some() {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "lineRange is not supported for image files",
+            );
+        }
+        let Some(_) = request.snippet else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `snippet`",
+            );
+        };
+        let Some(text) = request.text else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `text`",
+            );
+        };
+        (None, Some(image_anchor), String::new(), text, None)
+    } else {
+        if request.image_anchor.is_some() {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "imageAnchor is only valid for image files",
+            );
+        }
+        let Some(anchor_start) = request.anchor_start else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `anchorStart`",
+            );
+        };
+        let Some(anchor_end) = request.anchor_end else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `anchorEnd`",
+            );
+        };
+        if anchor_start == 0 || anchor_end < anchor_start {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "anchors must satisfy 1 <= anchorStart <= anchorEnd",
+            );
+        }
+        let Some(snippet) = request.snippet else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `snippet`",
+            );
+        };
+        let Some(text) = request.text else {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "missing field `text`",
+            );
+        };
+        (
+            Some((anchor_start, anchor_end)),
+            None,
+            snippet,
+            text,
+            request.line_range,
+        )
+    };
+
+    let created_at = Utc::now();
+    let thread = {
+        let mut state = match app_state.state.write() {
+            Ok(state) => state,
+            Err(_) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "state lock poisoned while creating thread",
+                );
+            }
+        };
+        let (anchor_start, anchor_end, breadcrumb) = if let Some(image_anchor) = image_anchor {
+            let pin_number = state
+                .all_threads()
+                .iter()
+                .filter(|thread| thread.file_id == file_id && thread.image_anchor.is_some())
+                .map(|thread| thread.anchor_start)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            (
+                pin_number,
+                pin_number,
+                format!(
+                    "pin {pin_number} at {}%,{}%",
+                    format_basis_points(image_anchor.x_pct),
+                    format_basis_points(image_anchor.y_pct)
+                ),
+            )
+        } else {
+            let (anchor_start, anchor_end) = text_anchor.expect("validated text anchors");
+            (anchor_start, anchor_end, String::new())
+        };
+        let thread = Thread {
+            id: app_state.next_user_thread_id(),
+            file_id: file_id.clone(),
+            anchor_start,
+            anchor_end,
+            image_anchor,
+            snippet,
+            breadcrumb,
+            text,
+            created_at,
+            kind: ThreadKind::User,
+            line_range,
+            orphaned: false,
+        };
+        state.add_thread(thread.clone());
+        thread
+    };
     app_state.record_mutation();
 
     let payload = match serde_json::to_value(&thread) {
@@ -168,9 +300,21 @@ pub(super) async fn post_api_threads(
     Json(CreateThreadResponse {
         id: thread.id,
         file_id,
+        anchor_start: thread.anchor_start,
+        image_anchor: thread.image_anchor,
         created_at,
     })
     .into_response()
+}
+
+fn format_basis_points(value: u16) -> String {
+    let whole = value / 100;
+    let fraction = value % 100;
+    match fraction {
+        0 => whole.to_string(),
+        fraction if fraction % 10 == 0 => format!("{whole}.{}", fraction / 10),
+        fraction => format!("{whole}.{fraction:02}"),
+    }
 }
 
 pub(super) async fn post_api_thread_replies(

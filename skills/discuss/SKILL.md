@@ -1,6 +1,6 @@
 ---
 name: discuss
-description: Launch the discuss CLI on a markdown file (or piped stdin) through a monitor-type background tool, stream its event log, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path> or when the user wants to review markdown content piped from another command.
+description: Launch the discuss CLI on markdown, diff, or image files (or markdown piped from stdin) through a monitor-type background tool, stream its event log, and participate in the review by posting "takes" (agent views) on threads the user opens.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
@@ -35,6 +35,17 @@ discuss plan.md design.md notes.md
 - Every `thread.created` payload carries a `fileId`. When you create threads or push source updates in a multi-file session, `fileId` is **required** — omitting it returns `400 missing_file_id`.
 - Anchor indices are per-file (1-based commentable blocks within that file's document).
 - `session.started` gains `files_count`, and `source_file` becomes `multi-<N>-files`.
+
+### Image review mode
+
+Pass an image path directly, alone or mixed with text files:
+
+```
+discuss mockup.png
+discuss plan.md mockup.png
+```
+
+PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer drops numbered pins; image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%) and use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, read the image from the event's `fileId` path in `/api/state.files`, inspect the pinned region at those percentage coordinates, and post takes through the same `/api/threads/{id}/takes` endpoint. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
 
 ### Diff review mode
 
@@ -235,8 +246,8 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 
 ### `thread.created` (new thread opened by the user)
 
-1. Read `anchorStart`, `anchorEnd`, `snippet`, `text` from the payload.
-2. Locate the anchored region in the markdown source — the `snippet` is a reliable search key for the rendered paragraph.
+1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` from the payload.
+2. For text threads, locate the anchored region in the source — `snippet` is a reliable search key for the rendered paragraph. For image threads, resolve `fileId` through `/api/state.files`, read that image path directly, and inspect the point at `imageAnchor.xPct / 100`%, `imageAnchor.yPct / 100`%.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
 5. Post it as a **take**, not a reply (substitute the URL from `session.started`):
@@ -281,7 +292,8 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 |---|---|---|---|
 | GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
 | GET | `/api/events` | — | SSE stream (alternative to stdout) |
-| POST | `/api/threads` | `{fileId?, anchorStart, anchorEnd, snippet, text}` | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
+| GET | `/api/files/{fileId}/raw` | — | Startup-stable bytes for an image file |
+| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image: `{fileId?, imageAnchor: {xPct, yPct}, snippet: "", text}` | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
@@ -310,7 +322,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 - `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs read like `pin 3 at 42%,17%`
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`

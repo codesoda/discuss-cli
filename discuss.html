@@ -777,6 +777,51 @@
     margin-top: 12px;
   }
 
+  /* --- Image review pins --- */
+  #doc-content .image-review {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    line-height: 0;
+    cursor: crosshair;
+  }
+  #doc-content .image-review img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  #doc-content .pin-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .image-pin-marker {
+    position: absolute;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    transform: translate(-50%, -50%);
+    border: 2px solid var(--card);
+    border-radius: 50% 50% 50% 8px;
+    background: var(--marker-pink);
+    color: var(--card);
+    box-shadow: 0 0 0 1px var(--line-strong), 0 2px 6px rgba(0,0,0,0.24);
+    font: 700 11px/1 var(--mono);
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 4;
+    transition: transform 0.1s, box-shadow 0.12s;
+  }
+  .image-pin-marker:hover { transform: translate(-50%, -50%) scale(1.12); }
+  .image-pin-marker.active {
+    transform: translate(-50%, -50%) scale(1.18);
+    box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0,0,0,0.28);
+  }
+  .image-pin-marker.is-resolved { background: var(--ok-ink); }
+  .image-pin-marker.pending-save { opacity: 0.72; outline: 2px dashed var(--accent); outline-offset: 2px; }
+
   /* --- Heading minimap (left-edge document outline) --- */
   .heading-minimap {
     position: fixed;
@@ -1613,6 +1658,16 @@
   function threadFileId(t) {
     return t && t.fileId ? String(t.fileId) : DEFAULT_FILE_ID;
   }
+  function fileKind(fileId) {
+    const file = (discussFiles || []).find(item => String(item.id) === String(fileId));
+    return file ? file.kind : 'markdown';
+  }
+  function isImageFile(fileId = activeFileId) {
+    return fileKind(fileId) === 'image';
+  }
+  function documentShowsImage() {
+    return !!document.querySelector('#doc-content > .image-review');
+  }
 
   function emptyDiscussionState() {
     return {
@@ -1672,7 +1727,7 @@
       .map(f => ({
         id: String(f.id),
         path: f.path == null ? '' : String(f.path),
-        kind: f.kind === 'diff' ? 'diff' : 'markdown',
+        kind: f.kind === 'image' ? 'image' : (f.kind === 'diff' ? 'diff' : 'markdown'),
       }));
   }
   function normalizeUserThreads(sourceThreads) {
@@ -1688,10 +1743,19 @@
         text: t.text || '',
         breadcrumb: t.breadcrumb || '',
         createdAt: t.createdAt || new Date().toISOString(),
+        imageAnchor: normalizeImageAnchor(t.imageAnchor),
         lineRange: normalizeLineRange(t.lineRange),
         orphaned: !!t.orphaned,
       }))
-      .filter(t => t.id && (t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
+      .filter(t => t.id && (t.imageAnchor || t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
+  }
+  function normalizeImageAnchor(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const xPct = parseInt(raw.xPct, 10);
+    const yPct = parseInt(raw.yPct, 10);
+    if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) return null;
+    if (xPct < 0 || xPct > 10000 || yPct < 0 || yPct > 10000) return null;
+    return { xPct, yPct };
   }
   function normalizeLineRange(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -2124,11 +2188,15 @@
   }
 
   function pendingThreadMatches(existing, incoming) {
-    return String(existing.id || '').startsWith('pending-')
-      && threadFileId(existing) === threadFileId(incoming)
-      && parseInt(existing.anchorStart, 10) === incoming.anchorStart
-      && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd
-      && (existing.text || '') === incoming.text;
+    if (!String(existing.id || '').startsWith('pending-')) return false;
+    if (threadFileId(existing) !== threadFileId(incoming)) return false;
+    if ((existing.text || '') !== incoming.text) return false;
+    if (existing.imageAnchor && incoming.imageAnchor) {
+      return existing.imageAnchor.xPct === incoming.imageAnchor.xPct
+        && existing.imageAnchor.yPct === incoming.imageAnchor.yPct;
+    }
+    return parseInt(existing.anchorStart, 10) === incoming.anchorStart
+      && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd;
   }
 
   function reconcilePendingThread(state, incoming) {
@@ -2637,7 +2705,7 @@
   // exactly once at boot.
   function wrapCollapsibleSectionsDom() {
     const doc = document.getElementById('doc-content');
-    if (!doc) return;
+    if (!doc || doc.querySelector(':scope > .image-review')) return;
 
     function wrapLevel(container, tag, breakTags) {
       const headings = [...container.querySelectorAll(':scope > ' + tag.toLowerCase())];
@@ -2741,7 +2809,7 @@
   const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .quote, .decision, .callout, .context';
   function assignAnchorIndices() {
     const doc = document.getElementById('doc-content');
-    if (!doc) return;
+    if (!doc || doc.querySelector(':scope > .image-review')) return;
     // Wrap any <pre> that isn't already wrapped so the marker can live
     // outside the <pre>'s overflow:auto clipping region.
     doc.querySelectorAll('pre').forEach(pre => {
@@ -2794,10 +2862,10 @@
       }
       name.appendChild(document.createTextNode(slash >= 0 ? path.slice(slash + 1) : path));
       item.appendChild(name);
-      if (file.kind === 'diff') {
+      if (file.kind === 'diff' || file.kind === 'image') {
         const tag = document.createElement('span');
         tag.className = 'file-kind';
-        tag.textContent = 'diff';
+        tag.textContent = file.kind;
         item.appendChild(tag);
       }
       const count = document.createElement('span');
@@ -2852,17 +2920,33 @@
     if (typeof closeNewThreadEditor === 'function' && newThreadEditor) closeNewThreadEditor();
     activeFileId = id;
     doc.innerHTML = renderedFileHtml.get(id);
-    wrapCollapsibleSectionsDom();
-    assignAnchorIndices();
-    buildHeadingMinimap();
-    highlightCodeBlocks();
-    if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
+    prepareActiveFileDocument();
     renderAllThreads();
     const workspace = document.querySelector('.workspace');
     if (workspace) workspace.scrollTo({ top: 0 });
     updateFileSidebar();
     scheduleReposition();
     setTimeout(scheduleReposition, 600);
+  }
+
+  function prepareActiveFileDocument() {
+    document.querySelectorAll('.heading-minimap, .hm-tooltip').forEach(el => el.remove());
+    if (isImageFile() || documentShowsImage()) {
+      const image = document.querySelector('#doc-content .image-review img');
+      if (image && !image.dataset.pinLoadWired) {
+        image.dataset.pinLoadWired = 'true';
+        image.addEventListener('load', () => {
+          renderMarkers();
+          scheduleReposition();
+        });
+      }
+      return;
+    }
+    wrapCollapsibleSectionsDom();
+    assignAnchorIndices();
+    buildHeadingMinimap();
+    highlightCodeBlocks();
+    if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
   }
 
   // ---------- Heading minimap (left-edge document outline) ----------
@@ -3126,11 +3210,16 @@
 
   function createUserThread(t) {
     const el = document.createElement('div');
+    const isImageThread = !!t.imageAnchor;
     el.className = t.orphaned ? 'thread user orphaned' : 'thread user';
     el.setAttribute('data-thread-id', t.id);
     if (!t.orphaned) {
       el.setAttribute('data-anchor-start', t.anchorStart);
       el.setAttribute('data-anchor-end', t.anchorEnd);
+    }
+    if (isImageThread) {
+      el.setAttribute('data-image-x-pct', t.imageAnchor.xPct);
+      el.setAttribute('data-image-y-pct', t.imageAnchor.yPct);
     }
     if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
       el.setAttribute('data-line-start', t.lineRange.start);
@@ -3141,7 +3230,9 @@
       : '';
     const rangeLabel = t.orphaned
       ? 'orphaned'
-      : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
+      : (isImageThread
+        ? `📍 Pin ${t.anchorStart}`
+        : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel);
     el.innerHTML = `
       <div class="thread-head">
         <span>Your thread</span>
@@ -3151,7 +3242,7 @@
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
-      <div class="thread-sub">${escapeHtml(t.snippet || '')}</div>
+      ${isImageThread ? '' : `<div class="thread-sub">${escapeHtml(t.snippet || '')}</div>`}
       <div class="thread-body">
         <div class="section-mini-label">Your notes</div>
         <div class="user-comment-list"></div>
@@ -3475,7 +3566,7 @@
   function closeThread(threadEl) {
     threadEl.classList.remove('open', 'focused');
     const tid = threadEl.getAttribute('data-thread-id');
-    document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.remove('active'));
+    document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"], .image-pin-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.remove('active'));
     syncThreadActiveAnchors();
     updateEmptyState();
   }
@@ -3560,7 +3651,7 @@
       : null;
     const segments = [];
     if (totalThreads === 0) {
-      segments.push('Click any element · drag-select for multi-element');
+      segments.push(isImageFile() ? 'Click the image to drop a pin' : 'Click any element · drag-select for multi-element');
       if (draftSeg) segments.push(draftSeg);
     } else {
       segments.push(`<b>${resolvedCount} of ${totalThreads}</b> resolved`);
@@ -3588,8 +3679,8 @@
     }
     threadEl.classList.add('open');
     const tid = threadEl.getAttribute('data-thread-id');
-    document.querySelectorAll('.thread-marker').forEach(m => m.classList.remove('active'));
-    document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.add('active'));
+    document.querySelectorAll('.thread-marker, .image-pin-marker').forEach(m => m.classList.remove('active'));
+    document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"], .image-pin-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.add('active'));
     syncThreadActiveAnchors();
     reposition();
     updateEmptyState();
@@ -3626,6 +3717,11 @@
   function updateEmptyState() {
     const anyOpen = document.querySelectorAll('.thread.open').length > 0;
     emptyState.classList.toggle('hidden', anyOpen);
+    if (!anyOpen && isImageFile()) {
+      emptyState.innerHTML = '<b>Click the image to drop a pin</b>, then type your comment.<br>Click a numbered pin to reopen its thread.';
+    } else if (!anyOpen) {
+      emptyState.innerHTML = '<b>Click a marker in the left margin</b> to open a comment.<br>Blue = pre-seeded · Yellow = pending · Pink = your thread.<br><br><b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.';
+    }
   }
 
   function renderAllThreads() {
@@ -3645,9 +3741,53 @@
   }
 
   // ---------- Markers ----------
+  function renderImagePins(state) {
+    const layer = document.querySelector('#doc-content .image-review .pin-layer');
+    if (!layer) return;
+    layer.querySelectorAll('.image-pin-marker').forEach(marker => marker.remove());
+    const resolvedIds = new Set(Object.keys(state.resolutions || {}).map(String));
+    const openIds = new Set(
+      Array.from(document.querySelectorAll('.thread.open'))
+        .map(thread => thread.getAttribute('data-thread-id'))
+        .filter(Boolean)
+    );
+    (state.userThreads || [])
+      .filter(thread => threadFileId(thread) === activeFileId && thread.imageAnchor)
+      .forEach(thread => {
+        const marker = document.createElement('button');
+        marker.type = 'button';
+        marker.className = 'image-pin-marker'
+          + (resolvedIds.has(String(thread.id)) ? ' is-resolved' : '')
+          + (openIds.has(String(thread.id)) ? ' active' : '')
+          + (String(thread.id).startsWith('pending-') ? ' pending-save' : '');
+        marker.setAttribute('data-thread-id', thread.id);
+        marker.setAttribute('aria-label', `Open pin ${thread.anchorStart}`);
+        marker.title = `Pin ${thread.anchorStart}`;
+        marker.style.left = `${thread.imageAnchor.xPct / 100}%`;
+        marker.style.top = `${thread.imageAnchor.yPct / 100}%`;
+        marker.textContent = String(thread.anchorStart);
+        marker.addEventListener('click', event => {
+          event.preventDefault();
+          event.stopPropagation();
+          const threadEl = document.querySelector(`.thread[data-thread-id="${thread.id}"]`);
+          if (threadEl) openThread(threadEl);
+        });
+        layer.appendChild(marker);
+      });
+  }
+
   function renderMarkers() {
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
+    document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
     document.querySelectorAll('[data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
+
+    const state = loadState();
+    if (isImageFile() || documentShowsImage()) {
+      renderImagePins(state);
+      syncOpenThreadMarkerClasses();
+      renderMetaStatus();
+      return;
+    }
 
     const threads = Array.from(threadsHost.querySelectorAll('.thread'));
     const byIdx = new Map();
@@ -3664,7 +3804,6 @@
       }
     });
 
-    const state = loadState();
     const followupDrafts = state.drafts.followup || {};
     const userThreadById = new Map((state.userThreads || []).map(t => [String(t.id), t]));
     byIdx.forEach((list, idx) => {
@@ -3820,7 +3959,7 @@
         .map(thread => thread.getAttribute('data-thread-id'))
         .filter(Boolean)
     );
-    document.querySelectorAll('.thread-marker').forEach(marker => {
+    document.querySelectorAll('.thread-marker, .image-pin-marker').forEach(marker => {
       const threadId = marker.getAttribute('data-thread-id');
       if (threadId && openIds.has(threadId)) marker.classList.add('active');
       else marker.classList.remove('active');
@@ -3915,6 +4054,13 @@
 
   // ---------- Positioning ----------
   function anchorTopForThread(threadEl, paneRightRect) {
+    const imageYPct = parseInt(threadEl.getAttribute('data-image-y-pct'), 10);
+    if (Number.isFinite(imageYPct)) {
+      const image = document.querySelector('#doc-content .image-review img');
+      if (!image) return null;
+      const imageRect = image.getBoundingClientRect();
+      return imageRect.top + (imageYPct / 10000) * imageRect.height - paneRightRect.top;
+    }
     const startIdx = threadEl.getAttribute('data-anchor-start');
     const anchor = getAnchorElByIdx(startIdx);
     if (!anchor) return null;
@@ -3977,6 +4123,142 @@
     // Re-render markers so a newly-stashed draft shows a teal marker in
     // the gutter, or a just-cleared draft disappears.
     if (hadEditor) renderMarkers();
+  }
+
+  function formatImagePercent(basisPoints) {
+    return (basisPoints / 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  }
+
+  function openImagePinEditor(imageAnchor) {
+    closeNewThreadEditor();
+    if (!imageAnchor || !isImageFile()) return;
+    if (!showAllBtn.classList.contains('on')) closeAllThreads();
+
+    const editor = document.createElement('div');
+    editor.className = 'new-thread-editor image-pin-editor';
+    editor.innerHTML = `
+      <div class="anchor-ref">📍 New pin at ${formatImagePercent(imageAnchor.xPct)}%, ${formatImagePercent(imageAnchor.yPct)}%</div>
+      <textarea placeholder="Comment on this point… (Esc to cancel)"></textarea>
+      <div class="actions">
+        <button class="primary save">Save</button>
+        <button class="cancel">Cancel</button>
+        ${enterSendCheckboxHtml()}
+      </div>
+    `;
+    threadsHost.appendChild(editor);
+    newThreadEditor = editor;
+
+    const image = document.querySelector('#doc-content .image-review img');
+    const paneRightRect = paneRight.getBoundingClientRect();
+    const imageRect = image ? image.getBoundingClientRect() : null;
+    let top = imageRect
+      ? imageRect.top + (imageAnchor.yPct / 10000) * imageRect.height - paneRightRect.top
+      : 0;
+    const openThreads = Array.from(threadsHost.querySelectorAll('.thread.open'));
+    openThreads.forEach(thread => {
+      const threadTop = parseFloat(thread.style.top || 0);
+      const threadBottom = threadTop + thread.offsetHeight;
+      if (top >= threadTop - 5 && top <= threadBottom + 5) top = threadBottom + 10;
+    });
+    editor.style.top = Math.max(0, top) + 'px';
+
+    const textarea = editor.querySelector('textarea');
+    textarea.focus();
+
+    async function save() {
+      const text = textarea.value.trim();
+      if (!text) { closeNewThreadEditor(); return; }
+      clearMutationError(editor);
+      const previousState = cloneState(loadState());
+      const state = cloneState(previousState);
+      const id = 'pending-' + Date.now() + Math.random().toString(36).slice(2, 6);
+      const createdAt = new Date().toISOString();
+      const pinNumber = state.userThreads
+        .filter(thread => threadFileId(thread) === activeFileId && thread.imageAnchor)
+        .length + 1;
+      const breadcrumb = `pin ${pinNumber} at ${formatImagePercent(imageAnchor.xPct)}%,${formatImagePercent(imageAnchor.yPct)}%`;
+      const optimisticThread = {
+        id,
+        fileId: activeFileId,
+        anchorStart: pinNumber,
+        anchorEnd: pinNumber,
+        imageAnchor: { ...imageAnchor },
+        snippet: '',
+        text,
+        breadcrumb,
+        createdAt,
+        kind: 'user',
+      };
+      state.userThreads.push({ ...optimisticThread });
+      state.threads.push({ ...optimisticThread });
+      state.followups[id] = [{ text, addedAt: createdAt, kind: 'thread' }];
+      setCurrentState(state);
+      closeNewThreadEditor();
+      renderAllThreads();
+      const optimistic = document.querySelector(`.thread[data-thread-id="${id}"]`);
+      if (optimistic) openThread(optimistic, { scroll: false });
+      scheduleReposition();
+
+      try {
+        const created = await apiJson('/api/threads', {
+          body: {
+            fileId: activeFileId,
+            imageAnchor: { ...imageAnchor },
+            snippet: '',
+            text,
+            sourceVersion: loadState().sourceVersion || 0,
+          },
+        });
+        const serverId = String(created.id);
+        const serverCreatedAt = created.createdAt || createdAt;
+        const serverPin = parseInt(created.anchorStart, 10);
+        const serverAnchor = normalizeImageAnchor(created.imageAnchor) || imageAnchor;
+        const syncedState = cloneState(loadState());
+        syncedState.userThreads.forEach(thread => {
+          if (String(thread.id) === id) Object.assign(thread, {
+            id: serverId,
+            anchorStart: Number.isFinite(serverPin) ? serverPin : pinNumber,
+            anchorEnd: Number.isFinite(serverPin) ? serverPin : pinNumber,
+            imageAnchor: serverAnchor,
+            createdAt: serverCreatedAt,
+          });
+        });
+        syncedState.threads.forEach(thread => {
+          if (String(thread.id) === id) Object.assign(thread, {
+            id: serverId,
+            anchorStart: Number.isFinite(serverPin) ? serverPin : pinNumber,
+            anchorEnd: Number.isFinite(serverPin) ? serverPin : pinNumber,
+            imageAnchor: serverAnchor,
+            createdAt: serverCreatedAt,
+          });
+        });
+        moveThreadStateKey(syncedState, id, serverId);
+        setCurrentState(syncedState);
+        renderAllThreads();
+        const saved = document.querySelector(`.thread[data-thread-id="${serverId}"]`);
+        if (saved) openThread(saved, { scroll: false });
+        scheduleReposition();
+      } catch (error) {
+        console.error('Failed to create image pin thread:', error);
+        setCurrentState(previousState);
+        renderAllThreads();
+        openImagePinEditor(imageAnchor);
+        const restoredTextarea = newThreadEditor?.querySelector('textarea');
+        if (restoredTextarea) restoredTextarea.value = text;
+        showMutationError(newThreadEditor, "couldn't save — retry?", () => {
+          newThreadEditor?.querySelector('.save')?.click();
+        });
+        scheduleReposition();
+      }
+    }
+
+    editor.querySelector('.save').addEventListener('click', save);
+    editor.querySelector('.cancel').addEventListener('click', closeNewThreadEditor);
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); closeNewThreadEditor(); }
+      if (shouldSendOnKey(event)) { event.preventDefault(); save(); }
+    });
+    wireEnterSendCheckbox(editor);
   }
 
   function openNewThreadEditor(startIdx, endIdx, options) {
@@ -4337,6 +4619,7 @@
     if (e.target.closest('#verdict-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('.thread-marker')) return;
+    if (e.target.closest('.image-pin-marker')) return;
     if (e.target.closest('.thread')) return;
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
@@ -4345,6 +4628,14 @@
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+
+    const image = e.target.closest('#doc-content .image-review img');
+    if (image && isImageFile()) {
+      const xPct = Math.max(0, Math.min(10000, Math.round((e.offsetX / image.clientWidth) * 10000)));
+      const yPct = Math.max(0, Math.min(10000, Math.round((e.offsetY / image.clientHeight) * 10000)));
+      openImagePinEditor({ xPct, yPct });
+      return;
+    }
 
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
     if (anchorEl) {
@@ -4824,7 +5115,7 @@
     if (discussFiles.length) activeFileId = String(discussFiles[0].id);
     updateFinishReviewButtonLabel();
     initFileSidebar();
-    highlightCodeBlocks();
+    prepareActiveFileDocument();
     renderAllThreads();
     scheduleReposition();
     startEventStream();

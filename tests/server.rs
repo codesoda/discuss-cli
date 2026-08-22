@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::future::pending;
 use std::io::{self, Write};
@@ -2555,6 +2556,305 @@ async fn post_api_threads_rejects_stale_source_version() {
         .expect("server shutdown should succeed");
 }
 
+fn image_source() -> discuss::state::Source {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    Source {
+        files: vec![File {
+            id: FileId("f-1".to_string()),
+            path: "mockup.png".to_string(),
+            kind: FileKind::Image,
+            content: String::new(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn get_root_renders_image_review_shell() {
+    use discuss::state::FileId;
+
+    let addr = free_loopback_addr();
+    let mut file_bytes = HashMap::new();
+    file_bytes.insert(
+        FileId("f-1".to_string()),
+        (b"image version fixture".to_vec(), "image/png"),
+    );
+    let app_state = AppState::for_process()
+        .with_source(image_source())
+        .with_file_bytes(file_bytes);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_root(addr).await;
+    let body = response_body(&response);
+    assert!(body.contains(r#"class="image-review""#));
+    assert!(body.contains(r#"data-file-id="f-1""#));
+    assert!(body.contains(r#"src="/api/files/f-1/raw?v="#));
+    assert!(body.contains(r#"alt="mockup.png""#));
+    assert!(body.contains(r#"class="pin-layer""#));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_raw_serves_startup_bytes_with_image_headers() {
+    use discuss::state::FileId;
+
+    let addr = free_loopback_addr();
+    let fixture = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff];
+    let mut file_bytes = HashMap::new();
+    file_bytes.insert(FileId("f-1".to_string()), (fixture.clone(), "image/png"));
+    let app_state = AppState::for_process()
+        .with_source(image_source())
+        .with_file_bytes(file_bytes);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path_bytes(addr, "/api/files/f-1/raw").await;
+    let separator = http_body_offset(&response);
+    let headers = String::from_utf8_lossy(&response[..separator]).to_ascii_lowercase();
+    assert!(headers.starts_with("http/1.1 200"));
+    assert!(headers.contains("content-type: image/png"));
+    assert!(headers.contains("cache-control: public, max-age=86400"));
+    assert!(headers.contains("content-security-policy: sandbox"));
+    assert!(headers.contains("x-content-type-options: nosniff"));
+    assert_eq!(&response[separator + 4..], fixture.as_slice());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_raw_returns_structured_404_for_non_images() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for path in ["/api/files/f-1/raw", "/api/files/missing/raw"] {
+        let response = get_path(addr, path).await;
+        assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+        assert_eq!(response_json(&response)["error"]["code"], "unknown_file");
+    }
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_assigns_image_pins_and_emits_coordinates() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state.clone(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source(image_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for (expected_pin, x_pct, y_pct) in [(1, 4217, 1700), (2, 8000, 2500)] {
+        let response = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({
+                "imageAnchor": { "xPct": x_pct, "yPct": y_pct },
+                "snippet": "ignored for images",
+                "text": format!("pin {expected_pin}")
+            })
+            .to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+        let payload = response_json(&response);
+        assert_eq!(payload["anchorStart"], expected_pin);
+        assert_eq!(payload["imageAnchor"]["xPct"], x_pct);
+    }
+
+    let snapshot = state.read().expect("state lock").snapshot();
+    assert_eq!(snapshot.threads[0].anchor_start, 1);
+    assert_eq!(snapshot.threads[0].anchor_end, 1);
+    assert_eq!(snapshot.threads[0].snippet, "");
+    assert_eq!(snapshot.threads[0].breadcrumb, "pin 1 at 42.17%,17%");
+    assert_eq!(snapshot.threads[1].anchor_start, 2);
+
+    let events = stdout_string(&stdout);
+    let first: Value = serde_json::from_str(events.lines().next().unwrap()).expect("event json");
+    assert_eq!(
+        first["payload"]["imageAnchor"],
+        json!({ "xPct": 4217, "yPct": 1700 })
+    );
+    assert_eq!(first["payload"]["breadcrumb"], "pin 1 at 42.17%,17%");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn image_pin_numbers_do_not_reuse_soft_deleted_pins() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(image_source());
+    let shared_state = app_state.state.clone();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for expected_pin in [1, 2] {
+        let response = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({
+                "imageAnchor": { "xPct": expected_pin * 1000, "yPct": 2000 },
+                "snippet": "",
+                "text": format!("pin {expected_pin}")
+            })
+            .to_string(),
+        )
+        .await;
+        assert_eq!(response_json(&response)["anchorStart"], expected_pin);
+    }
+    shared_state
+        .write()
+        .expect("state lock")
+        .soft_delete_thread(&ThreadId("u-1".to_string()));
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"imageAnchor":{"xPct":3000,"yPct":2000},"snippet":"","text":"pin 3"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_eq!(response_json(&response)["anchorStart"], 3);
+    assert_eq!(
+        shared_state
+            .read()
+            .expect("state lock")
+            .get_threads()
+            .iter()
+            .map(|thread| thread.anchor_start)
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn image_thread_and_source_routes_enforce_image_anchor_invariants() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(image_source());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for body in [
+        json!({ "snippet": "", "text": "missing pin" }),
+        json!({ "imageAnchor": { "xPct": 10001, "yPct": 0 }, "snippet": "", "text": "outside" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 10001 }, "snippet": "", "text": "outside" }),
+    ] {
+        let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+        assert_eq!(
+            response_json(&response)["error"]["code"],
+            "validation_error"
+        );
+    }
+
+    let source = post_json_path(
+        addr,
+        "/api/source",
+        r##"{"markdown":"# replacement","threadAnchors":[]}"##,
+    )
+    .await;
+    assert!(source.starts_with("HTTP/1.1 400"), "response: {source}");
+    assert_eq!(response_json(&source)["error"]["code"], "validation_error");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn text_threads_reject_image_anchors() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Text");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"imageAnchor":{"xPct":1,"yPct":2},"snippet":"Text","text":"no"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "validation_error"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn multi_file_source() -> discuss::state::Source {
     use discuss::state::{File, FileId, FileKind, Source};
 
@@ -2836,14 +3136,24 @@ async fn get_root(addr: SocketAddr) -> String {
 }
 
 async fn get_path(addr: SocketAddr, path: &str) -> String {
-    let mut stream = open_get_path(addr, path).await;
+    String::from_utf8(get_path_bytes(addr, path).await).expect("response should be utf-8")
+}
 
-    let mut response = String::new();
+async fn get_path_bytes(addr: SocketAddr, path: &str) -> Vec<u8> {
+    let mut stream = open_get_path(addr, path).await;
+    let mut response = Vec::new();
     stream
-        .read_to_string(&mut response)
+        .read_to_end(&mut response)
         .await
         .expect("read response");
     response
+}
+
+fn http_body_offset(response: &[u8]) -> usize {
+    response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("http response should contain a body separator")
 }
 
 fn test_verdict_config() -> VerdictConfig {
@@ -3135,6 +3445,7 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         file_id: default_file_id(),
         anchor_start,
         anchor_end: anchor_start + 1,
+        image_anchor: None,
         snippet: format!("snippet {id}"),
         breadcrumb: "Overview".to_string(),
         text: format!("thread {id}"),
