@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::state::{
-    FileId, FileMeta, LineRange, Reply, Resolution, Source, State, Take, ThreadId, ThreadKind,
-    default_file_id,
+    FileId, FileMeta, ImageAnchor, LineRange, Reply, Resolution, Source, State, Take, ThreadId,
+    ThreadKind, default_file_id,
 };
 use crate::verdict::Verdict;
 
@@ -32,6 +32,8 @@ pub struct TranscriptThread {
     pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_anchor: Option<ImageAnchor>,
     pub snippet: String,
     pub breadcrumb: String,
     pub text: String,
@@ -65,6 +67,7 @@ fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
             file_id: thread.file_id.clone(),
             anchor_start: thread.anchor_start,
             anchor_end: thread.anchor_end,
+            image_anchor: thread.image_anchor,
             snippet: thread.snippet.clone(),
             breadcrumb: thread.breadcrumb.clone(),
             text: thread.text.clone(),
@@ -123,6 +126,7 @@ mod tests {
             file_id: default_file_id(),
             anchor_start,
             anchor_end,
+            image_anchor: None,
             snippet: format!("snippet {id}"),
             breadcrumb: "Overview > Goals".to_string(),
             text: format!("initial comment {id}"),
@@ -264,6 +268,44 @@ mod tests {
         );
         assert!(value["threads"][0].get("anchor_start").is_none());
         assert!(value["threads"][0].get("created_at").is_none());
+    }
+
+    #[test]
+    fn transcript_preserves_image_anchor_and_pin_order() {
+        let mut later = thread("u-pin-2", 2, 2);
+        later.file_id = FileId("f-2".to_string());
+        later.image_anchor = Some(ImageAnchor {
+            x_pct: 8000,
+            y_pct: 2500,
+        });
+        later.breadcrumb = "pin 2 at 80%,25%".to_string();
+
+        let mut earlier = thread("u-pin-1", 1, 1);
+        earlier.file_id = FileId("f-2".to_string());
+        earlier.image_anchor = Some(ImageAnchor {
+            x_pct: 1250,
+            y_pct: 5000,
+        });
+        earlier.breadcrumb = "pin 1 at 12.5%,50%".to_string();
+
+        let mut state = State::default();
+        state.add_thread(later);
+        state.add_thread(earlier);
+
+        let transcript = build_transcript(&state);
+        assert_eq!(transcript.threads[0].id.0, "u-pin-1");
+        assert_eq!(
+            transcript.threads[0].image_anchor,
+            Some(ImageAnchor {
+                x_pct: 1250,
+                y_pct: 5000,
+            })
+        );
+        let value = serde_json::to_value(&transcript).expect("serialize transcript");
+        assert_eq!(
+            value["threads"][0]["imageAnchor"],
+            json!({ "xPct": 1250, "yPct": 5000 })
+        );
     }
 
     #[test]

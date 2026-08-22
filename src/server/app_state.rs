@@ -1,12 +1,14 @@
 //! Shared server state: the axum `AppState` handle plus the activity and
 //! shutdown primitives it owns.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::Config;
@@ -22,6 +24,8 @@ pub struct AppState {
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     pub(super) source: Arc<std::sync::RwLock<Source>>,
+    pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
+    file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
     pub(super) history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
@@ -45,6 +49,8 @@ impl AppState {
             bus,
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
+            file_bytes: Arc::new(HashMap::new()),
+            file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
@@ -71,6 +77,53 @@ impl AppState {
             *current = source;
         }
         self
+    }
+
+    pub fn with_file_bytes(mut self, file_bytes: HashMap<FileId, (Vec<u8>, &'static str)>) -> Self {
+        self.file_versions = Arc::new(
+            file_bytes
+                .iter()
+                .map(|(file_id, (bytes, _))| {
+                    let digest = Sha256::digest(bytes);
+                    (file_id.clone(), format!("{digest:x}"))
+                })
+                .collect(),
+        );
+        self.file_bytes = Arc::new(file_bytes);
+        self
+    }
+
+    pub(super) fn raw_file_version(&self, file_id: &FileId) -> Option<&str> {
+        self.file_versions.get(file_id).map(String::as_str)
+    }
+
+    pub(super) fn raw_file(&self, file_id: &FileId) -> Option<&(Vec<u8>, &'static str)> {
+        let is_image = self
+            .source
+            .read()
+            .ok()
+            .and_then(|source| {
+                source
+                    .files
+                    .iter()
+                    .find(|file| &file.id == file_id)
+                    .map(|file| file.kind == FileKind::Image)
+            })
+            .unwrap_or(false);
+        is_image.then(|| self.file_bytes.get(file_id)).flatten()
+    }
+
+    pub(super) fn file_kind(&self, file_id: &FileId) -> Option<FileKind> {
+        self.source.read().ok().and_then(|source| {
+            if source.files.is_empty() && file_id == &default_file_id() {
+                return Some(FileKind::Markdown);
+            }
+            source
+                .files
+                .iter()
+                .find(|file| &file.id == file_id)
+                .map(|file| file.kind)
+        })
     }
 
     /// Single-file convenience used by tests and stdin sessions: replaces the

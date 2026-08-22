@@ -208,6 +208,7 @@ mod tests {
             orphaned: false,
             anchor_start,
             anchor_end: anchor_start + 1,
+            image_anchor: None,
             snippet: format!("snippet {id}"),
             breadcrumb: "Overview".to_string(),
             text: format!("thread {id}"),

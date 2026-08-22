@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Image review with pin anchors** — PNG, JPEG, GIF, WebP, and SVG paths can be reviewed alone or alongside markdown/diff files. Images are read once as bytes at startup, rendered through an `<img>` backed by `GET /api/files/{fileId}/raw`, and annotated with numbered percentage-positioned pins. Image threads carry `imageAnchor: {xPct, yPct}` basis-point coordinates while retaining their pin number in `anchorStart`/`anchorEnd`; events and transcripts include the coordinates and a `pin N at X%,Y%` breadcrumb. The browser supports optimistic pin creation, reload-stable saved pins, file switching, focusing from the pin layer, and the existing reply/take/resolve/delete lifecycle. Live `/api/source` updates and server-persisted drafts for unsent pin comments remain out of scope.
+
 ## [0.6.1] - 2026-08-03
 
 ### Changed

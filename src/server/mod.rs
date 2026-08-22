@@ -41,7 +41,7 @@ use drafts::{
     post_api_drafts_new_thread,
 };
 use pages::{
-    get_api_events, get_api_state, get_mermaid_js, get_mermaid_shim_js, get_root,
+    get_api_events, get_api_file_raw, get_api_state, get_mermaid_js, get_mermaid_shim_js, get_root,
     post_api_heartbeat,
 };
 use response::{api_error_response, not_found};
@@ -166,6 +166,7 @@ fn build_router(app_state: AppState) -> Router {
     Router::new()
         .route("/", get(get_root))
         .route("/api/state", get(get_api_state))
+        .route("/api/files/{id}/raw", get(get_api_file_raw))
         .route("/api/events", get(get_api_events))
         .route("/api/heartbeat", post(post_api_heartbeat))
         .route(

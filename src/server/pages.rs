@@ -1,7 +1,8 @@
 //! Page rendering plus the read-only state, heartbeat, SSE, and asset routes.
 
 use axum::Json;
-use axum::extract::State as AxumState;
+use axum::body::Body;
+use axum::extract::{Path, State as AxumState};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -13,9 +14,9 @@ use crate::assets;
 use crate::state::{File, FileId, FileKind};
 use crate::{render, template};
 
-use super::SSE_HEARTBEAT_INTERVAL;
 use super::app_state::AppState;
 use super::response::{OkResponse, api_error_response, javascript_response};
+use super::{ASSET_CACHE_CONTROL, SSE_HEARTBEAT_INTERVAL};
 
 pub(super) async fn get_root(AxumState(app_state): AxumState<AppState>) -> Response {
     match render_root_page(&app_state) {
@@ -42,7 +43,7 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .iter()
         .map(|file| RenderedFile {
             id: file.id.clone(),
-            html: render_file_html(file),
+            html: render_file_html_with_version(file, app_state.raw_file_version(&file.id)),
         })
         .collect();
     let rendered_files_json = serde_json::to_string(&rendered_files)
@@ -68,16 +69,68 @@ pub(super) struct RenderedFile {
 }
 
 /// Renders one source file to HTML: markdown files through the markdown
-/// renderer directly, diff files through a synthesized markdown document
-/// (heading + one fenced `diff-<lang>` block per hunk).
+/// renderer directly, diff files through a synthesized markdown document,
+/// and images through the stable raw-file route with a pin overlay.
 pub(super) fn render_file_html(file: &File) -> String {
+    render_file_html_with_version(file, None)
+}
+
+fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> String {
     match file.kind {
         FileKind::Markdown => render::render(&file.content),
         FileKind::Diff => render::render(&crate::diff::diff_content_to_markdown(
             &file.path,
             &file.content,
         )),
+        FileKind::Image => {
+            let file_id = escape_html_attribute(&file.id.0);
+            let alt = escape_html_attribute(&file.path);
+            let version = raw_version
+                .map(|version| format!("?v={version}"))
+                .unwrap_or_default();
+            format!(
+                "<div class=\"image-review\" data-file-id=\"{file_id}\"><img src=\"/api/files/{file_id}/raw{version}\" alt=\"{alt}\"><div class=\"pin-layer\"></div></div>"
+            )
+        }
     }
+}
+
+fn escape_html_attribute(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for character in input.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+pub(super) async fn get_api_file_raw(
+    AxumState(app_state): AxumState<AppState>,
+    Path(file_id): Path<String>,
+) -> Response {
+    let file_id = FileId(file_id);
+    let Some((bytes, mime)) = app_state.raw_file(&file_id) else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_file",
+            format!("image file not found: {}", file_id.0),
+        );
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, *mime)
+        .header(header::CACHE_CONTROL, ASSET_CACHE_CONTROL)
+        .header("content-security-policy", "sandbox")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(bytes.clone()))
+        .expect("valid raw-file response")
 }
 
 pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {

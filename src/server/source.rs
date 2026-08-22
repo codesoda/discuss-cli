@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{Event, EventKind};
 use crate::sse::BroadcastEvent;
-use crate::state::{FileId, LineRange, ThreadId};
+use crate::state::{FileId, FileKind, LineRange, ThreadId};
 
 use super::app_state::AppState;
 use super::pages::render_file_html;
@@ -132,6 +132,13 @@ pub(super) async fn post_api_source(
         Ok(file_id) => file_id,
         Err(error) => return *error,
     };
+    if app_state.file_kind(&file_id) == Some(FileKind::Image) {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "live source updates are not supported for image files",
+        );
+    }
 
     let markdown = request.markdown;
     let (threads, source_version, updated_file) = {
