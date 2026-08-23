@@ -148,6 +148,13 @@ where
     };
 
     let mode = match (&diff_output, inputs.is_empty()) {
+        (None, _)
+            if inputs
+                .first()
+                .is_some_and(|input| input.kind == FileKind::Html) =>
+        {
+            "html"
+        }
         (None, _) => "markdown",
         (Some(_), true) => "diff",
         (Some(_), false) => "mixed",
@@ -323,6 +330,7 @@ fn file_kind_for_path(path: &Path) -> FileKind {
         .as_deref()
     {
         Some("diff" | "patch") => FileKind::Diff,
+        Some("html" | "htm") => FileKind::Html,
         _ => FileKind::Markdown,
     }
 }
@@ -406,21 +414,31 @@ mod tests {
         let plan = temp_dir.path().join("plan.md");
         let design = temp_dir.path().join("design.md");
         let patch = temp_dir.path().join("change.patch");
+        let prototype = temp_dir.path().join("prototype.HTML");
         fs::write(&plan, "plan").expect("write plan");
         fs::write(&design, "design").expect("write design");
         fs::write(&patch, "diff").expect("write patch");
+        fs::write(&prototype, "<button>Buy</button>").expect("write prototype");
 
-        let inputs = resolve_inputs(vec![plan.clone(), design.clone(), patch.clone()])
-            .expect("multi files should resolve")
-            .expect("multi files should yield inputs");
+        let inputs = resolve_inputs(vec![
+            plan.clone(),
+            design.clone(),
+            patch.clone(),
+            prototype.clone(),
+        ])
+        .expect("multi files should resolve")
+        .expect("multi files should yield inputs");
 
-        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs.len(), 4);
         assert_eq!(inputs[0].source_path.as_deref(), Some(plan.as_path()));
         assert_eq!(inputs[0].kind, FileKind::Markdown);
         assert_eq!(inputs[1].source_path.as_deref(), Some(design.as_path()));
         assert_eq!(inputs[1].kind, FileKind::Markdown);
         assert_eq!(inputs[2].source_path.as_deref(), Some(patch.as_path()));
         assert_eq!(inputs[2].kind, FileKind::Diff);
+        assert_eq!(inputs[3].source_path.as_deref(), Some(prototype.as_path()));
+        assert_eq!(inputs[3].kind, FileKind::Html);
+        assert_eq!(inputs[3].markdown_source, "<button>Buy</button>");
     }
 
     #[test]

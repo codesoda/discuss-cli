@@ -1,18 +1,18 @@
 ---
 name: discuss
-description: Launch the discuss CLI on a markdown file (or piped stdin) through a monitor-type background tool, stream its event log, and participate in the review by posting "takes" (agent views) on threads the user opens. Use when invoked as /discuss <markdown-path> or when the user wants to review markdown content piped from another command.
+description: Launch the discuss CLI on markdown, diff, or HTML prototype files (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
-# discuss — Interactive markdown review session
+# discuss — Interactive review session
 
-Open markdown content in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown, diffs, or HTML prototypes in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
 The source can be either a file on disk or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
 ## Arguments
 
-- `$ARGUMENTS` — Either a path to the markdown file to review, OR markdown content the user wants to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
+- `$ARGUMENTS` — A path (or paths) to Markdown, diff, or HTML prototype files, OR Markdown content to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
 
 ### Stdin mode
 
@@ -50,6 +50,18 @@ discuss plan.md diff          # markdown file(s) + diff in one session
 - `session.started` gains `mode` (`"markdown"` / `"diff"` / `"mixed"`) and `git_args` so you know what's under review.
 - Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
 - Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
+
+### HTML prototype mode
+
+Pass `.html` or `.htm` files directly:
+
+```
+discuss prototype.html
+```
+
+The browser renders each prototype in a sandboxed iframe and offers **Inspect** mode. HTML `thread.created` events carry `elementAnchor` with `selector`, ordered `fallbacks`, `tag`, optional `textDigest`, and a truncated `outerHtml` snippet. Use `breadcrumb` and `snippet` for readable context; inspect `outerHtml` when the visual element is ambiguous. Agent takes still use `POST /api/threads/{id}/takes`.
+
+Prototype-relative assets are served from the HTML file's directory. Root-absolute URLs are not rewritten. `POST /api/source` and live file watching are not supported for HTML files in this version.
 
 ### Verdict options
 
@@ -235,8 +247,8 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 
 ### `thread.created` (new thread opened by the user)
 
-1. Read `anchorStart`, `anchorEnd`, `snippet`, `text` from the payload.
-2. Locate the anchored region in the markdown source — the `snippet` is a reliable search key for the rendered paragraph.
+1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `elementAnchor` from the payload.
+2. For markdown/diff threads, locate the anchored region using `snippet`. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
 5. Post it as a **take**, not a reply (substitute the URL from `session.started`):
@@ -281,7 +293,9 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 |---|---|---|---|
 | GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
 | GET | `/api/events` | — | SSE stream (alternative to stdout) |
-| POST | `/api/threads` | `{fileId?, anchorStart, anchorEnd, snippet, text}` | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
+| GET | `/files/{fileId}` | — | Served HTML prototype document |
+| POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
+| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
@@ -310,7 +324,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 - `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, createdAt}`
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, elementAnchor?, createdAt}`; HTML anchors include selector fallbacks and `outerHtml` context
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`

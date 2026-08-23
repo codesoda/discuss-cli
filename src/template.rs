@@ -300,6 +300,24 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_wires_html_prototype_inspection() {
+        let page = render_page(
+            r#"<div class="html-review"><iframe class="prototype-frame" sandbox="allow-scripts allow-same-origin"></iframe></div>"#,
+            "{}",
+            "[]",
+        );
+
+        assert!(page.contains(r#"id="inspect-toggle""#));
+        assert!(page.contains("discuss:set-inspect"));
+        assert!(page.contains("discuss:element-selected"));
+        assert!(page.contains("discuss:resolve-anchors"));
+        assert!(page.contains("function openHtmlThreadEditor(selection)"));
+        assert!(page.contains("${escapeHtml(rangeLabel)}"));
+        assert!(page.contains("elementAnchor"));
+        assert!(page.contains("sandbox=\"allow-scripts allow-same-origin\""));
+    }
+
+    #[test]
     fn bundled_template_hydrates_state_from_seed_or_api() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 

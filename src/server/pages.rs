@@ -77,7 +77,29 @@ pub(super) fn render_file_html(file: &File) -> String {
             &file.path,
             &file.content,
         )),
+        FileKind::Html => {
+            let file_id = escape_html_attribute(&file.id.0);
+            let title = escape_html_attribute(&file.path);
+            format!(
+                "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
+            )
+        }
     }
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
@@ -142,4 +164,15 @@ pub(super) async fn get_mermaid_js() -> impl IntoResponse {
 
 pub(super) async fn get_mermaid_shim_js() -> impl IntoResponse {
     javascript_response(assets::mermaid_shim_js())
+}
+
+pub(super) async fn get_discuss_inspect_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        assets::discuss_inspect_js(),
+    )
 }

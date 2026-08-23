@@ -217,6 +217,24 @@
   header .toggle:hover { background: var(--accent-hover); }
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  #inspect-toggle { display: none; }
+  body.html-file #inspect-toggle { display: inline-flex; }
+  #inspect-banner {
+    position: fixed;
+    z-index: 94;
+    top: calc(var(--header-h) + 10px);
+    left: calc(var(--files-w) + 14px);
+    display: none;
+    padding: 6px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 16px;
+    background: var(--card);
+    color: var(--ink);
+    box-shadow: 0 2px 10px rgba(0,0,0,.12);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  body.inspecting #inspect-banner { display: block; }
   header .header-icon-link {
     display: inline-flex;
     align-items: center;
@@ -545,6 +563,16 @@
     background: var(--card);
     border-right: 1px solid var(--line);
   }
+  body.html-file .pane-left { padding: 0; }
+  body.html-file #doc-content { display: none; }
+  #html-frames { display: none; }
+  body.html-file #html-frames { display: block; }
+  body.html-file #html-frames,
+  body.html-file .html-review { height: calc(100vh - var(--header-h)); min-height: 560px; }
+  .html-review { position: relative; width: 100%; overflow: hidden; background: var(--bg); }
+  .html-review[hidden] { display: none; }
+  .prototype-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--card); }
+  body.html-file .heading-minimap { display: none; }
   .pane-right {
     padding: 28px 24px 80px 24px;
     background: var(--bg);
@@ -626,6 +654,8 @@
   }
   .thread.orphaned { border-left: 3px dashed var(--muted); opacity: 0.85; }
   .thread.orphaned .thread-anchor { color: var(--muted); font-style: italic; }
+  .thread.element-thread .thread-sub { font-family: var(--mono); font-size: 11.5px; }
+  body.html-file .new-thread-editor { left: 24px; right: 24px; }
   #doc-content details.front-matter {
     margin: 0 0 16px 0;
     border: 1px solid var(--line);
@@ -1438,6 +1468,7 @@
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
   </a>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
+  <button class="toggle" id="inspect-toggle" title="Inspect prototype elements (I)" aria-pressed="false">Inspect</button>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
       <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
@@ -1470,6 +1501,7 @@
 <div class="done-banner" id="done-banner" role="status" aria-live="polite">
   You can close this tab.
 </div>
+<div id="inspect-banner" role="status">Inspecting — click an element to comment</div>
 
 <div class="verdict-modal" id="verdict-modal" hidden>
   <div class="verdict-dialog" role="dialog" aria-modal="true" aria-labelledby="verdict-prompt">
@@ -1548,6 +1580,7 @@
 }</code></pre>
       </section>
       <!-- ==================== END OF YOUR CONTENT ==================== -->
+      <div id="html-frames"></div>
     </div>
     <div id="divider"></div>
     <div class="pane-right" id="pane-right">
@@ -1609,9 +1642,29 @@
   );
   let discussFiles = [];
   let activeFileId = DEFAULT_FILE_ID;
+  const htmlFrameWrappers = new Map();
+  let inspectOn = false;
+  const lastDetachedByFile = new Map();
+  const pendingDetachedByFile = new Map();
 
   function threadFileId(t) {
     return t && t.fileId ? String(t.fileId) : DEFAULT_FILE_ID;
+  }
+  function fileKind(fileId = activeFileId) {
+    const file = discussFiles.find(item => String(item.id) === String(fileId));
+    return file ? file.kind : 'markdown';
+  }
+  function isHtmlFile(fileId = activeFileId) {
+    return fileKind(fileId) === 'html';
+  }
+  function activePrototypeFrame() {
+    const wrapper = htmlFrameWrappers.get(activeFileId);
+    return wrapper ? wrapper.querySelector('.prototype-frame') : null;
+  }
+  function postToPrototype(type, payload = {}) {
+    const frame = activePrototypeFrame();
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage({ type, ...payload }, location.origin);
   }
 
   function emptyDiscussionState() {
@@ -1672,7 +1725,7 @@
       .map(f => ({
         id: String(f.id),
         path: f.path == null ? '' : String(f.path),
-        kind: f.kind === 'diff' ? 'diff' : 'markdown',
+        kind: ['diff', 'html'].includes(f.kind) ? f.kind : 'markdown',
       }));
   }
   function normalizeUserThreads(sourceThreads) {
@@ -1690,8 +1743,23 @@
         createdAt: t.createdAt || new Date().toISOString(),
         lineRange: normalizeLineRange(t.lineRange),
         orphaned: !!t.orphaned,
+        elementAnchor: normalizeElementAnchor(t.elementAnchor),
       }))
-      .filter(t => t.id && (t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
+      .filter(t => t.id && (t.elementAnchor || t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
+  }
+  function normalizeElementAnchor(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const selector = typeof raw.selector === 'string' ? raw.selector : '';
+    const tag = typeof raw.tag === 'string' ? raw.tag : '';
+    const outerHtml = typeof raw.outerHtml === 'string' ? raw.outerHtml : '';
+    if (!selector || !tag || !outerHtml) return null;
+    return {
+      selector,
+      fallbacks: Array.isArray(raw.fallbacks) ? raw.fallbacks.filter(value => typeof value === 'string') : [],
+      tag,
+      ...(typeof raw.textDigest === 'string' && raw.textDigest ? { textDigest: raw.textDigest } : {}),
+      outerHtml,
+    };
   }
   function normalizeLineRange(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -1874,6 +1942,7 @@
     'draft.updated',
     'draft.cleared',
     'source.updated',
+    'anchors.resolved',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
@@ -1951,7 +2020,25 @@
       case 'source.updated':
         applySourceUpdatedEvent(payload);
         break;
+      case 'anchors.resolved':
+        applyAnchorsResolvedEvent(payload);
+        break;
     }
+  }
+
+  function applyAnchorsResolvedEvent(payload) {
+    if (!payload || !payload.fileId) return;
+    const fileId = String(payload.fileId);
+    const detached = new Set((payload.detachedThreadIds || []).map(String));
+    const state = cloneState(loadState());
+    const update = thread => {
+      if (threadFileId(thread) === fileId && thread.elementAnchor) thread.orphaned = detached.has(String(thread.id));
+    };
+    (state.userThreads || []).forEach(update);
+    (state.threads || []).forEach(update);
+    setCurrentState(state);
+    if (fileId === activeFileId) renderAllThreads();
+    else renderMetaStatus();
   }
 
   // Live source update: the agent pushed new markdown plus re-anchored (or
@@ -2071,6 +2158,7 @@
 
   function markReviewComplete() {
     const verdictSummary = arguments.length > 0 ? arguments[0] : null;
+    setInspectMode(false);
     reviewComplete = true;
     document.body.classList.add('review-complete');
     stopHeartbeat();
@@ -2124,10 +2212,13 @@
   }
 
   function pendingThreadMatches(existing, incoming) {
+    const sameAnchor = incoming.elementAnchor
+      ? existing.elementAnchor && existing.elementAnchor.selector === incoming.elementAnchor.selector
+      : parseInt(existing.anchorStart, 10) === incoming.anchorStart
+        && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd;
     return String(existing.id || '').startsWith('pending-')
       && threadFileId(existing) === threadFileId(incoming)
-      && parseInt(existing.anchorStart, 10) === incoming.anchorStart
-      && parseInt(existing.anchorEnd, 10) === incoming.anchorEnd
+      && sameAnchor
       && (existing.text || '') === incoming.text;
   }
 
@@ -2543,13 +2634,14 @@
     if (!state.drafts.newThread) state.drafts.newThread = {};
     if (!state.drafts.followup) state.drafts.followup = {};
   }
-  function upsertLocalNewThreadDraft(state, startIdx, endIdx, text) {
+  function upsertLocalNewThreadDraft(state, startIdx, endIdx, text, fileId) {
     ensureDraftState(state);
-    const key = newThreadDraftKey(startIdx, endIdx);
+    const targetFileId = fileId || activeFileId;
+    const key = newThreadDraftKey(startIdx, endIdx, targetFileId);
     if (text && text.trim()) {
       state.drafts.newThread[key] = {
         text,
-        fileId: activeFileId,
+        fileId: targetFileId,
         anchorStart: parseInt(startIdx, 10),
         anchorEnd: parseInt(endIdx, 10),
         savedAt: new Date().toISOString(),
@@ -2579,11 +2671,11 @@
     }).catch(() => {});
     return run;
   }
-  function persistNewThreadDraft(startIdx, endIdx, text) {
+  function persistNewThreadDraft(startIdx, endIdx, text, requestedFileId) {
     const anchorStart = parseInt(startIdx, 10);
     const anchorEnd = parseInt(endIdx, 10);
     if (!Number.isFinite(anchorStart) || !Number.isFinite(anchorEnd)) return Promise.resolve();
-    const fileId = activeFileId;
+    const fileId = requestedFileId || activeFileId;
     return queueDraftRequest(`newThread:${fileId}|${anchorStart}-${anchorEnd}`, () => {
       if (text && text.trim()) {
         return apiJson('/api/drafts/new-thread', { body: { fileId, anchorStart, anchorEnd, text } });
@@ -2599,14 +2691,14 @@
       return apiJson('/api/drafts/followup', { method: 'DELETE', body: { threadId } });
     });
   }
-  function setNewThreadDraft(startIdx, endIdx, text) {
+  function setNewThreadDraft(startIdx, endIdx, text, fileId) {
     const s = cloneState(loadState());
-    upsertLocalNewThreadDraft(s, startIdx, endIdx, text);
+    upsertLocalNewThreadDraft(s, startIdx, endIdx, text, fileId);
     setCurrentState(s);
-    return persistNewThreadDraft(startIdx, endIdx, text);
+    return persistNewThreadDraft(startIdx, endIdx, text, fileId);
   }
-  function getNewThreadDraft(state, startIdx, endIdx) {
-    return state.drafts.newThread[newThreadDraftKey(startIdx, endIdx)];
+  function getNewThreadDraft(state, startIdx, endIdx, fileId) {
+    return state.drafts.newThread[newThreadDraftKey(startIdx, endIdx, fileId)];
   }
   function setFollowupDraft(threadId, text) {
     const s = cloneState(loadState());
@@ -2794,10 +2886,10 @@
       }
       name.appendChild(document.createTextNode(slash >= 0 ? path.slice(slash + 1) : path));
       item.appendChild(name);
-      if (file.kind === 'diff') {
+      if (file.kind !== 'markdown') {
         const tag = document.createElement('span');
         tag.className = 'file-kind';
-        tag.textContent = 'diff';
+        tag.textContent = file.kind;
         item.appendChild(tag);
       }
       const count = document.createElement('span');
@@ -2840,9 +2932,113 @@
     });
   }
 
-  // Swaps the visible document to another file. Same re-run sequence as a
-  // live source update: the conversation state survives, and anchors are
-  // recomputed against the newly injected content.
+  function setInspectMode(on) {
+    inspectOn = isHtmlFile() && on === true;
+    document.body.classList.toggle('inspecting', inspectOn);
+    const button = document.getElementById('inspect-toggle');
+    if (button) {
+      button.classList.toggle('on', inspectOn);
+      button.setAttribute('aria-pressed', inspectOn ? 'true' : 'false');
+    }
+    postToPrototype('discuss:set-inspect', { on: inspectOn });
+  }
+
+  function syncHtmlAnchors() {
+    if (!isHtmlFile()) return;
+    const anchors = (loadState().userThreads || [])
+      .filter(thread => threadFileId(thread) === activeFileId && thread.elementAnchor)
+      .map(thread => ({ threadId: String(thread.id), anchor: thread.elementAnchor }));
+    postToPrototype('discuss:resolve-anchors', { anchors });
+  }
+
+  function activateFileUi() {
+    document.body.classList.toggle('html-file', isHtmlFile());
+    if (!isHtmlFile()) setInspectMode(false);
+    else {
+      postToPrototype('discuss:set-inspect', { on: inspectOn });
+      syncHtmlAnchors();
+    }
+  }
+
+  function stashHtmlFrame(fileId) {
+    if (!isHtmlFile(fileId)) return;
+    const framesHost = document.getElementById('html-frames');
+    if (!framesHost) return;
+    let wrapper = htmlFrameWrappers.get(String(fileId));
+    if (!wrapper) wrapper = document.querySelector('#doc-content > .html-review');
+    if (!wrapper) return;
+    wrapper.dataset.fileId = String(fileId);
+    htmlFrameWrappers.set(String(fileId), wrapper);
+    framesHost.appendChild(wrapper);
+  }
+
+  function mountFile(doc, fileId) {
+    const framesHost = document.getElementById('html-frames');
+    if (isHtmlFile(fileId)) {
+      let wrapper = htmlFrameWrappers.get(fileId);
+      if (!wrapper) {
+        const template = document.createElement('template');
+        template.innerHTML = renderedFileHtml.get(fileId) || '';
+        wrapper = template.content.querySelector('.html-review');
+        if (wrapper && framesHost) {
+          wrapper.dataset.fileId = fileId;
+          htmlFrameWrappers.set(fileId, wrapper);
+          framesHost.appendChild(wrapper);
+        }
+      }
+      htmlFrameWrappers.forEach((item, id) => { item.hidden = id !== fileId; });
+      doc.replaceChildren();
+      return;
+    }
+    htmlFrameWrappers.forEach(item => { item.hidden = true; });
+    doc.innerHTML = renderedFileHtml.get(fileId) || '';
+  }
+
+  window.addEventListener('message', event => {
+    const frame = activePrototypeFrame();
+    if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin) return;
+    const message = event.data;
+    if (!message || typeof message.type !== 'string' || !message.type.startsWith('discuss:')) return;
+    if (message.type === 'discuss:ready') {
+      postToPrototype('discuss:set-inspect', { on: inspectOn });
+      syncHtmlAnchors();
+    } else if (message.type === 'discuss:element-selected') {
+      setInspectMode(false);
+      openHtmlThreadEditor(message);
+    } else if (message.type === 'discuss:marker-clicked') {
+      const thread = document.querySelector(`.thread[data-thread-id="${CSS.escape(String(message.threadId))}"]`);
+      if (thread) openThread(thread);
+    } else if (message.type === 'discuss:anchors-resolved') {
+      const detached = Array.isArray(message.detached) ? message.detached.map(String).sort() : [];
+      const key = detached.join('\n');
+      if (lastDetachedByFile.get(activeFileId) === key || pendingDetachedByFile.get(activeFileId) === key) return;
+      const fileId = activeFileId;
+      pendingDetachedByFile.set(fileId, key);
+      const state = cloneState(loadState());
+      const detachedSet = new Set(detached);
+      const update = thread => {
+        if (threadFileId(thread) === activeFileId && thread.elementAnchor) thread.orphaned = detachedSet.has(String(thread.id));
+      };
+      (state.userThreads || []).forEach(update);
+      (state.threads || []).forEach(update);
+      setCurrentState(state);
+      renderAllThreads();
+      apiJson('/api/anchors/resolve', {
+        body: { fileId, detachedThreadIds: detached },
+      }).then(() => {
+        lastDetachedByFile.set(fileId, key);
+      }).catch(error => {
+        console.error('Failed to report detached element anchors:', error);
+        if (pendingDetachedByFile.get(fileId) === key) pendingDetachedByFile.delete(fileId);
+        if (activeFileId === fileId) setTimeout(syncHtmlAnchors, 1000);
+      }).finally(() => {
+        if (pendingDetachedByFile.get(fileId) === key) pendingDetachedByFile.delete(fileId);
+      });
+    }
+  });
+
+  // Swaps the visible document to another file. HTML iframes are detached
+  // and re-mounted rather than recreated so interactive prototype state lasts.
   function switchToFile(fileId) {
     const id = String(fileId);
     if (id === activeFileId) return;
@@ -2850,13 +3046,17 @@
     const doc = document.getElementById('doc-content');
     if (!doc) return;
     if (typeof closeNewThreadEditor === 'function' && newThreadEditor) closeNewThreadEditor();
+    setInspectMode(false);
     activeFileId = id;
-    doc.innerHTML = renderedFileHtml.get(id);
-    wrapCollapsibleSectionsDom();
-    assignAnchorIndices();
-    buildHeadingMinimap();
-    highlightCodeBlocks();
-    if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
+    mountFile(doc, id);
+    activateFileUi();
+    if (!isHtmlFile()) {
+      wrapCollapsibleSectionsDom();
+      assignAnchorIndices();
+      buildHeadingMinimap();
+      highlightCodeBlocks();
+      if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
+    }
     renderAllThreads();
     const workspace = document.querySelector('.workspace');
     if (workspace) workspace.scrollTo({ top: 0 });
@@ -3127,8 +3327,9 @@
   function createUserThread(t) {
     const el = document.createElement('div');
     el.className = t.orphaned ? 'thread user orphaned' : 'thread user';
+    if (t.elementAnchor) el.classList.add('element-thread');
     el.setAttribute('data-thread-id', t.id);
-    if (!t.orphaned) {
+    if (!t.orphaned && !t.elementAnchor) {
       el.setAttribute('data-anchor-start', t.anchorStart);
       el.setAttribute('data-anchor-end', t.anchorEnd);
     }
@@ -3140,18 +3341,20 @@
       ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
       : '';
     const rangeLabel = t.orphaned
-      ? 'orphaned'
-      : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel;
+      ? 'detached'
+      : (t.elementAnchor
+        ? t.elementAnchor.selector
+        : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel);
     el.innerHTML = `
       <div class="thread-head">
         <span>Your thread</span>
         <span>
-          <span class="thread-anchor">${rangeLabel}</span>
+          <span class="thread-anchor">${escapeHtml(rangeLabel)}</span>
           <button class="thread-delete" title="Delete this thread">Delete</button>
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
-      <div class="thread-sub">${escapeHtml(t.snippet || '')}</div>
+      <div class="thread-sub">${escapeHtml(t.elementAnchor ? (t.breadcrumb || t.snippet || '') : (t.snippet || ''))}</div>
       <div class="thread-body">
         <div class="section-mini-label">Your notes</div>
         <div class="user-comment-list"></div>
@@ -3588,6 +3791,7 @@
     }
     threadEl.classList.add('open');
     const tid = threadEl.getAttribute('data-thread-id');
+    if (isHtmlFile()) postToPrototype('discuss:focus-thread', { threadId: tid });
     document.querySelectorAll('.thread-marker').forEach(m => m.classList.remove('active'));
     document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.add('active'));
     syncThreadActiveAnchors();
@@ -3648,6 +3852,11 @@
   function renderMarkers() {
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('[data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
+    if (isHtmlFile()) {
+      syncHtmlAnchors();
+      renderMetaStatus();
+      return;
+    }
 
     const threads = Array.from(threadsHost.querySelectorAll('.thread'));
     const byIdx = new Map();
@@ -3936,6 +4145,15 @@
     const pRightVPad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     const baseTarget = paneLeft.scrollHeight - paneRight.offsetTop - pRightVPad;
     const open = Array.from(threadsHost.querySelectorAll('.thread.open'));
+    if (isHtmlFile()) {
+      let top = 0;
+      open.forEach(thread => {
+        thread.style.top = `${top}px`;
+        top += thread.offsetHeight + 10;
+      });
+      threadsHost.style.minHeight = Math.max(top + 20, baseTarget) + 'px';
+      return;
+    }
     if (!open.length) {
       threadsHost.style.minHeight = Math.max(0, baseTarget) + 'px';
       return;
@@ -4216,6 +4434,151 @@
     newThreadEditor = editor;
   }
 
+  function selectorDraftAnchor(selector) {
+    let hash = 2166136261;
+    for (let index = 0; index < selector.length; index++) {
+      hash ^= selector.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0) || 1;
+  }
+
+  function openHtmlThreadEditor(selection) {
+    if (!isHtmlFile() || !selection) return;
+    const elementAnchor = normalizeElementAnchor(selection.anchor);
+    if (!elementAnchor) return;
+    const fileId = activeFileId;
+    closeNewThreadEditor();
+    const breadcrumb = typeof selection.breadcrumb === 'string' ? selection.breadcrumb : elementAnchor.selector;
+    const snippet = typeof selection.snippet === 'string' ? selection.snippet : (elementAnchor.textDigest || '');
+    const draftAnchor = selectorDraftAnchor(elementAnchor.selector);
+    activeNewThreadDraft = { anchorStart: draftAnchor, anchorEnd: draftAnchor, elementAnchor };
+
+    const editor = document.createElement('div');
+    editor.className = 'new-thread-editor html-thread-editor';
+    editor.innerHTML = `
+      <div class="anchor-ref">${escapeHtml(breadcrumb)}</div>
+      <textarea placeholder="Comment on this element… (Esc to cancel)"></textarea>
+      <div class="actions">
+        <button class="primary save">Save</button>
+        <button class="cancel">Cancel</button>
+        ${enterSendCheckboxHtml()}
+      </div>`;
+    threadsHost.appendChild(editor);
+    const openThreads = Array.from(threadsHost.querySelectorAll('.thread.open'));
+    const top = openThreads.reduce((bottom, thread) => Math.max(bottom, parseFloat(thread.style.top || 0) + thread.offsetHeight + 10), 0);
+    editor.style.top = `${top}px`;
+
+    const textarea = editor.querySelector('textarea');
+    const existingDraft = getNewThreadDraft(loadState(), draftAnchor, draftAnchor, fileId);
+    if (existingDraft && existingDraft.text) textarea.value = existingDraft.text;
+    textarea.focus();
+    if (textarea.value.length) textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    textarea.addEventListener('input', () => {
+      clearMutationError(editor);
+      setNewThreadDraft(draftAnchor, draftAnchor, textarea.value, fileId).catch(error => {
+        console.error('Failed to save element-thread draft:', error);
+        showDraftMutationError(editor, "couldn't save draft — retry?", () =>
+          setNewThreadDraft(draftAnchor, draftAnchor, textarea.value, fileId));
+      });
+    });
+
+    async function save() {
+      const text = textarea.value.trim();
+      if (!text) { closeNewThreadEditor(); return; }
+      clearMutationError(editor);
+      const previousState = cloneState(loadState());
+      const state = cloneState(previousState);
+      const id = 'pending-' + Date.now() + Math.random().toString(36).slice(2, 6);
+      const createdAt = new Date().toISOString();
+      const optimistic = {
+        id,
+        fileId,
+        anchorStart: 0,
+        anchorEnd: 0,
+        snippet,
+        breadcrumb,
+        text,
+        createdAt,
+        kind: 'user',
+        orphaned: false,
+        elementAnchor,
+      };
+      state.userThreads.push({ ...optimistic });
+      state.threads.push({ ...optimistic });
+      state.followups[id] = [{ text, addedAt: createdAt, kind: 'thread' }];
+      clearNewThreadDraft(state, draftAnchor, draftAnchor, fileId);
+      setCurrentState(state);
+      closeNewThreadEditor();
+      renderAllThreads();
+      const optimisticEl = document.querySelector(`.thread[data-thread-id="${id}"]`);
+      if (optimisticEl) openThread(optimisticEl, { scroll: false });
+      scheduleReposition();
+
+      try {
+        const created = await apiJson('/api/threads', {
+          body: {
+            fileId,
+            anchorStart: 0,
+            anchorEnd: 0,
+            snippet,
+            breadcrumb,
+            text,
+            elementAnchor,
+            sourceVersion: loadState().sourceVersion || 0,
+          },
+        });
+        try {
+          await persistNewThreadDraft(draftAnchor, draftAnchor, '', fileId);
+        } catch (draftError) {
+          console.error('Failed to clear element-thread draft:', draftError);
+        }
+        const serverId = String(created.id);
+        const serverCreatedAt = created.createdAt || createdAt;
+        const synced = cloneState(loadState());
+        const incoming = { ...optimistic, id: serverId, createdAt: serverCreatedAt,
+          elementAnchor: normalizeElementAnchor(created.elementAnchor) || elementAnchor };
+        synced.userThreads.forEach(thread => { if (String(thread.id) === id) Object.assign(thread, incoming); });
+        synced.threads.forEach(thread => { if (String(thread.id) === id) Object.assign(thread, incoming); });
+        moveThreadStateKey(synced, id, serverId);
+        setCurrentState(synced);
+        renderAllThreads();
+        const saved = document.querySelector(`.thread[data-thread-id="${serverId}"]`);
+        if (saved) openThread(saved, { scroll: false });
+      } catch (error) {
+        console.error('Failed to create element thread:', error);
+        setCurrentState(previousState);
+        if (activeFileId !== fileId) switchToFile(fileId);
+        renderAllThreads();
+        openHtmlThreadEditor(selection);
+        if (newThreadEditor) {
+          const restored = newThreadEditor.querySelector('textarea');
+          if (restored) restored.value = text;
+          showMutationError(newThreadEditor, "couldn't save — retry?", () =>
+            newThreadEditor?.querySelector('.save')?.click());
+        }
+      }
+    }
+
+    editor.querySelector('.save').addEventListener('click', save);
+    editor.querySelector('.cancel').addEventListener('click', () => {
+      const state = cloneState(loadState());
+      clearNewThreadDraft(state, draftAnchor, draftAnchor, fileId);
+      setCurrentState(state);
+      persistNewThreadDraft(draftAnchor, draftAnchor, '', fileId)
+        .then(closeNewThreadEditor)
+        .catch(error => showDraftMutationError(editor, "couldn't clear draft — retry?", () =>
+          persistNewThreadDraft(draftAnchor, draftAnchor, '', fileId)));
+    });
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); closeNewThreadEditor(); }
+      if (shouldSendOnKey(event)) { event.preventDefault(); save(); }
+    });
+    wireEnterSendCheckbox(editor);
+    newThreadEditor = editor;
+  }
+
   // ---------- Selection for multi-element range comments ----------
   function selectionRange() {
     const sel = window.getSelection();
@@ -4336,6 +4699,7 @@
     if (e.target.closest('#finish-review')) return;
     if (e.target.closest('#verdict-modal')) return;
     if (e.target.closest('#show-all')) return;
+    if (e.target.closest('#inspect-toggle')) return;
     if (e.target.closest('.thread-marker')) return;
     if (e.target.closest('.thread')) return;
     if (e.target.closest('.new-thread-editor')) return;
@@ -4377,6 +4741,15 @@
       if (newThreadEditor) { closeNewThreadEditor(); return; }
       if (!showAllBtn.classList.contains('on')) closeAllThreads();
     }
+  });
+
+  const inspectToggle = document.getElementById('inspect-toggle');
+  inspectToggle.addEventListener('click', () => setInspectMode(!inspectOn));
+  document.addEventListener('keydown', event => {
+    if (event.key.toLowerCase() !== 'i' || !isHtmlFile() || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target.closest('textarea, input, select, [contenteditable="true"]')) return;
+    event.preventDefault();
+    setInspectMode(!inspectOn);
   });
 
   // Show-all toggle
@@ -4822,9 +5195,11 @@
   hydrateState().then(() => {
     discussFiles = loadState().files || [];
     if (discussFiles.length) activeFileId = String(discussFiles[0].id);
+    if (isHtmlFile()) stashHtmlFrame(activeFileId);
+    activateFileUi();
     updateFinishReviewButtonLabel();
     initFileSidebar();
-    highlightCodeBlocks();
+    if (!isHtmlFile()) highlightCodeBlocks();
     renderAllThreads();
     scheduleReposition();
     startEventStream();

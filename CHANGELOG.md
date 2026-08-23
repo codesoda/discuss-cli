@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **HTML prototype review with element anchors** — `.html`/`.htm` inputs render in a sandboxed same-origin iframe with an Inspect toggle, hover outline, numbered markers, selector fallback/fuzzy reattachment, and the existing thread/reply/take lifecycle. Relative prototype assets are served through traversal-guarded per-file routes; served HTML receives a local `<base>` and inspector script while CSP meta tags are neutralized. HTML `thread.created` events and transcripts include `elementAnchor { selector, fallbacks, tag, textDigest?, outerHtml }`; `/api/anchors/resolve` persists detached status without emitting agent-facing stdout noise. Mixed-file switching keeps loaded prototype iframes alive. Root-absolute assets, closed shadow-root internals, and live file watching remain out of scope.
+
 ## [0.6.1] - 2026-08-03
 
 ### Changed

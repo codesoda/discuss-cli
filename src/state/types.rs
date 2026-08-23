@@ -20,6 +20,7 @@ pub fn default_file_id() -> FileId {
 pub enum FileKind {
     Markdown,
     Diff,
+    Html,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,6 +75,18 @@ pub struct LineRange {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ElementAnchor {
+    pub selector: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<String>,
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_digest: Option<String>,
+    pub outer_html: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Thread {
     pub id: ThreadId,
     #[serde(default = "default_file_id")]
@@ -92,6 +105,8 @@ pub struct Thread {
     /// conversation but no longer point at valid document offsets.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub orphaned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_anchor: Option<ElementAnchor>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -258,6 +273,7 @@ mod tests {
             kind: ThreadKind::User,
             line_range: None,
             orphaned: false,
+            element_anchor: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");
@@ -292,6 +308,7 @@ mod tests {
             kind: ThreadKind::User,
             line_range: Some(LineRange { start: 3, end: 5 }),
             orphaned: false,
+            element_anchor: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");
@@ -346,6 +363,29 @@ mod tests {
         assert_eq!(
             serde_json::to_value(FileKind::Diff).expect("serialize diff"),
             "diff"
+        );
+        assert_eq!(
+            serde_json::to_value(FileKind::Html).expect("serialize html"),
+            "html"
+        );
+    }
+
+    #[test]
+    fn element_anchor_round_trips_with_camel_case_keys() {
+        let anchor = ElementAnchor {
+            selector: "#pricing button".to_string(),
+            fallbacks: vec!["body > section:nth-child(2) > button".to_string()],
+            tag: "button".to_string(),
+            text_digest: Some("Buy now".to_string()),
+            outer_html: "<button>Buy now</button>".to_string(),
+        };
+        let value = serde_json::to_value(&anchor).expect("serialize element anchor");
+        assert_eq!(value["textDigest"], "Buy now");
+        assert_eq!(value["outerHtml"], "<button>Buy now</button>");
+        assert!(value.get("text_digest").is_none());
+        assert_eq!(
+            serde_json::from_value::<ElementAnchor>(value).expect("deserialize element anchor"),
+            anchor
         );
     }
 

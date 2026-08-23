@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discuss prototype example</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Acme Cloud</p>
+    <h1>Ship reliable software, faster.</h1>
+    <p class="lede">A small interactive fixture for trying element-anchored HTML review.</p>
+    <section id="pricing">
+      <article class="card" data-testid="starter-plan">
+        <h2>Starter</h2>
+        <p><strong>$19</strong> per month</p>
+        <button type="button" data-test="buy-starter">Buy now</button>
+      </article>
+      <article class="card featured" data-testid="team-plan">
+        <h2>Team</h2>
+        <p><strong>$49</strong> per month</p>
+        <button type="button" data-test="buy-team">Start trial</button>
+      </article>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('button').forEach(button => {
+      button.addEventListener('click', () => {
+        button.textContent = button.textContent === 'Selected' ? 'Buy now' : 'Selected';
+      });
+    });
+  </script>
+</body>
+</html>
