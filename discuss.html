@@ -3041,7 +3041,9 @@
     document.body.classList.toggle('html-file', isHtmlFile());
     if (!isHtmlFile()) setInspectMode(false);
     else {
-      postToPrototype('discuss:set-inspect', { on: inspectOn });
+      // HTML review starts ready to select: requiring a separate toggle made
+      // the prototype's own borders look like inactive selection affordances.
+      setInspectMode(true);
       syncHtmlAnchors();
     }
   }

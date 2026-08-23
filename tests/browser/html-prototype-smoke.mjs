@@ -104,13 +104,19 @@ await waitFor(
 const injectedScript = await evaluate(
   `document.querySelector('.prototype-frame').contentDocument.querySelector('script[src*="discuss-inspect"]')?.getAttribute('src')`,
 );
-if (injectedScript !== '/assets/discuss-inspect.js?v=2') {
+if (injectedScript !== '/assets/discuss-inspect.js?v=3') {
   throw new Error(`Inspector URL is not cache-busted: ${injectedScript}`);
 }
 
 const inspectButton = await center('#inspect-toggle');
-await click(inspectButton);
-await waitFor(`document.body.classList.contains('inspecting')`, 'Inspect mode');
+await waitFor(`document.body.classList.contains('inspecting')`, 'automatic Inspect mode');
+const inspectCursor = await waitFor(
+  `document.querySelector('.prototype-frame').contentDocument.documentElement.style.cursor === 'crosshair' && 'crosshair'`,
+  'inspector crosshair cursor',
+);
+if (inspectCursor !== 'crosshair') {
+  throw new Error(`Inspector did not expose its active crosshair cursor: ${inspectCursor}`);
+}
 
 const headingPoint = await framePoint('h1');
 await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...headingPoint });

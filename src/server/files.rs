@@ -148,7 +148,7 @@ fn prepare_html(source: &str, base_href: &str) -> String {
         html.insert_str(0, &base);
     }
 
-    let script = "<script src=\"/assets/discuss-inspect.js?v=2\"></script>";
+    let script = "<script src=\"/assets/discuss-inspect.js?v=3\"></script>";
     let lower = html.to_ascii_lowercase();
     if let Some(body_end) = lower.rfind("</body>") {
         html.insert_str(body_end, script);
@@ -217,7 +217,7 @@ mod tests {
             "/files/f-2/assets/",
         );
         assert!(html.contains("<head><base href=\"/files/f-2/assets/\">"));
-        assert!(html.contains("<script src=\"/assets/discuss-inspect.js?v=2\"></script></body>"));
+        assert!(html.contains("<script src=\"/assets/discuss-inspect.js?v=3\"></script></body>"));
     }
 
     #[test]

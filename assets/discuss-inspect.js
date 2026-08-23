@@ -31,6 +31,7 @@
   let inspectOn = false;
   let hovered = null;
   let scheduled = false;
+  let previousCursor = '';
 
   function post(type, detail = {}) {
     window.parent.postMessage({ type, ...detail }, parentOrigin);
@@ -278,7 +279,12 @@
     if (!message || typeof message.type !== 'string' || !message.type.startsWith('discuss:')) return;
     const payload = message.payload && typeof message.payload === 'object' ? message.payload : message;
     if (message.type === 'discuss:set-inspect') {
-      inspectOn = payload.on === true;
+      const nextInspectOn = payload.on === true;
+      if (nextInspectOn && !inspectOn) {
+        previousCursor = document.documentElement.style.cursor;
+      }
+      inspectOn = nextInspectOn;
+      document.documentElement.style.cursor = inspectOn ? 'crosshair' : previousCursor;
       if (!inspectOn) setOutline(null);
     } else if (message.type === 'discuss:resolve-anchors') {
       stableAnchors.clear();
