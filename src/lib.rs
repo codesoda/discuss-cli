@@ -4,7 +4,7 @@ use std::io::{self, Read};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::Utc;
 use clap::CommandFactory;
@@ -165,17 +165,15 @@ where
         .unwrap_or_default();
 
     let primary_source_path = inputs.iter().find_map(|input| input.source_path.clone());
-    let mut session_files: Vec<(String, FileKind, String)> = inputs
-        .into_iter()
-        .map(|input| (input.source_file, input.kind, input.markdown_source))
-        .collect();
+    let mut session_files = inputs;
     if let Some(output) = diff_output {
-        session_files.extend(
-            output
-                .files
-                .into_iter()
-                .map(|file| (file.path, FileKind::Diff, file.content)),
-        );
+        session_files.extend(output.files.into_iter().map(|file| FileInput {
+            content: file.content,
+            file_bytes: None,
+            source_path: None,
+            source_file: file.path,
+            kind: FileKind::Diff,
+        }));
     }
 
     let files_count = session_files.len();
@@ -186,19 +184,26 @@ where
     } else {
         session_files
             .first()
-            .map(|(path, _, _)| path.clone())
+            .map(|file| file.source_file.clone())
             .unwrap_or_else(|| "<stdin>".to_string())
     };
 
+    let mut file_bytes = HashMap::new();
     let source = Source {
         files: session_files
             .into_iter()
             .enumerate()
-            .map(|(idx, (path, kind, content))| File {
-                id: FileId(format!("f-{}", idx + 1)),
-                path,
-                kind,
-                content,
+            .map(|(idx, input)| {
+                let id = FileId(format!("f-{}", idx + 1));
+                if let Some(raw) = input.file_bytes {
+                    file_bytes.insert(id.clone(), raw);
+                }
+                File {
+                    id,
+                    path: input.source_file,
+                    kind: input.kind,
+                    content: input.content,
+                }
             })
             .collect(),
     };
@@ -209,6 +214,7 @@ where
 
     let mut app_state = AppState::for_process()
         .with_source(source)
+        .with_file_bytes(file_bytes)
         .with_verdict_config(verdict_config)
         .with_no_save(config.no_save)
         .with_idle_timeout_secs(config.idle_timeout_secs);
@@ -272,14 +278,15 @@ pub(crate) fn stdin_is_terminal() -> bool {
 }
 
 #[derive(Debug)]
-struct MarkdownInput {
-    markdown_source: String,
+struct FileInput {
+    content: String,
+    file_bytes: Option<(Vec<u8>, &'static str)>,
     source_path: Option<PathBuf>,
     source_file: String,
     kind: FileKind,
 }
 
-fn resolve_inputs(files: Vec<PathBuf>) -> Result<Option<Vec<MarkdownInput>>> {
+fn resolve_inputs(files: Vec<PathBuf>) -> Result<Option<Vec<FileInput>>> {
     if files.is_empty() {
         if stdin_is_terminal() {
             return Ok(None);
@@ -308,11 +315,19 @@ fn resolve_inputs(files: Vec<PathBuf>) -> Result<Option<Vec<MarkdownInput>>> {
             return Err(DiscussError::DuplicateInputPath { path });
         }
 
-        let markdown_source = read_markdown_file(&path)?;
         let source_file = source_file_for_event(&path);
         let kind = file_kind_for_path(&path);
-        inputs.push(MarkdownInput {
-            markdown_source,
+        let (content, file_bytes) = if kind == FileKind::Image {
+            (
+                String::new(),
+                Some((read_file_bytes(&path)?, image_mime_for_path(&path))),
+            )
+        } else {
+            (read_markdown_file(&path)?, None)
+        };
+        inputs.push(FileInput {
+            content,
+            file_bytes,
             source_path: Some(path),
             source_file,
             kind,
@@ -330,12 +345,29 @@ fn file_kind_for_path(path: &Path) -> FileKind {
         .as_deref()
     {
         Some("diff" | "patch") => FileKind::Diff,
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => FileKind::Image,
         Some("html" | "htm") => FileKind::Html,
         _ => FileKind::Markdown,
     }
 }
 
-fn read_markdown_stdin() -> Result<MarkdownInput> {
+fn image_mime_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
+fn read_markdown_stdin() -> Result<FileInput> {
     let mut markdown_source = String::new();
     io::stdin()
         .read_to_string(&mut markdown_source)
@@ -343,8 +375,9 @@ fn read_markdown_stdin() -> Result<MarkdownInput> {
             path: PathBuf::from("<stdin>"),
             source,
         })?;
-    Ok(MarkdownInput {
-        markdown_source,
+    Ok(FileInput {
+        content: markdown_source,
+        file_bytes: None,
         source_path: None,
         source_file: "<stdin>".to_string(),
         kind: FileKind::Markdown,
@@ -363,7 +396,15 @@ fn source_file_for_event(path: &Path) -> String {
 }
 
 fn read_markdown_file(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|source| match source.kind() {
+    fs::read_to_string(path).map_err(|source| map_file_read_error(path, source))
+}
+
+fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|source| map_file_read_error(path, source))
+}
+
+fn map_file_read_error(path: &Path, source: io::Error) -> DiscussError {
+    match source.kind() {
         io::ErrorKind::NotFound => DiscussError::FileNotFound {
             path: path.to_path_buf(),
         },
@@ -371,7 +412,7 @@ fn read_markdown_file(path: &Path) -> Result<String> {
             path: path.to_path_buf(),
             source,
         },
-    })
+    }
 }
 
 #[cfg(test)]
@@ -401,7 +442,8 @@ mod tests {
 
         assert_eq!(inputs.len(), 1);
         let input = &inputs[0];
-        assert_eq!(input.markdown_source, "# hello");
+        assert_eq!(input.content, "# hello");
+        assert!(input.file_bytes.is_none());
         assert_eq!(input.source_path.as_deref(), Some(path.as_path()));
         assert!(!input.source_file.is_empty());
         assert_ne!(input.source_file, "<stdin>");
@@ -438,7 +480,46 @@ mod tests {
         assert_eq!(inputs[2].kind, FileKind::Diff);
         assert_eq!(inputs[3].source_path.as_deref(), Some(prototype.as_path()));
         assert_eq!(inputs[3].kind, FileKind::Html);
-        assert_eq!(inputs[3].markdown_source, "<button>Buy</button>");
+        assert_eq!(inputs[3].content, "<button>Buy</button>");
+    }
+
+    #[test]
+    fn image_extensions_are_detected_case_insensitively_with_correct_mime_types() {
+        for (name, mime) in [
+            ("mockup.png", "image/png"),
+            ("photo.JPG", "image/jpeg"),
+            ("photo.jpeg", "image/jpeg"),
+            ("animation.gif", "image/gif"),
+            ("screen.webp", "image/webp"),
+            ("diagram.svg", "image/svg+xml"),
+        ] {
+            let path = Path::new(name);
+            assert_eq!(file_kind_for_path(path), FileKind::Image, "{name}");
+            assert_eq!(image_mime_for_path(path), mime, "{name}");
+        }
+    }
+
+    #[test]
+    fn resolve_inputs_loads_image_bytes_without_string_decoding() {
+        let temp_dir = tempdir().expect("tempdir");
+        let path = temp_dir.path().join("mockup.png");
+        let fixture = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff];
+        fs::write(&path, &fixture).expect("write image fixture");
+
+        let inputs = resolve_inputs(vec![path])
+            .expect("image path should resolve")
+            .expect("image path should yield input");
+        let input = &inputs[0];
+
+        assert_eq!(input.kind, FileKind::Image);
+        assert!(input.content.is_empty());
+        assert_eq!(
+            input
+                .file_bytes
+                .as_ref()
+                .map(|(bytes, mime)| (bytes, *mime)),
+            Some((&fixture, "image/png"))
+        );
     }
 
     #[test]

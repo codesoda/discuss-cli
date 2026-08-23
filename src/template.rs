@@ -350,6 +350,18 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_supports_image_pin_threads() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains("function normalizeImageAnchor(raw)"));
+        assert!(page.contains("function openImagePinEditor(imageAnchor)"));
+        assert!(page.contains("imageAnchor: { ...imageAnchor }"));
+        assert!(page.contains("function renderImagePins(state)"));
+        assert!(page.contains("className = 'image-pin-marker'"));
+        assert!(page.contains("`📍 Pin ${t.anchorStart}`"));
+    }
+
+    #[test]
     fn bundled_template_sends_thread_mutations_to_rest_api() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 

@@ -20,6 +20,7 @@ pub fn default_file_id() -> FileId {
 pub enum FileKind {
     Markdown,
     Diff,
+    Image,
     Html,
 }
 
@@ -73,6 +74,14 @@ pub struct LineRange {
     pub end: u32,
 }
 
+/// Image pin coordinates in basis points (0..=10000), where 10000 is 100%.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageAnchor {
+    pub x_pct: u16,
+    pub y_pct: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementAnchor {
@@ -93,6 +102,8 @@ pub struct Thread {
     pub file_id: FileId,
     pub anchor_start: usize,
     pub anchor_end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_anchor: Option<ImageAnchor>,
     pub snippet: String,
     pub breadcrumb: String,
     pub text: String,
@@ -266,6 +277,7 @@ mod tests {
             file_id: FileId("f-1".to_string()),
             anchor_start: 2,
             anchor_end: 4,
+            image_anchor: None,
             snippet: "selected text".to_string(),
             breadcrumb: "Overview > Goals".to_string(),
             text: "Needs clarification".to_string(),
@@ -288,10 +300,44 @@ mod tests {
         assert!(value.get("created_at").is_none());
         assert!(value.get("file_id").is_none());
         assert!(value.get("lineRange").is_none());
+        assert!(value.get("imageAnchor").is_none());
         assert!(value.get("orphaned").is_none());
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
         assert_eq!(round_tripped, thread);
+    }
+
+    #[test]
+    fn image_anchor_round_trips_with_camel_case_basis_points() {
+        let mut thread = Thread {
+            id: ThreadId("u-pin".to_string()),
+            file_id: FileId("f-2".to_string()),
+            anchor_start: 3,
+            anchor_end: 3,
+            image_anchor: Some(ImageAnchor {
+                x_pct: 4217,
+                y_pct: 1700,
+            }),
+            snippet: String::new(),
+            breadcrumb: "pin 3 at 42.17%,17%".to_string(),
+            text: "Align this edge".to_string(),
+            created_at: timestamp(),
+            kind: ThreadKind::User,
+            line_range: None,
+            orphaned: false,
+            element_anchor: None,
+        };
+
+        let value = serde_json::to_value(&thread).expect("serialize image thread");
+        assert_eq!(value["imageAnchor"], json!({ "xPct": 4217, "yPct": 1700 }));
+
+        let round_tripped: Thread =
+            serde_json::from_value(value).expect("deserialize image thread");
+        assert_eq!(round_tripped, thread);
+
+        thread.image_anchor = None;
+        let value = serde_json::to_value(thread).expect("serialize text thread");
+        assert!(value.get("imageAnchor").is_none());
     }
 
     #[test]
@@ -301,6 +347,7 @@ mod tests {
             file_id: FileId("f-1".to_string()),
             anchor_start: 7,
             anchor_end: 7,
+            image_anchor: None,
             snippet: "fn main() {}".to_string(),
             breadcrumb: String::new(),
             text: "Why is this here?".to_string(),
@@ -363,6 +410,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(FileKind::Diff).expect("serialize diff"),
             "diff"
+        );
+        assert_eq!(
+            serde_json::to_value(FileKind::Image).expect("serialize image"),
+            "image"
         );
         assert_eq!(
             serde_json::to_value(FileKind::Html).expect("serialize html"),

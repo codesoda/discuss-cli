@@ -1,18 +1,18 @@
 ---
 name: discuss
-description: Launch the discuss CLI on markdown, diff, or HTML prototype files (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
+description: Launch the discuss CLI on markdown, diff, image, or HTML prototype files (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
 # discuss — Interactive review session
 
-Open markdown, diffs, or HTML prototypes in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown, diffs, images, or HTML prototypes in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
 The source can be either a file on disk or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
 ## Arguments
 
-- `$ARGUMENTS` — A path (or paths) to Markdown, diff, or HTML prototype files, OR Markdown content to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
+- `$ARGUMENTS` — A path (or paths) to Markdown, diff, image, or HTML prototype files, OR Markdown content to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
 
 ### Stdin mode
 
@@ -35,6 +35,17 @@ discuss plan.md design.md notes.md
 - Every `thread.created` payload carries a `fileId`. When you create threads or push source updates in a multi-file session, `fileId` is **required** — omitting it returns `400 missing_file_id`.
 - Anchor indices are per-file (1-based commentable blocks within that file's document).
 - `session.started` gains `files_count`, and `source_file` becomes `multi-<N>-files`.
+
+### Image review mode
+
+Pass an image path directly, alone or mixed with text files:
+
+```
+discuss mockup.png
+discuss plan.md mockup.png
+```
+
+PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer drops numbered pins; image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%) and use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, read the image from the event's `fileId` path in `/api/state.files`, inspect the pinned region at those percentage coordinates, and post takes through the same `/api/threads/{id}/takes` endpoint. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
 
 ### Diff review mode
 
@@ -247,8 +258,8 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 
 ### `thread.created` (new thread opened by the user)
 
-1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `elementAnchor` from the payload.
-2. For markdown/diff threads, locate the anchored region using `snippet`. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
+1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` / `elementAnchor` from the payload.
+2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through `/api/state.files` and inspect `imageAnchor`'s percentage coordinates. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
 5. Post it as a **take**, not a reply (substitute the URL from `session.started`):
@@ -293,9 +304,10 @@ All endpoints at the `url` from `session.started`. Request/response is JSON.
 |---|---|---|---|
 | GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
 | GET | `/api/events` | — | SSE stream (alternative to stdout) |
+| GET | `/api/files/{fileId}/raw` | — | Startup-stable bytes for an image file |
 | GET | `/files/{fileId}` | — | Served HTML prototype document |
 | POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
-| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
+| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
@@ -324,7 +336,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 - `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, snippet, text, breadcrumb, elementAnchor?, createdAt}`; HTML anchors include selector fallbacks and `outerHtml` context
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
