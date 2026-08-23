@@ -1691,6 +1691,7 @@
   let inspectOn = false;
   const lastDetachedByFile = new Map();
   const pendingDetachedByFile = new Map();
+  let htmlThreadStateNeedsRender = false;
 
   function threadFileId(t) {
     return t && t.fileId ? String(t.fileId) : DEFAULT_FILE_ID;
@@ -2086,18 +2087,39 @@
     }
   }
 
+  function applyElementDetachment(state, fileId, detached) {
+    let changed = false;
+    const update = thread => {
+      if (threadFileId(thread) !== fileId || !thread.elementAnchor) return;
+      const orphaned = detached.has(String(thread.id));
+      if (thread.orphaned !== orphaned) {
+        thread.orphaned = orphaned;
+        changed = true;
+      }
+    };
+    (state.userThreads || []).forEach(update);
+    (state.threads || []).forEach(update);
+    return changed;
+  }
+
+  function renderElementThreadStateWhenSafe() {
+    if (newThreadEditor) {
+      htmlThreadStateNeedsRender = true;
+      renderMetaStatus();
+      return;
+    }
+    htmlThreadStateNeedsRender = false;
+    renderAllThreads();
+  }
+
   function applyAnchorsResolvedEvent(payload) {
     if (!payload || !payload.fileId) return;
     const fileId = String(payload.fileId);
     const detached = new Set((payload.detachedThreadIds || []).map(String));
     const state = cloneState(loadState());
-    const update = thread => {
-      if (threadFileId(thread) === fileId && thread.elementAnchor) thread.orphaned = detached.has(String(thread.id));
-    };
-    (state.userThreads || []).forEach(update);
-    (state.threads || []).forEach(update);
+    if (!applyElementDetachment(state, fileId, detached)) return;
     setCurrentState(state);
-    if (fileId === activeFileId) renderAllThreads();
+    if (fileId === activeFileId) renderElementThreadStateWhenSafe();
     else renderMetaStatus();
   }
 
@@ -3080,13 +3102,10 @@
       pendingDetachedByFile.set(fileId, key);
       const state = cloneState(loadState());
       const detachedSet = new Set(detached);
-      const update = thread => {
-        if (threadFileId(thread) === activeFileId && thread.elementAnchor) thread.orphaned = detachedSet.has(String(thread.id));
-      };
-      (state.userThreads || []).forEach(update);
-      (state.threads || []).forEach(update);
-      setCurrentState(state);
-      renderAllThreads();
+      if (applyElementDetachment(state, fileId, detachedSet)) {
+        setCurrentState(state);
+        renderElementThreadStateWhenSafe();
+      }
       apiJson('/api/anchors/resolve', {
         body: { fileId, detachedThreadIds: detached },
       }).then(() => {
@@ -4332,6 +4351,13 @@
     document.querySelectorAll('#doc-content [data-anchor-idx].focused').forEach(el => el.classList.remove('focused'));
     document.querySelectorAll('#doc-content [data-anchor-idx].in-range').forEach(el => el.classList.remove('in-range'));
     document.querySelectorAll('.line-numbers-rows > span.draft-active-line').forEach(span => span.classList.remove('draft-active-line'));
+    // Re-render deferred HTML detachment changes only after the editor is
+    // safely removed; resolver SSE echoes must never erase an in-flight draft.
+    if (htmlThreadStateNeedsRender) {
+      htmlThreadStateNeedsRender = false;
+      renderAllThreads();
+      return;
+    }
     // Re-render markers so a newly-stashed draft shows a teal marker in
     // the gutter, or a just-cleared draft disappears.
     if (hadEditor) renderMarkers();

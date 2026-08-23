@@ -96,6 +96,10 @@ await waitFor(
   `!!document.querySelector('.prototype-frame')?.contentDocument?.querySelector('h1')`,
   'prototype iframe load',
 );
+await waitFor(
+  `!!document.querySelector('.prototype-frame')?.contentDocument?.querySelector('[data-discuss-inspector]')`,
+  'injected inspector readiness',
+);
 
 const injectedScript = await evaluate(
   `document.querySelector('.prototype-frame').contentDocument.querySelector('script[src*="discuss-inspect"]')?.getAttribute('src')`,
@@ -124,6 +128,24 @@ const headingAnchor = await waitFor(
 );
 if (!headingAnchor.includes('h1') || !headingAnchor.includes('Ship reliable software')) {
   throw new Error(`Wrong heading selected: ${headingAnchor}`);
+}
+
+// Reproduce the resolver race that previously erased a freshly-opened editor:
+// an SSE echo with unchanged detachment state must leave the draft mounted.
+await fetch(`${discussUrl}/api/anchors/resolve`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ fileId: 'f-1', detachedThreadIds: [] }),
+});
+await new Promise(resolve => setTimeout(resolve, 300));
+const editorSurvivedResolverEcho = await evaluate(`(() => {
+  const editor = document.querySelector('.html-thread-editor');
+  if (!editor) return false;
+  const rect = editor.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight;
+})()`);
+if (!editorSurvivedResolverEcho) {
+  throw new Error('Element comment editor was removed by an anchors.resolved SSE echo');
 }
 await click(await center('.html-thread-editor .cancel'));
 await waitFor(`!document.querySelector('.html-thread-editor')`, 'heading editor close');
@@ -199,6 +221,7 @@ console.log(JSON.stringify({
   headingAnchor,
   ctaAnchor,
   savedSelector: saved.elementAnchor.selector,
+  editorSurvivedResolverEcho,
   markerReopenedThread: true,
   detachedAfterRemoval: true,
   screenshotPath,
