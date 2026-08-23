@@ -3785,6 +3785,13 @@
     threadEl.classList.remove('open', 'focused');
     const tid = threadEl.getAttribute('data-thread-id');
     document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"], .image-pin-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.remove('active'));
+    if (isHtmlFile()) {
+      const openThreads = Array.from(document.querySelectorAll('.thread.open'));
+      const remaining = openThreads[openThreads.length - 1];
+      postToPrototype('discuss:focus-thread', {
+        threadId: remaining ? remaining.getAttribute('data-thread-id') : null,
+      });
+    }
     syncThreadActiveAnchors();
     updateEmptyState();
   }

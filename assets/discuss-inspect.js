@@ -32,6 +32,8 @@
   let hovered = null;
   let scheduled = false;
   let previousCursor = '';
+  let focusedThreadId = null;
+  let focusedElement = null;
 
   function post(type, detail = {}) {
     window.parent.postMessage({ type, ...detail }, parentOrigin);
@@ -233,6 +235,11 @@
       marker.style.top = `${rect.top}px`;
       markersHost.appendChild(marker);
     });
+    if (focusedThreadId) {
+      focusedElement = resolvedElements.get(focusedThreadId) || null;
+      host.toggleAttribute('data-discuss-thread-focused', !!focusedElement);
+      if (!inspectOn) setOutline(focusedElement);
+    }
     post('discuss:anchors-resolved', { resolved, detached });
   }
 
@@ -285,7 +292,7 @@
       }
       inspectOn = nextInspectOn;
       document.documentElement.style.cursor = inspectOn ? 'crosshair' : previousCursor;
-      if (!inspectOn) setOutline(null);
+      if (!inspectOn) setOutline(focusedElement);
     } else if (message.type === 'discuss:resolve-anchors') {
       stableAnchors.clear();
       const anchors = Array.isArray(payload.anchors) ? payload.anchors : [];
@@ -294,14 +301,21 @@
       });
       scheduleResolve();
     } else if (message.type === 'discuss:focus-thread') {
-      const element = resolvedElements.get(String(payload.threadId));
-      if (!element) return;
-      element.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      setOutline(element);
+      focusedThreadId = payload.threadId == null ? null : String(payload.threadId);
+      focusedElement = focusedThreadId ? resolvedElements.get(focusedThreadId) || null : null;
+      host.toggleAttribute('data-discuss-thread-focused', !!focusedElement);
+      if (focusedThreadId) host.setAttribute('data-discuss-focused-thread', focusedThreadId);
+      else host.removeAttribute('data-discuss-focused-thread');
+      if (!focusedElement) {
+        if (!inspectOn) setOutline(null);
+        return;
+      }
+      focusedElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setOutline(focusedElement);
       outline.classList.remove('pulse');
       void outline.offsetWidth;
       outline.classList.add('pulse');
-      setTimeout(() => { if (!inspectOn) setOutline(null); }, 900);
+      setTimeout(() => outline.classList.remove('pulse'), 900);
     }
   });
 

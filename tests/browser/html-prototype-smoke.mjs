@@ -104,7 +104,7 @@ await waitFor(
 const injectedScript = await evaluate(
   `document.querySelector('.prototype-frame').contentDocument.querySelector('script[src*="discuss-inspect"]')?.getAttribute('src')`,
 );
-if (injectedScript !== '/assets/discuss-inspect.js?v=3') {
+if (injectedScript !== '/assets/discuss-inspect.js?v=4') {
   throw new Error(`Inspector URL is not cache-busted: ${injectedScript}`);
 }
 
@@ -205,6 +205,18 @@ await waitFor(`!document.querySelector('.element-thread').classList.contains('op
 await new Promise(resolve => setTimeout(resolve, 200));
 await click(await framePoint('[data-test="buy-team"]', 'marker'));
 await waitFor(`document.querySelector('.element-thread').classList.contains('open')`, 'in-frame marker click');
+await waitFor(
+  `document.querySelector('.prototype-frame').contentDocument.querySelector('[data-discuss-inspector]')?.getAttribute('data-discuss-focused-thread') === 'u-1'`,
+  'persistent element focus for open thread',
+);
+await new Promise(resolve => setTimeout(resolve, 1200));
+const focusRemainedAfterPulse = await evaluate(
+  `document.querySelector('.prototype-frame').contentDocument.querySelector('[data-discuss-inspector]')?.getAttribute('data-discuss-focused-thread') === 'u-1'`,
+);
+if (!focusRemainedAfterPulse) throw new Error('Open thread highlight disappeared after its pulse animation');
+const focusScreenshot = await send('Page.captureScreenshot', { format: 'png' });
+const focusScreenshotPath = screenshotPath.replace(/\.png$/i, '-focused.png');
+fs.writeFileSync(focusScreenshotPath, Buffer.from(focusScreenshot.data, 'base64'));
 
 // Removing the selected element must detach the thread through the resolver endpoint.
 await evaluate(`(() => {
@@ -229,7 +241,9 @@ console.log(JSON.stringify({
   savedSelector: saved.elementAnchor.selector,
   editorSurvivedResolverEcho,
   markerReopenedThread: true,
+  focusRemainedAfterPulse,
   detachedAfterRemoval: true,
   screenshotPath,
+  focusScreenshotPath,
 }));
 socket.close();
