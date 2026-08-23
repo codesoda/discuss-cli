@@ -1,5 +1,6 @@
 pub const MERMAID_JS: &str = include_str!("../assets/mermaid.min.js");
 pub const MERMAID_SHIM_JS: &str = include_str!("../assets/mermaid-shim.js");
+pub const DISCUSS_INSPECT_JS: &str = include_str!("../assets/discuss-inspect.js");
 
 pub fn mermaid_js() -> &'static str {
     MERMAID_JS
@@ -7,6 +8,10 @@ pub fn mermaid_js() -> &'static str {
 
 pub fn mermaid_shim_js() -> &'static str {
     MERMAID_SHIM_JS
+}
+
+pub fn discuss_inspect_js() -> &'static str {
+    DISCUSS_INSPECT_JS
 }
 
 #[cfg(test)]
@@ -36,6 +41,15 @@ mod tests {
         );
         assert!(shim.contains("if (markBlocks().length) ensureLoadedThenRender();"));
         assert!(shim.contains("window.__discussRenderMermaid"));
+    }
+
+    #[test]
+    fn inspector_asset_is_bundled_with_namespaced_messages() {
+        let inspector = discuss_inspect_js();
+        assert!(inspector.contains("discuss:ready"));
+        assert!(inspector.contains("discuss:element-selected"));
+        assert!(inspector.contains("discuss:resolve-anchors"));
+        assert!(inspector.contains("attachShadow({ mode: 'closed' })"));
     }
 
     #[test]

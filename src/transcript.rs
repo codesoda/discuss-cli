@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::state::{
-    FileId, FileMeta, ImageAnchor, LineRange, Reply, Resolution, Source, State, Take, ThreadId,
-    ThreadKind, default_file_id,
+    ElementAnchor, FileId, FileMeta, ImageAnchor, LineRange, Reply, Resolution, Source, State,
+    Take, ThreadId, ThreadKind, default_file_id,
 };
 use crate::verdict::Verdict;
 
@@ -40,6 +40,8 @@ pub struct TranscriptThread {
     pub kind: ThreadKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_range: Option<LineRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_anchor: Option<ElementAnchor>,
     pub replies: Vec<Reply>,
     pub takes: Vec<Take>,
     pub resolution: Option<Resolution>,
@@ -73,6 +75,7 @@ fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
             text: thread.text.clone(),
             kind: thread.kind.clone(),
             line_range: thread.line_range,
+            element_anchor: thread.element_anchor.clone(),
             replies: state.replies_for_thread(&thread.id),
             takes: state.takes_for_thread(&thread.id),
             resolution: state.resolution_for_thread(&thread.id),
@@ -133,6 +136,7 @@ mod tests {
             created_at: timestamp(anchor_start as u32),
             kind: ThreadKind::User,
             line_range: None,
+            element_anchor: None,
         }
     }
 
@@ -327,6 +331,24 @@ mod tests {
         let value = serde_json::to_value(&transcript).expect("serialize");
         assert_eq!(value["threads"][0]["lineRange"]["start"], 2);
         assert_eq!(value["threads"][0]["lineRange"]["end"], 4);
+    }
+
+    #[test]
+    fn transcript_preserves_element_anchor() {
+        let mut anchored = thread("u-html", 0, 0);
+        anchored.element_anchor = Some(ElementAnchor {
+            selector: "#buy".to_string(),
+            fallbacks: vec!["body > button".to_string()],
+            tag: "button".to_string(),
+            text_digest: Some("Buy".to_string()),
+            outer_html: "<button id=\"buy\">Buy</button>".to_string(),
+        });
+        let mut state = State::default();
+        state.add_thread(anchored);
+
+        let value = serde_json::to_value(build_transcript(&state)).expect("serialize transcript");
+        assert_eq!(value["threads"][0]["elementAnchor"]["selector"], "#buy");
+        assert_eq!(value["threads"][0]["elementAnchor"]["textDigest"], "Buy");
     }
 
     #[test]

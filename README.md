@@ -4,7 +4,7 @@
 
 <img src="docs/demo.gif" alt="Discuss CLI demo" width="100%">
 
-`discuss` opens any Markdown file (or piped stdin) in your browser with PR-style comment threads on every paragraph. Your Codex or Claude Code session reads your comments and replies in the margins — same terminal session, no copy-paste.
+`discuss` opens Markdown, diffs, and local HTML prototypes in your browser with anchored PR-style comment threads. Your Codex or Claude Code session reads your comments and replies in the margins — same terminal session, no copy-paste.
 
 Anchored. Threaded. Bidirectional. No cloud.
 
@@ -17,6 +17,7 @@ Markdown is how engineers share everything that isn't code — PRDs, design docs
 - **Inline anchored threads** — click any paragraph, drop a comment, get a threaded response.
 - **Multi-file sessions** — `discuss a.md b.md c.md` reviews several files in one session with a file sidebar.
 - **First-class diff review** — `discuss diff` opens the staged git diff with per-hunk syntax highlighting and line-anchored threads. Combines with the file list: `discuss plan.md diff HEAD~1..HEAD`.
+- **HTML prototype review** — `discuss prototype.html` renders the local prototype and its relative assets in a sandboxed iframe. Inspect mode anchors threads to DOM elements with resilient selector fallbacks.
 - **Syntax highlighting** — tag fenced code blocks with a language (e.g. ` ```rust `, ` ```diff-typescript `) for browser-side highlighting. See [Prism's supported languages](https://prismjs.com/#supported-languages) for the full set.
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. Rendered distinctly so you can tell who said what at a glance.
 - **Bidirectional** — the browser writes through a local REST API; the agent reads stdout events and writes back through the same API.
@@ -93,6 +94,18 @@ All files open in a single session with a left sidebar for switching between the
 
 `.diff` / `.patch` files in the list render as diff review sections automatically.
 
+### Reviewing an HTML prototype
+
+```sh
+discuss ./prototype.html
+```
+
+The prototype runs in a same-origin iframe sandboxed with `allow-scripts allow-same-origin`. Click **Inspect** (or press `I`), hover to outline an element, then click it to open a thread. Saved threads render as numbered in-frame markers; opening a thread scrolls the prototype back to its element. Selectors use stable ids/data attributes when available, structural fallbacks otherwise, and text similarity as a final reattachment fallback.
+
+Relative CSS, JavaScript, images, and fonts resolve from the HTML file's directory. Asset paths are canonicalized and cannot escape that directory. Root-absolute URLs such as `/img/logo.png` are not rewritten; use relative URLs. Served copies have CSP meta tags removed so the injected inspector can run. Closed shadow-root internals cannot be selected in v1 (anchor the host instead), and live file watching/reload is not included.
+
+See [`examples/prototype.html`](examples/prototype.html) for a small fixture.
+
 ### Reviewing a git diff
 
 ```sh
@@ -166,7 +179,10 @@ While the server is running:
 |--------|------|---------|
 | `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files, verdictConfig |
 | `GET` | `/api/events` | SSE event stream (browser UI) |
-| `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded) |
+| `GET` | `/files/{fileId}` | Served HTML prototype with inspector/base injection |
+| `GET` | `/files/{fileId}/assets/{path}` | Sandboxed relative prototype asset |
+| `POST` | `/api/anchors/resolve` | Report detached HTML element anchors |
+| `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded; HTML threads include `elementAnchor`) |
 | `POST` | `/api/threads/{id}/replies` | Add a **human** reply |
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread |
@@ -181,7 +197,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 | Kind | When |
 |------|------|
 | `session.started` | Server bound and listening |
-| `thread.created` | User opened a new thread |
+| `thread.created` | User opened a new thread; HTML threads include `elementAnchor {selector, fallbacks, tag, textDigest?, outerHtml}` |
 | `reply.added` | Human posted a reply |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |
 | `thread.deleted` | Soft-delete |

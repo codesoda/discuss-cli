@@ -215,6 +215,7 @@ mod tests {
             created_at: timestamp(0),
             kind: ThreadKind::User,
             line_range: None,
+            element_anchor: None,
         }
     }
 

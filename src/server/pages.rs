@@ -22,7 +22,10 @@ pub(super) async fn get_root(AxumState(app_state): AxumState<AppState>) -> Respo
     match render_root_page(&app_state) {
         Ok(page) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
             page,
         )
             .into_response(),
@@ -90,6 +93,13 @@ fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> Stri
                 .unwrap_or_default();
             format!(
                 "<div class=\"image-review\" data-file-id=\"{file_id}\"><img src=\"/api/files/{file_id}/raw{version}\" alt=\"{alt}\"><div class=\"pin-layer\"></div></div>"
+            )
+        }
+        FileKind::Html => {
+            let file_id = escape_html_attribute(&file.id.0);
+            let title = escape_html_attribute(&file.path);
+            format!(
+                "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
             )
         }
     }
@@ -195,4 +205,15 @@ pub(super) async fn get_mermaid_js() -> impl IntoResponse {
 
 pub(super) async fn get_mermaid_shim_js() -> impl IntoResponse {
     javascript_response(assets::mermaid_shim_js())
+}
+
+pub(super) async fn get_discuss_inspect_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        assets::discuss_inspect_js(),
+    )
 }

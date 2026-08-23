@@ -41,6 +41,11 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("content-type: text/html; charset=utf-8")
     );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store")
+    );
     assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
@@ -3111,6 +3116,274 @@ async fn drafts_with_same_anchors_on_different_files_coexist() {
         .expect("server shutdown should succeed");
 }
 
+fn html_source(html_path: &Path, content: &str, include_markdown: bool) -> discuss::state::Source {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    let mut files = vec![File {
+        id: FileId("f-1".to_string()),
+        path: html_path.to_string_lossy().into_owned(),
+        kind: FileKind::Html,
+        content: content.to_string(),
+    }];
+    if include_markdown {
+        files.push(File {
+            id: FileId("f-2".to_string()),
+            path: "notes.md".to_string(),
+            kind: FileKind::Markdown,
+            content: "# Notes".to_string(),
+        });
+    }
+    Source { files }
+}
+
+#[tokio::test]
+async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let html_path = temp_dir.path().join("prototype.html");
+    let css_path = temp_dir.path().join("styles.css");
+    fs::write(&html_path, "fixture lives in AppState").expect("write html fixture");
+    fs::write(&css_path, "button { color: red; }").expect("write css fixture");
+    fs::create_dir(temp_dir.path().join("pages")).expect("create nested pages directory");
+    fs::write(
+        temp_dir.path().join("pages/page2.html"),
+        "<html><body><link href=\"nested.css\"><a href=\"../prototype.html\">Back</a></body></html>",
+    )
+    .expect("write sibling HTML fixture");
+    fs::write(
+        temp_dir.path().join("pages/nested.css"),
+        "body { margin: 0; }",
+    )
+    .expect("write nested CSS fixture");
+    fs::write(temp_dir.path().join("secret.txt"), "inside root").expect("write text fixture");
+    let html = r#"<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="script-src 'none'"><link href="styles.css" rel="stylesheet"></head><body><button>Buy</button></body></html>"#;
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(html_source(&html_path, html, false));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let root = get_root(addr).await;
+    assert!(root.starts_with("HTTP/1.1 200"));
+    assert!(
+        root.contains(r#"class=\"prototype-frame\""#)
+            || root.contains(r#"class="prototype-frame""#)
+    );
+    assert!(root.contains(r#"src=\"/files/f-1\""#) || root.contains(r#"src="/files/f-1""#));
+    assert!(
+        root.contains(r#"sandbox=\"allow-scripts allow-same-origin\""#)
+            || root.contains(r#"sandbox="allow-scripts allow-same-origin""#)
+    );
+
+    let document = get_path(addr, "/files/f-1").await;
+    assert!(document.starts_with("HTTP/1.1 200"));
+    assert!(
+        document
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store")
+    );
+    let document_body = response_body(&document);
+    assert!(document_body.contains(r#"<base href="/files/f-1/assets/">"#));
+    assert!(
+        document_body.contains(r#"<script src="/assets/discuss-inspect.js?v=4"></script></body>"#)
+    );
+    assert!(
+        !document_body
+            .to_ascii_lowercase()
+            .contains("content-security-policy")
+    );
+
+    let css = get_path(addr, "/files/f-1/assets/styles.css").await;
+    assert!(css.starts_with("HTTP/1.1 200"));
+    assert!(
+        css.to_ascii_lowercase()
+            .contains("content-type: text/css; charset=utf-8")
+    );
+    assert_eq!(response_body(&css), "button { color: red; }");
+
+    let sibling = get_path(addr, "/files/f-1/assets/pages/page2.html").await;
+    assert!(sibling.starts_with("HTTP/1.1 200"));
+    assert!(response_body(&sibling).contains(r#"<base href="/files/f-1/assets/pages/">"#));
+    assert!(response_body(&sibling).contains("/assets/discuss-inspect.js"));
+    let nested_css = get_path(addr, "/files/f-1/assets/pages/nested.css").await;
+    assert!(nested_css.starts_with("HTTP/1.1 200"));
+
+    let inspector = get_path(addr, "/assets/discuss-inspect.js?v=4").await;
+    assert!(inspector.starts_with("HTTP/1.1 200"));
+    assert!(
+        inspector
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store")
+    );
+    assert!(response_body(&inspector).contains("discuss:element-selected"));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn html_asset_route_rejects_parent_and_symlink_escape() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let root = temp_dir.path().join("prototype");
+    fs::create_dir(&root).expect("create prototype root");
+    let html_path = root.join("prototype.html");
+    fs::write(&html_path, "fixture").expect("write html fixture");
+    let outside = temp_dir.path().join("outside.css");
+    fs::write(&outside, "secret").expect("write outside fixture");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, root.join("escape.css")).expect("create escape symlink");
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(html_source(
+        &html_path,
+        "<html><body>Prototype</body></html>",
+        false,
+    ));
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    for path in [
+        "/files/f-1/assets/%2e%2e%2foutside.css",
+        "/files/f-1/assets//etc/passwd",
+        #[cfg(unix)]
+        "/files/f-1/assets/escape.css",
+    ] {
+        let response = get_path(addr, path).await;
+        assert!(
+            response.starts_with("HTTP/1.1 404"),
+            "path {path}: {response}"
+        );
+    }
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn html_thread_creation_validates_serializes_and_reports_detachment() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let html_path = temp_dir.path().join("prototype.html");
+    fs::write(&html_path, "fixture").expect("write html fixture");
+    let state = State::new_shared();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state,
+        Arc::new(EventBus::new(32)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source(html_source(&html_path, "<button>Buy</button>", true));
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let missing = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"fileId":"f-1","anchorStart":0,"anchorEnd":0,"snippet":"Buy","text":"Too small"}"#,
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 400"), "response: {missing}");
+
+    let wrong_kind = post_json_path(
+        addr,
+        "/api/threads",
+        r##"{"fileId":"f-2","anchorStart":1,"anchorEnd":1,"snippet":"Notes","text":"No","elementAnchor":{"selector":"#buy","tag":"button","outerHtml":"<button>Buy</button>"}}"##,
+    )
+    .await;
+    assert!(
+        wrong_kind.starts_with("HTTP/1.1 400"),
+        "response: {wrong_kind}"
+    );
+
+    let long_html = format!("<button>{}</button>", "x".repeat(2200));
+    let created = post_json_path(
+        addr,
+        "/api/threads",
+        &json!({
+            "fileId": "f-1",
+            "anchorStart": 99,
+            "anchorEnd": 100,
+            "snippet": "Buy",
+            "breadcrumb": "body > button “Buy”",
+            "text": "Too small",
+            "elementAnchor": {
+                "selector": "#buy",
+                "fallbacks": ["body > button:nth-child(1)"],
+                "tag": "button",
+                "textDigest": "Buy",
+                "outerHtml": long_html,
+            }
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
+    let created_json = response_json(&created);
+    assert_eq!(created_json["elementAnchor"]["selector"], "#buy");
+
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["threads"][0]["anchorStart"], 0);
+    assert_eq!(snapshot["threads"][0]["anchorEnd"], 0);
+    assert_eq!(snapshot["threads"][0]["breadcrumb"], "body > button “Buy”");
+    assert_eq!(
+        snapshot["threads"][0]["elementAnchor"]["outerHtml"]
+            .as_str()
+            .unwrap()
+            .len(),
+        2048
+    );
+
+    let emitted =
+        String::from_utf8(stdout.lock().expect("stdout lock").clone()).expect("utf8 events");
+    let event: Value =
+        serde_json::from_str(emitted.lines().last().expect("thread event")).expect("event JSON");
+    assert_eq!(event["kind"], "thread.created");
+    assert_eq!(event["payload"]["elementAnchor"]["selector"], "#buy");
+
+    let detached = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"fileId":"f-1","detachedThreadIds":["u-1"]}"#,
+    )
+    .await;
+    assert!(detached.starts_with("HTTP/1.1 200"), "response: {detached}");
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["threads"][0]["orphaned"], true);
+
+    let resolved = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"fileId":"f-1","detachedThreadIds":[]}"#,
+    )
+    .await;
+    assert!(resolved.starts_with("HTTP/1.1 200"), "response: {resolved}");
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(snapshot["threads"][0].get("orphaned").is_none());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
@@ -3453,6 +3726,7 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         kind,
         line_range: None,
         orphaned: false,
+        element_anchor: None,
     }
 }
 

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::events::{Event, EventKind};
 use crate::sse::BroadcastEvent;
 use crate::state::{
-    FileId, FileKind, ImageAnchor, LineRange, Reply, Resolution, Take, Thread, ThreadId, ThreadKind,
+    ElementAnchor, FileId, FileKind, ImageAnchor, LineRange, Reply, Resolution, Take, Thread,
+    ThreadId, ThreadKind,
 };
 
 use super::app_state::AppState;
@@ -37,6 +38,10 @@ pub(super) struct CreateThreadRequest {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
+    breadcrumb: String,
+    #[serde(default)]
+    element_anchor: Option<ElementAnchor>,
+    #[serde(default)]
     line_range: Option<LineRange>,
     /// Optional optimistic-concurrency guard: when set, the thread is only
     /// created if the server's current source version matches, so anchors
@@ -53,6 +58,8 @@ pub(super) struct CreateThreadResponse {
     anchor_start: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_anchor: Option<ImageAnchor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    element_anchor: Option<ElementAnchor>,
     created_at: DateTime<Utc>,
 }
 
@@ -119,102 +126,192 @@ pub(super) async fn post_api_threads(
         Ok(file_id) => file_id,
         Err(error) => return *error,
     };
-    let Some(file_kind) = app_state.file_kind(&file_id) else {
-        return api_error_response(
-            StatusCode::NOT_FOUND,
-            "unknown_file",
-            format!("unknown fileId: {}", file_id.0),
-        );
-    };
+    // Tests and embedding callers may construct AppState without attaching a
+    // Source; retain the historical single-markdown-file default in that case.
+    let file_kind = app_state.file_kind(&file_id).unwrap_or(FileKind::Markdown);
 
-    let (text_anchor, image_anchor, snippet, text, line_range) = if file_kind == FileKind::Image {
-        let Some(image_anchor) = request.image_anchor else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "validation_error",
-                "imageAnchor is required for image files",
-            );
+    let (text_anchor, image_anchor, element_anchor, snippet, breadcrumb, text, line_range) =
+        match file_kind {
+            FileKind::Image => {
+                if request.element_anchor.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "elementAnchor is only valid for HTML files",
+                    );
+                }
+                let Some(image_anchor) = request.image_anchor else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "imageAnchor is required for image files",
+                    );
+                };
+                if image_anchor.x_pct > 10_000 || image_anchor.y_pct > 10_000 {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "imageAnchor coordinates must be between 0 and 10000 basis points",
+                    );
+                }
+                if request.line_range.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "lineRange is not supported for image files",
+                    );
+                }
+                let Some(_) = request.snippet else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `snippet`",
+                    );
+                };
+                let Some(text) = request.text else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `text`",
+                    );
+                };
+                (
+                    None,
+                    Some(image_anchor),
+                    None,
+                    String::new(),
+                    String::new(),
+                    text,
+                    None,
+                )
+            }
+            FileKind::Html => {
+                if request.image_anchor.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "imageAnchor is only valid for image files",
+                    );
+                }
+                let Some(mut anchor) = request.element_anchor else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "elementAnchor is required for HTML files",
+                    );
+                };
+                if anchor.selector.trim().is_empty()
+                    || anchor.tag.trim().is_empty()
+                    || anchor.outer_html.trim().is_empty()
+                {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "elementAnchor selector, tag, and outerHtml must not be empty",
+                    );
+                }
+                if request.line_range.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "lineRange is not supported for HTML files",
+                    );
+                }
+                let Some(snippet) = request.snippet else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `snippet`",
+                    );
+                };
+                let Some(text) = request.text else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `text`",
+                    );
+                };
+                truncate_utf8(&mut anchor.selector, 2 * 1024);
+                truncate_utf8(&mut anchor.tag, 128);
+                truncate_utf8(&mut anchor.outer_html, 2 * 1024);
+                if let Some(text_digest) = &mut anchor.text_digest {
+                    truncate_utf8(text_digest, 500);
+                }
+                anchor.fallbacks.truncate(16);
+                for fallback in &mut anchor.fallbacks {
+                    truncate_utf8(fallback, 2 * 1024);
+                }
+                (
+                    Some((0, 0)),
+                    None,
+                    Some(anchor),
+                    snippet,
+                    request.breadcrumb,
+                    text,
+                    None,
+                )
+            }
+            FileKind::Markdown | FileKind::Diff => {
+                if request.image_anchor.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "imageAnchor is only valid for image files",
+                    );
+                }
+                if request.element_anchor.is_some() {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "elementAnchor is only valid for HTML files",
+                    );
+                }
+                let Some(anchor_start) = request.anchor_start else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `anchorStart`",
+                    );
+                };
+                let Some(anchor_end) = request.anchor_end else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `anchorEnd`",
+                    );
+                };
+                if anchor_start == 0 || anchor_end < anchor_start {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "anchors must satisfy 1 <= anchorStart <= anchorEnd",
+                    );
+                }
+                let Some(snippet) = request.snippet else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `snippet`",
+                    );
+                };
+                let Some(text) = request.text else {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        "missing field `text`",
+                    );
+                };
+                (
+                    Some((anchor_start, anchor_end)),
+                    None,
+                    None,
+                    snippet,
+                    String::new(),
+                    text,
+                    request.line_range,
+                )
+            }
         };
-        if image_anchor.x_pct > 10_000 || image_anchor.y_pct > 10_000 {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "validation_error",
-                "imageAnchor coordinates must be between 0 and 10000 basis points",
-            );
-        }
-        if request.line_range.is_some() {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "validation_error",
-                "lineRange is not supported for image files",
-            );
-        }
-        let Some(_) = request.snippet else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `snippet`",
-            );
-        };
-        let Some(text) = request.text else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `text`",
-            );
-        };
-        (None, Some(image_anchor), String::new(), text, None)
-    } else {
-        if request.image_anchor.is_some() {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "validation_error",
-                "imageAnchor is only valid for image files",
-            );
-        }
-        let Some(anchor_start) = request.anchor_start else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `anchorStart`",
-            );
-        };
-        let Some(anchor_end) = request.anchor_end else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `anchorEnd`",
-            );
-        };
-        if anchor_start == 0 || anchor_end < anchor_start {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "validation_error",
-                "anchors must satisfy 1 <= anchorStart <= anchorEnd",
-            );
-        }
-        let Some(snippet) = request.snippet else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `snippet`",
-            );
-        };
-        let Some(text) = request.text else {
-            return api_error_response(
-                StatusCode::BAD_REQUEST,
-                "bad_request",
-                "missing field `text`",
-            );
-        };
-        (
-            Some((anchor_start, anchor_end)),
-            None,
-            snippet,
-            text,
-            request.line_range,
-        )
-    };
 
     let created_at = Utc::now();
     let thread = {
@@ -247,8 +344,8 @@ pub(super) async fn post_api_threads(
                 ),
             )
         } else {
-            let (anchor_start, anchor_end) = text_anchor.expect("validated text anchors");
-            (anchor_start, anchor_end, String::new())
+            let (anchor_start, anchor_end) = text_anchor.expect("validated anchors");
+            (anchor_start, anchor_end, breadcrumb)
         };
         let thread = Thread {
             id: app_state.next_user_thread_id(),
@@ -263,6 +360,7 @@ pub(super) async fn post_api_threads(
             kind: ThreadKind::User,
             line_range,
             orphaned: false,
+            element_anchor,
         };
         state.add_thread(thread.clone());
         thread
@@ -302,9 +400,21 @@ pub(super) async fn post_api_threads(
         file_id,
         anchor_start: thread.anchor_start,
         image_anchor: thread.image_anchor,
+        element_anchor: thread.element_anchor,
         created_at,
     })
     .into_response()
+}
+
+fn truncate_utf8(value: &mut String, max_bytes: usize) {
+    if value.len() <= max_bytes {
+        return;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
 }
 
 fn format_basis_points(value: u16) -> String {

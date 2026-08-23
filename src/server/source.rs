@@ -132,11 +132,14 @@ pub(super) async fn post_api_source(
         Ok(file_id) => file_id,
         Err(error) => return *error,
     };
-    if app_state.file_kind(&file_id) == Some(FileKind::Image) {
+    if matches!(
+        app_state.file_kind(&file_id),
+        Some(FileKind::Image | FileKind::Html)
+    ) {
         return api_error_response(
             StatusCode::BAD_REQUEST,
             "validation_error",
-            "live source updates are not supported for image files",
+            "live source updates are not supported for image or HTML files",
         );
     }
 

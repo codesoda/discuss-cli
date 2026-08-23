@@ -167,6 +167,16 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    pub(super) fn file(&self, file_id: &FileId) -> Option<File> {
+        self.source.read().ok().and_then(|source| {
+            source
+                .files
+                .iter()
+                .find(|file| &file.id == file_id)
+                .cloned()
+        })
+    }
+
     pub(super) fn files_count(&self) -> usize {
         self.source
             .read()

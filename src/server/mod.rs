@@ -3,9 +3,11 @@
 //! Route handlers live in focused submodules (`source`, `threads`, `drafts`,
 //! `done`, `pages`) and share the helpers defined here.
 
+mod anchors;
 mod app_state;
 mod done;
 mod drafts;
+mod files;
 mod pages;
 mod response;
 mod source;
@@ -35,14 +37,16 @@ use crate::{DiscussError, Result};
 
 pub use app_state::AppState;
 
+use anchors::post_api_anchors_resolve;
 use done::post_api_done;
 use drafts::{
     delete_api_drafts_followup, delete_api_drafts_new_thread, post_api_drafts_followup,
     post_api_drafts_new_thread,
 };
+use files::{get_html_asset, get_html_file};
 use pages::{
-    get_api_events, get_api_file_raw, get_api_state, get_mermaid_js, get_mermaid_shim_js, get_root,
-    post_api_heartbeat,
+    get_api_events, get_api_file_raw, get_api_state, get_discuss_inspect_js, get_mermaid_js,
+    get_mermaid_shim_js, get_root, post_api_heartbeat,
 };
 use response::{api_error_response, not_found};
 use source::post_api_source;
@@ -178,6 +182,7 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_drafts_followup).delete(delete_api_drafts_followup),
         )
         .route("/api/source", post(post_api_source))
+        .route("/api/anchors/resolve", post(post_api_anchors_resolve))
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
@@ -188,8 +193,11 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_thread_unresolve),
         )
         .route("/api/done", post(post_api_done))
+        .route("/files/{id}", get(get_html_file))
+        .route("/files/{id}/assets/{*path}", get(get_html_asset))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
+        .route("/assets/discuss-inspect.js", get(get_discuss_inspect_js))
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             reject_during_shutdown,
