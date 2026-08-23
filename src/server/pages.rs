@@ -22,7 +22,10 @@ pub(super) async fn get_root(AxumState(app_state): AxumState<AppState>) -> Respo
     match render_root_page(&app_state) {
         Ok(page) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
             page,
         )
             .into_response(),

@@ -41,6 +41,11 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("content-type: text/html; charset=utf-8")
     );
+    assert!(
+        response
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store")
+    );
     assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
