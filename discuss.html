@@ -203,6 +203,55 @@
   }
   header h1 { margin: 0; font-size: 16px; font-weight: 600; }
   header .meta { color: var(--muted); font-size: 13px; }
+  header .thread-summary { position: relative; }
+  header .thread-summary-toggle {
+    font: inherit;
+    color: inherit;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+  }
+  header .thread-summary-toggle:hover,
+  header .thread-summary-toggle[aria-expanded="true"] { background: var(--accent-hover); color: var(--ink); }
+  header .thread-summary-popover {
+    position: absolute;
+    top: calc(100% + 12px);
+    left: 0;
+    width: min(380px, calc(100vw - 32px));
+    max-height: min(480px, calc(100vh - var(--header-h) - 24px));
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    z-index: 110;
+  }
+  header .thread-summary-popover[hidden] { display: none; }
+  header .thread-summary-item {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  header .thread-summary-item:hover,
+  header .thread-summary-item:focus-visible { background: var(--accent-hover); outline: none; }
+  header .thread-summary-title,
+  header .thread-summary-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .thread-summary-title { font-weight: 600; }
+  header .thread-summary-preview { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+  header .thread-summary-status { color: var(--pending-dark); font-size: 12px; }
+  header .thread-summary-status.resolved { color: var(--ok-ink); }
   header .spacer { flex: 1; }
   header .toggle {
     font: inherit;
@@ -1507,7 +1556,7 @@
 
 <header>
   <h1>Contextual Discussion</h1>
-  <span class="meta" id="meta-status">Loading…</span>
+  <div class="meta thread-summary" id="meta-status">Loading…</div>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
@@ -3879,14 +3928,59 @@
       segments.push(isImageFile() ? 'Click the image to drop a pin' : 'Click any element · drag-select for multi-element');
       if (draftSeg) segments.push(draftSeg);
     } else {
-      segments.push(`<b>${resolvedCount} of ${totalThreads}</b> resolved`);
+      segments.push(`<button class="thread-summary-toggle" id="thread-summary-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="thread-summary-popover"><b>${resolvedCount} of ${totalThreads}</b> resolved</button>`);
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
       if (openPending) segments.push(`<span class="meta-stat-pending">${openPending} pending discussion</span>`);
       if (draftSeg) segments.push(draftSeg);
       segments.push('click a marker to open');
     }
     el.innerHTML = segments.join(' · ');
+    if (totalThreads > 0) {
+      const popover = document.createElement('div');
+      popover.className = 'thread-summary-popover';
+      popover.id = 'thread-summary-popover';
+      popover.hidden = true;
+      popover.setAttribute('role', 'region');
+      popover.setAttribute('aria-label', 'Threads');
+      popover.innerHTML = threadSummaryEntries(state).map(entry => `
+        <button class="thread-summary-item" type="button" data-thread-id="${escapeHtml(entry.id)}" data-file-id="${escapeHtml(entry.fileId)}">
+          <span class="thread-summary-title">${escapeHtml(entry.title)}</span>
+          <span class="thread-summary-status${entry.resolved ? ' resolved' : ''}">${entry.resolved ? 'Resolved' : escapeHtml(entry.status)}</span>
+          <span class="thread-summary-preview">${escapeHtml(entry.preview)}</span>
+        </button>
+      `).join('');
+      el.appendChild(popover);
+    }
     updateFileSidebar();
+  }
+  function threadSummaryEntries(state) {
+    const resolvedIds = new Set(Object.keys(state.resolutions || {}).map(String));
+    const fileOrder = new Map((discussFiles || []).map((file, index) => [String(file.id), index]));
+    const entries = prepopulated.map((thread, index) => ({
+      id: String(thread.id),
+      fileId: thread.fileId ? String(thread.fileId) : DEFAULT_FILE_ID,
+      anchor: Number.isFinite(Number(thread.anchorIdx)) ? Number(thread.anchorIdx) : Number.MAX_SAFE_INTEGER,
+      order: index,
+      title: thread.index != null ? `Comment ${thread.index}` : 'Comment',
+      preview: thread.userComment || thread.subtitle || String(thread.take || '').replace(/<[^>]+>/g, '') || '(no preview)',
+      status: thread.pending ? 'Pending discussion' : 'Awaiting resolve',
+      resolved: resolvedIds.has(String(thread.id)),
+    }));
+    (state.userThreads || []).forEach((thread, index) => entries.push({
+      id: String(thread.id),
+      fileId: threadFileId(thread),
+      anchor: thread.orphaned ? Number.MAX_SAFE_INTEGER : thread.anchorStart,
+      order: prepopulated.length + index,
+      title: thread.imageAnchor ? `📍 Pin ${thread.anchorStart}` : 'Your thread',
+      preview: thread.imageAnchor ? (thread.text || '(no preview)') : (thread.snippet || thread.text || (thread.orphaned ? 'Orphaned from the current document' : '(no preview)')),
+      status: thread.orphaned ? 'Open · orphaned' : 'Open',
+      resolved: resolvedIds.has(String(thread.id)),
+    }));
+    return entries.sort((a, b) =>
+      (fileOrder.get(a.fileId) ?? Number.MAX_SAFE_INTEGER) - (fileOrder.get(b.fileId) ?? Number.MAX_SAFE_INTEGER)
+      || a.anchor - b.anchor
+      || a.order - b.order
+    );
   }
   function countLiveDrafts(state) {
     const nt = Object.values(state.drafts.newThread || {})
@@ -3897,6 +3991,14 @@
   }
   function closeAllThreads() {
     document.querySelectorAll('.thread.open').forEach(t => closeThread(t));
+  }
+  function jumpToThread(threadId, fileId) {
+    if (fileId !== activeFileId) switchToFile(fileId);
+    requestAnimationFrame(() => {
+      const thread = Array.from(document.querySelectorAll('.thread'))
+        .find(item => item.getAttribute('data-thread-id') === threadId);
+      if (thread) openThread(thread);
+    });
   }
   function openThread(threadEl, { scroll = true } = {}) {
     if (!showAllBtn.classList.contains('on')) {
@@ -5011,6 +5113,7 @@
     if (e.target.closest('#verdict-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('#inspect-toggle')) return;
+    if (e.target.closest('#meta-status')) return;
     if (e.target.closest('.thread-marker')) return;
     if (e.target.closest('.image-pin-marker')) return;
     if (e.target.closest('.thread')) return;
@@ -5388,6 +5491,43 @@
       lineRange: { start: lineNumber, end: lineNumber },
     });
   }, true);
+
+  // ---------- Thread summary ----------
+  function closeThreadSummary({ restoreFocus = false } = {}) {
+    const popover = document.getElementById('thread-summary-popover');
+    const toggle = document.getElementById('thread-summary-toggle');
+    if (!popover || popover.hidden) return;
+    popover.hidden = true;
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+      if (restoreFocus) toggle.focus();
+    }
+  }
+  document.getElementById('meta-status').addEventListener('click', (event) => {
+    const item = event.target.closest('.thread-summary-item');
+    if (item) {
+      event.stopPropagation();
+      const threadId = item.getAttribute('data-thread-id');
+      const fileId = item.getAttribute('data-file-id');
+      closeThreadSummary();
+      jumpToThread(threadId, fileId);
+      return;
+    }
+    const toggle = event.target.closest('.thread-summary-toggle');
+    if (!toggle) return;
+    event.stopPropagation();
+    const popover = document.getElementById('thread-summary-popover');
+    if (!popover) return;
+    popover.hidden = !popover.hidden;
+    toggle.setAttribute('aria-expanded', popover.hidden ? 'false' : 'true');
+    if (!popover.hidden) popover.querySelector('.thread-summary-item')?.focus();
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('#meta-status')) closeThreadSummary();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeThreadSummary({ restoreFocus: true });
+  });
 
   // ---------- Theme toggle ----------
   const THEME_STORAGE_KEY = 'discuss-theme';
