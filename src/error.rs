@@ -21,7 +21,9 @@ pub enum DiscussError {
         source: io::Error,
     },
 
-    #[error("port {port} is already in use - pass --port <N> or stop the other instance")]
+    #[error(
+        "port {port} is already in use - choose another explicit port, clear the port override for OS assignment, or stop the other instance"
+    )]
     PortInUse { port: u16 },
 
     #[error(
@@ -41,7 +43,7 @@ pub enum DiscussError {
     },
 
     #[error(
-        "server bind error at {addr}: {source} - pass --port <N> or check local networking permissions"
+        "server bind error at {addr}: {source} - check the requested address and local networking permissions"
     )]
     ServerBindError {
         addr: SocketAddr,
@@ -121,7 +123,12 @@ mod tests {
     fn port_in_use_message_names_port_and_suggestion() {
         assert_display_contains(
             DiscussError::PortInUse { port: 7777 },
-            &["port 7777", "already in use", "pass --port <N>"],
+            &[
+                "port 7777",
+                "already in use",
+                "choose another explicit port",
+                "clear the port override",
+            ],
         );
     }
 
@@ -170,7 +177,8 @@ mod tests {
                 "server bind error",
                 "127.0.0.1:7777",
                 "address already in use",
-                "pass --port <N>",
+                "check the requested address",
+                "local networking permissions",
             ],
         );
     }

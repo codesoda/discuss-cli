@@ -14,7 +14,7 @@ use discuss::state::{
 };
 use discuss::{
     AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript,
-    VerdictConfig, VerdictOption, VerdictStyle, serve, serve_with_ready,
+    VerdictConfig, VerdictOption, VerdictStyle, bind_loopback_listeners, serve, serve_with_ready,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2215,11 +2215,11 @@ async fn rejects_non_loopback_bind_addr() {
 
 #[tokio::test]
 async fn serve_with_ready_reports_listener_address_after_bind() {
-    let addr = free_loopback_addr();
+    let requested_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
     let (ready_tx, ready_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(serve_with_ready(
-        addr,
+        requested_addr,
         AppState::for_process(),
         async move {
             let _ = shutdown_rx.await;
@@ -2235,7 +2235,11 @@ async fn serve_with_ready_reports_listener_address_after_bind() {
         .await
         .expect("ready callback should run")
         .expect("ready callback should send address");
-    assert_eq!(listening_addr, addr);
+    assert_eq!(listening_addr.ip(), Ipv4Addr::LOCALHOST);
+    assert_ne!(listening_addr.port(), 0);
+
+    let response = get_path(listening_addr, "/api/state").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2243,6 +2247,26 @@ async fn serve_with_ready_reports_listener_address_after_bind() {
         .expect("server exits within timeout")
         .expect("server task should not panic")
         .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn partial_bind_failure_releases_previously_bound_listeners() {
+    let first_addr = free_loopback_addr();
+    let occupied = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("bind deliberately occupied listener");
+    let occupied_addr = occupied.local_addr().expect("occupied listener addr");
+
+    let error = bind_loopback_listeners(&[first_addr, occupied_addr])
+        .await
+        .expect_err("second bind should fail");
+    assert!(matches!(
+        error,
+        DiscussError::PortInUse { port } if port == occupied_addr.port()
+    ));
+
+    let rebound = StdTcpListener::bind(first_addr)
+        .expect("first listener should be released after partial bind failure");
+    assert_eq!(rebound.local_addr().expect("rebound addr"), first_addr);
 }
 
 #[tokio::test]

@@ -46,7 +46,8 @@ fn cli_busy_port_exits_three_and_reports_port() {
 
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
     assert!(stderr.contains(&format!("port {busy_port}")));
-    assert!(stderr.contains("pass --port <N>"));
+    assert!(stderr.contains("choose another explicit port"));
+    assert!(stderr.contains("clear the port override"));
     assert!(stderr.contains("stop the other instance"));
 }
 
@@ -77,7 +78,7 @@ fn cli_no_open_logs_listening_url_to_stderr() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -138,7 +139,7 @@ fn cli_emits_single_session_started_event_after_listening() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let output = kill_and_collect(child);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
@@ -151,13 +152,72 @@ fn cli_emits_single_session_started_event_after_listening() {
     let event = &events[0];
     assert_eq!(event["kind"], "session.started");
     assert_rfc3339(event["at"].as_str().expect("event at should be a string"));
-    assert_eq!(event["payload"]["url"], format!("http://127.0.0.1:{port}"));
+    let base_url = format!("http://127.0.0.1:{port}");
+    assert_eq!(event["payload"]["url"], base_url);
+    assert_eq!(event["payload"]["apiBaseUrl"], base_url);
+    assert!(event["payload"].get("proxyUrl").is_none());
+    assert_endpoint_contract(&event["payload"], &base_url);
     assert_eq!(event["payload"]["source_file"], source_file);
     assert_rfc3339(
         event["payload"]["started_at"]
             .as_str()
             .expect("started_at should be a string"),
     );
+}
+
+#[test]
+fn concurrent_sessions_use_distinct_reported_endpoints_without_state_leakage() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n\nBody paragraph.\n")
+        .expect("markdown file should be written");
+
+    let mut first = spawn_dynamic_session(temp_dir.path(), &home_dir, &markdown_path);
+    let mut second = spawn_dynamic_session(temp_dir.path(), &home_dir, &markdown_path);
+    let first_started = receive_startup(&first, "first");
+    let second_started = receive_startup(&second, "second");
+
+    let first_base = startup_base_url(&first_started);
+    let second_base = startup_base_url(&second_started);
+    assert_ne!(first_base, second_base);
+    assert_startup_contract(&first, &first_started, &first_base);
+    assert_startup_contract(&second, &second_started, &second_base);
+
+    let first_state = create_thread_and_take(&first_started, "first question", "first take");
+    let second_state = create_thread_and_take(&second_started, "second question", "second take");
+
+    assert_eq!(first_state["threads"][0]["text"], "first question");
+    assert_eq!(first_state["takes"]["u-1"][0]["text"], "first take");
+    assert_eq!(second_state["threads"][0]["text"], "second question");
+    assert_eq!(second_state["takes"]["u-1"][0]["text"], "second take");
+
+    for (session, started) in [(&mut first, &first_started), (&mut second, &second_started)] {
+        let done_url = started["payload"]["endpoints"]["done"]
+            .as_str()
+            .expect("done endpoint should be a string");
+        let response = http_request_url(done_url, "POST", None);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let output = wait_with_timeout(
+            session
+                .child
+                .take()
+                .expect("session child should be present"),
+            Duration::from_secs(2),
+        );
+        assert_eq!(output.status.code(), Some(0));
+    }
+}
+
+#[test]
+fn cli_env_port_collision_exits_three_without_startup_event() {
+    assert_explicit_port_collision(PortSource::Environment);
+}
+
+#[test]
+fn cli_project_config_port_collision_exits_three_without_startup_event() {
+    assert_explicit_port_collision(PortSource::ProjectConfig);
 }
 
 #[test]
@@ -200,7 +260,7 @@ fn cli_history_dir_flag_overrides_config_history_dir_and_writes_archive() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let response = post_done(port);
     assert!(
@@ -251,7 +311,7 @@ fn cli_no_save_flag_suppresses_history_archive() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let response = post_done(port);
     assert!(
@@ -296,6 +356,215 @@ fn cli_bad_verdict_options_exits_two_and_reports_message() {
     assert!(stderr.contains("at least 2 options"));
 }
 
+struct RunningSession {
+    child: Option<Child>,
+    stdout: mpsc::Receiver<io::Result<String>>,
+    stderr: mpsc::Receiver<io::Result<String>>,
+}
+
+fn spawn_dynamic_session(cwd: &Path, home: &Path, markdown: &Path) -> RunningSession {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--no-save")
+        .arg(markdown)
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env_remove("DISCUSS_LOG")
+        .env_remove("DISCUSS_PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn discuss binary");
+
+    let stdout = read_all_lines(child.stdout.take().expect("stdout pipe should be present"));
+    let stderr = read_all_lines(child.stderr.take().expect("stderr pipe should be present"));
+
+    RunningSession {
+        child: Some(child),
+        stdout,
+        stderr,
+    }
+}
+
+fn receive_startup(session: &RunningSession, label: &str) -> Value {
+    let line = session
+        .stdout
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_else(|error| panic!("{label} session should emit session.started: {error}"))
+        .expect("stdout line should be readable");
+    serde_json::from_str(&line).expect("startup line should be JSON")
+}
+
+fn startup_base_url(started: &Value) -> String {
+    started["payload"]["apiBaseUrl"]
+        .as_str()
+        .expect("apiBaseUrl should be a string")
+        .to_string()
+}
+
+fn assert_startup_contract(session: &RunningSession, started: &Value, base_url: &str) {
+    assert_eq!(started["kind"], "session.started");
+    assert_eq!(started["payload"]["url"], base_url);
+    assert!(started["payload"].get("proxyUrl").is_none());
+    assert_endpoint_contract(&started["payload"], base_url);
+
+    let stderr = session
+        .stderr
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stderr should report the bound URL")
+        .expect("stderr line should be readable");
+    assert_eq!(stderr, format!("review UI/API: {base_url}"));
+}
+
+fn assert_endpoint_contract(payload: &Value, base_url: &str) {
+    assert_eq!(
+        payload["endpoints"],
+        serde_json::json!({
+            "state": format!("{base_url}/api/state"),
+            "events": format!("{base_url}/api/events"),
+            "createThread": format!("{base_url}/api/threads"),
+            "addTakeTemplate": format!("{base_url}/api/threads/{{threadId}}/takes"),
+            "done": format!("{base_url}/api/done"),
+        })
+    );
+    assert_eq!(
+        payload["agentInstructions"],
+        serde_json::json!([
+            "Use payload.endpoints; do not assume port 7777.",
+            "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+            "Stop when session.done is received."
+        ])
+    );
+}
+
+fn create_thread_and_take(started: &Value, question: &str, take: &str) -> Value {
+    let endpoints = &started["payload"]["endpoints"];
+    let create_url = endpoints["createThread"]
+        .as_str()
+        .expect("createThread endpoint should be a string");
+    let create_body = serde_json::json!({
+        "anchorStart": 1,
+        "anchorEnd": 1,
+        "snippet": "Review",
+        "text": question,
+    })
+    .to_string();
+    let create_response = http_request_url(create_url, "POST", Some(&create_body));
+    assert!(
+        create_response.starts_with("HTTP/1.1 200"),
+        "{create_response}"
+    );
+    let thread_id = response_json(&create_response)["id"]
+        .as_str()
+        .expect("created thread should have an id")
+        .to_string();
+
+    let take_url = endpoints["addTakeTemplate"]
+        .as_str()
+        .expect("addTakeTemplate endpoint should be a string")
+        .replace("{threadId}", &thread_id);
+    let take_body = serde_json::json!({ "text": take }).to_string();
+    let take_response = http_request_url(&take_url, "POST", Some(&take_body));
+    assert!(take_response.starts_with("HTTP/1.1 200"), "{take_response}");
+
+    let state_url = endpoints["state"]
+        .as_str()
+        .expect("state endpoint should be a string");
+    let state_response = http_request_url(state_url, "GET", None);
+    assert!(
+        state_response.starts_with("HTTP/1.1 200"),
+        "{state_response}"
+    );
+    response_json(&state_response)
+}
+
+fn http_request_url(url: &str, method: &str, body: Option<&str>) -> String {
+    let remainder = url
+        .strip_prefix("http://")
+        .unwrap_or_else(|| panic!("expected HTTP endpoint, got {url:?}"));
+    let (authority, path) = remainder
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or((remainder, "/".to_string()));
+    assert!(authority.starts_with("127.0.0.1:"), "{authority}");
+
+    let mut stream = TcpStream::connect(authority).expect("connect to reported endpoint");
+    let body = body.unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .expect("write endpoint request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read endpoint response");
+    response
+}
+
+fn response_json(response: &str) -> Value {
+    let body = response
+        .split_once("\r\n\r\n")
+        .expect("HTTP response should contain a body")
+        .1;
+    serde_json::from_str(body).expect("HTTP response body should be JSON")
+}
+
+#[derive(Clone, Copy)]
+enum PortSource {
+    Environment,
+    ProjectConfig,
+}
+
+fn assert_explicit_port_collision(source: PortSource) {
+    let busy_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
+    let busy_port = busy_listener
+        .local_addr()
+        .expect("busy listener addr")
+        .port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    if matches!(source, PortSource::ProjectConfig) {
+        fs::write(
+            temp_dir.path().join("discuss.config.toml"),
+            format!("port = {busy_port}\n"),
+        )
+        .expect("project config should be written");
+    }
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_discuss"));
+    command
+        .arg("--no-open")
+        .arg(&markdown_path)
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .env_remove("DISCUSS_PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if matches!(source, PortSource::Environment) {
+        command.env("DISCUSS_PORT", busy_port.to_string());
+    }
+
+    let child = command.spawn().expect("spawn discuss binary");
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        output.stdout.is_empty(),
+        "collision must emit no stdout event"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains(&format!("port {busy_port}")), "{stderr}");
+    assert!(stderr.contains("clear the port override"), "{stderr}");
+}
+
 fn free_port() -> u16 {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind free listener");
 
@@ -313,6 +582,23 @@ where
         let mut line = String::new();
         let result = reader.read_line(&mut line).map(|_| line);
         let _ = line_tx.send(result);
+    });
+
+    line_rx
+}
+
+fn read_all_lines<R>(reader: R) -> mpsc::Receiver<io::Result<String>>
+where
+    R: Read + Send + 'static,
+{
+    let (line_tx, line_rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            if line_tx.send(line).is_err() {
+                break;
+            }
+        }
     });
 
     line_rx
