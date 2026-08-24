@@ -8,8 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Thread summary navigation** — the resolved-thread count in the header now opens a popover listing every thread in document order with its status and a short preview. Selecting an entry switches files when needed and opens the matching thread; click-outside and Escape dismiss the popover.
+- **Cross-platform releases and installers** — releases now publish native artifacts for Apple Silicon and Intel macOS, x86_64 Linux, and x86_64 Windows, with CI running on both Ubuntu and Windows. A checksum-verifying PowerShell installer installs `discuss.exe`, the self-updater supports Windows zip artifacts, and Windows-safe history filenames plus portable home-directory handling keep runtime behavior consistent across platforms.
 - **HTML prototype review with element anchors** — `.html`/`.htm` inputs render in a sandboxed same-origin iframe with an Inspect toggle, hover outline, numbered markers, selector fallback/fuzzy reattachment, and the existing thread/reply/take lifecycle. Relative prototype assets are served through traversal-guarded per-file routes; served HTML receives a local `<base>` and inspector script while CSP meta tags are neutralized. HTML `thread.created` events and transcripts include `elementAnchor { selector, fallbacks, tag, textDigest?, outerHtml }`; `/api/anchors/resolve` persists detached status without emitting agent-facing stdout noise. Mixed-file switching keeps loaded prototype iframes alive. Root-absolute assets, closed shadow-root internals, and live file watching remain out of scope.
 - **Image review with pin anchors** — PNG, JPEG, GIF, WebP, and SVG paths can be reviewed alone or alongside markdown/diff files. Images are read once as bytes at startup, rendered through an `<img>` backed by `GET /api/files/{fileId}/raw`, and annotated with numbered percentage-positioned pins. Image threads carry `imageAnchor: {xPct, yPct}` basis-point coordinates while retaining their pin number in `anchorStart`/`anchorEnd`; events and transcripts include the coordinates and a `pin N at X%,Y%` breadcrumb. The browser supports optimistic pin creation, reload-stable saved pins, file switching, focusing from the pin layer, and the existing reply/take/resolve/delete lifecycle. Live `/api/source` updates and server-persisted drafts for unsent pin comments remain out of scope.
+
+### Changed
+
+- HTML prototype reviews now start in Inspect mode, preserve an open comment editor while anchors synchronize, and retain the in-frame highlight for the currently open thread.
+- The bundled `/discuss` skill now requires a monitor-type background tool when available, documents both Claude Code and pi launch/stop primitives, keeps launch commands approval-friendly by starting directly with `discuss`, and explicitly leaves browser auto-open enabled.
+
+### Fixed
+
+- Review-shell responses now prevent stale HTML prototype UI from being reused by browser caches.
+
+### Removed
+
+- Removed the redundant one-line `CLAUDE.md` include; agents read `AGENTS.md` directly as the single source of repository instructions.
 
 ## [0.6.1] - 2026-08-03
 
