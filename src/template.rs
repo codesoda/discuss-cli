@@ -350,6 +350,17 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_links_thread_summary_to_thread_cards() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains("class=\"thread-summary-toggle\""));
+        assert!(page.contains("function threadSummaryEntries(state)"));
+        assert!(page.contains("function jumpToThread(threadId, fileId)"));
+        assert!(page.contains("jumpToThread(threadId, fileId)"));
+        assert!(page.contains("openThread(thread)"));
+    }
+
+    #[test]
     fn bundled_template_supports_image_pin_threads() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
