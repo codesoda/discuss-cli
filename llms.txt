@@ -21,10 +21,14 @@ Review a Markdown file:
 Pin the port and suppress browser auto-open:
   discuss --port 9000 --no-open path/to/review.md
 
-When discuss starts it binds `127.0.0.1` and prints:
-  listening on http://127.0.0.1:<port>
+When discuss starts it binds `127.0.0.1` and prints the actual address:
+  review UI/API: http://127.0.0.1:<port>
 
-Open that URL in a browser. When the review is complete, click Finish review to finish the session.
+Without a CLI, environment, or TOML port override, discuss binds port 0 directly
+and uses the OS-assigned port. It does not scan for a free-looking port first.
+An explicit nonzero port binds exactly and exits 3 if occupied; it never falls
+back. Open the reported URL in a browser. When the review is complete, click
+Finish review to finish the session.
 
 ## CLI
 
@@ -35,7 +39,7 @@ Update check:
   discuss update --check
 
 Flags:
-  --port N            Bind the local review server to this port. Effective default: 7777.
+  --port N            Bind this exact nonzero port; when omitted, the OS assigns a port.
   --no-open           Do not open the browser automatically after the server starts.
   --no-save           Do not write a history archive when the review is done.
   --history-dir PATH  Write history archives under this directory for this invocation.
@@ -53,7 +57,7 @@ Config sources are applied in this order, with later sources winning:
   CLI flags
 
 Supported settings:
-  port = 7777
+  port = 7777                         # optional explicit pin; omit for OS assignment
   auto_open = true
   idle_timeout_secs = 600
   history_dir = "/path/to/history"   # optional; default is ~/.discuss/history
@@ -68,7 +72,7 @@ Environment variables:
   DISCUSS_NO_SAVE
   DISCUSS_LOG
 
-Example `discuss.config.toml`:
+Example `discuss.config.toml` with an explicitly pinned port:
   port = 7777
   auto_open = true
   idle_timeout_secs = 600
@@ -80,7 +84,7 @@ Example `discuss.config.toml`:
 
 - `stdout` is reserved for JSONL events.
 - `stderr` is reserved for status and error text.
-- The first stdout event for a normal session is `session.started`.
+- The first stdout event for a normal session is `session.started`. Existing payload fields are preserved; `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `done`), and short `agentInstructions` are additive. Agents must retain and use those exact endpoint URLs. Optional `proxyUrl` is omitted for ordinary sessions and is present only when a secondary listener exists.
 - When the review finishes, discuss emits `session.done` with the final transcript payload. With `--verdict-options`, finishing requires the human to pick a verdict, which is included in that payload.
 - After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
 - Logs are written under `~/.discuss/logs`.

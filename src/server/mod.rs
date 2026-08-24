@@ -61,6 +61,27 @@ const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
+pub async fn bind_loopback_listeners(
+    requested_addrs: &[SocketAddr],
+) -> Result<Vec<(TcpListener, SocketAddr)>> {
+    for &addr in requested_addrs {
+        ensure_loopback(addr)?;
+    }
+
+    let mut listeners = Vec::with_capacity(requested_addrs.len());
+    for &addr in requested_addrs {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|error| bind_error(addr, error))?;
+        let listening_addr = listener
+            .local_addr()
+            .map_err(|source| DiscussError::ServerBindError { addr, source })?;
+        listeners.push((listener, listening_addr));
+    }
+
+    Ok(listeners)
+}
+
 pub async fn serve<F>(addr: SocketAddr, app_state: AppState, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
@@ -78,13 +99,30 @@ where
     F: Future<Output = ()> + Send + 'static,
     R: FnOnce(SocketAddr),
 {
-    ensure_loopback(addr)?;
-
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|error| bind_error(addr, error))?;
-    let listening_addr = listener.local_addr().unwrap_or(addr);
+    let mut listeners = bind_loopback_listeners(&[addr]).await?;
+    let (listener, listening_addr) = listeners
+        .pop()
+        .expect("one requested listener should be returned");
     on_ready(listening_addr);
+
+    serve_listener(listener, app_state, shutdown).await
+}
+
+pub async fn serve_listener<F>(
+    listener: TcpListener,
+    app_state: AppState,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listening_addr = listener
+        .local_addr()
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            source,
+        })?;
+    ensure_loopback(listening_addr)?;
 
     spawn_idle_timer(app_state.clone());
 
@@ -101,7 +139,10 @@ where
             shutdown_signal.signal();
         })
         .await
-        .map_err(|source| DiscussError::ServerBindError { addr, source })
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: listening_addr,
+            source,
+        })
 }
 
 fn spawn_idle_timer(app_state: AppState) {

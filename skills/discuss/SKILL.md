@@ -45,7 +45,7 @@ discuss mockup.png
 discuss plan.md mockup.png
 ```
 
-PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer drops numbered pins; image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%) and use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, read the image from the event's `fileId` path in `/api/state.files`, inspect the pinned region at those percentage coordinates, and post takes through the same `/api/threads/{id}/takes` endpoint. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
+PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer drops numbered pins; image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%) and use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, resolve the image from the event's `fileId` using the `files` array returned by `endpoints.state`, inspect the pinned region at those percentage coordinates, and post takes through the substituted `endpoints.addTakeTemplate` URL. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
 
 ### Diff review mode
 
@@ -179,9 +179,10 @@ Avoid piping another command's output in (`git diff … | discuss -`) — the co
 Notes:
 
 - `persistent: true` is required — discuss is a long-running server that only exits when the user is done. Without it the monitor will time out mid-review and take discuss down with it.
-- Do NOT redirect stderr. Monitor-type tools keep stderr out of the event stream (Claude Code writes it to the task output file, pi to a temp log), so discuss's `listening on …` stderr line can't pollute the JSON events — but `2>&1` would fold it in.
+- Do NOT redirect stderr. Monitor-type tools keep stderr out of the event stream (Claude Code writes it to the task output file, pi to a temp log), so discuss's `review UI/API: …` stderr line can't pollute the JSON events — but `2>&1` would fold it in.
 - Record the id returned by the launch call (`task_id` from Monitor, monitor id from `monitor_start`) — you need it to stop the session later.
-- If the port is already bound or the file doesn't exist, discuss exits immediately and the monitor ends without ever emitting a `session.started` event. Read the monitor's stderr log to surface the error, then stop.
+- Launch without `--port`. Discuss asks the OS for a free port, so concurrent sessions do not collide; each session's actual address arrives in its own `session.started` payload. Explicit `--port 7777` remains available only when a predictable exact bind is required, and fails rather than falling back if occupied.
+- If the file does not exist (or an explicit port is occupied), discuss exits immediately without emitting `session.started`. Read the monitor's stderr log to surface the error, then stop.
 - In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.
 
 ### Option B — Polling fallback (only when no monitor-type tool is available)
@@ -191,20 +192,38 @@ Use this only when no monitor-type background tool is enabled in the current con
 **1. Start discuss in the background:**
 
 ```bash
-discuss "$ARGUMENTS" --port <port> > /tmp/discuss-startup.log 2>&1 &
-sleep 2
-curl -s http://127.0.0.1:<port>/api/state | jq -e 'has("threads")' > /dev/null \
-  || { cat /tmp/discuss-startup.log; exit 1; }
+SESSION_DIR=$(mktemp -d /tmp/discuss-session.XXXXXX)
+EVENT_LOG="$SESSION_DIR/events.jsonl"
+ERROR_LOG="$SESSION_DIR/startup.err"
+discuss "$ARGUMENTS" >"$EVENT_LOG" 2>"$ERROR_LOG" &
+DISCUSS_PID=$!
+STARTED_PAYLOAD=
+for _ in $(seq 1 20); do
+  STARTED_PAYLOAD=$(jq -cer 'select(.kind == "session.started") | .payload' "$EVENT_LOG" 2>/dev/null | head -n 1)
+  [ -n "$STARTED_PAYLOAD" ] && break
+  sleep 0.25
+done
+[ -n "$STARTED_PAYLOAD" ] || { cat "$ERROR_LOG"; exit 1; }
+printf '%s\n' "$STARTED_PAYLOAD" >"$SESSION_DIR/session-started.json"
+
+API_BASE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.apiBaseUrl')
+STATE_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.state')
+EVENTS_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.events')
+CREATE_THREAD_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.createThread')
+TAKE_TEMPLATE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.addTakeTemplate')
+DONE_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.done')
+curl -s "$STATE_URL" | jq -e 'has("threads")' > /dev/null \
+  || { cat "$ERROR_LOG"; exit 1; }
 ```
 
-Pick a free port by checking which of 7777–7782 isn't already bound (`curl -s http://127.0.0.1:<port>/api/state`). If all are in use, discuss is already running — attach to the existing one.
+Launch without `--port` and do not probe a port range. `$SESSION_DIR` is unique per process; retain it, `$DISCUSS_PID`, and the saved `session-started.json` as that session's identity and endpoint state. Never reuse one session's variables or logs for another concurrent session. Use `$API_BASE` only for API routes not represented in the endpoint map.
 
 **2. Enter the event loop — blocking poller:**
 
-This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. Call it via Bash (blocking, timeout 600000ms). It polls `/api/state` every 5 seconds and exits as soon as something changes:
+This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. Call it via Bash (blocking, timeout 600000ms). Its first argument is the exact reported state URL; it polls that endpoint every 5 seconds and exits as soon as something changes:
 
 ```bash
-bash <skill-dir>/poller.sh "http://127.0.0.1:<port>"
+bash <skill-dir>/poller.sh "$STATE_URL"
 ```
 
 On the first invocation, pass no baseline — the poller snapshots current state itself. On every subsequent invocation, pass the baseline captured from the previous run's `snapshot` line (see below).
@@ -234,17 +253,17 @@ BASELINE=$(echo "$BASELINE" | jq -c --arg id "$THREAD_ID" '.[$id] += 1')
 
 Optionally `Read` the markdown source afterward for context on anchor snippets (file mode only).
 
-## Step 2: Confirm startup and capture URL
+## Step 2: Confirm startup and retain the endpoint map
 
 The first notification from the monitor should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
 ```
 
-Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
+Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` when posting a take. Use `apiBaseUrl` only for routes absent from the endpoint map. Optional `proxyUrl` is present only when a secondary proxy listener exists and is omitted for ordinary sessions.
 
-If the monitor ends without emitting `session.started`, discuss failed to start. Read its stderr log for the error, report it, and stop.
+If the monitor ends without emitting `session.started`, startup failed before readiness and no partial session exists. Read its stderr log for the error, report it, and stop.
 
 Post a short message to chat:
 
@@ -259,13 +278,14 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 ### `thread.created` (new thread opened by the user)
 
 1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` / `elementAnchor` from the payload.
-2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through `/api/state.files` and inspect `imageAnchor`'s percentage coordinates. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
+2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through the `files` field fetched from `endpoints.state` and inspect `imageAnchor`'s percentage coordinates. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
-5. Post it as a **take**, not a reply (substitute the URL from `session.started`):
+5. Post it as a **take**, not a reply. Replace `{threadId}` in the retained `endpoints.addTakeTemplate` value:
 
 ```bash
-curl -s -X POST "$URL/api/threads/<thread-id>/takes" \
+TAKE_URL=${TAKE_TEMPLATE/'{threadId}'/"$THREAD_ID"}
+curl -s -X POST "$TAKE_URL" \
   -H 'Content-Type: application/json' \
   -d '{"text":"..."}'
 ```
@@ -274,7 +294,7 @@ curl -s -X POST "$URL/api/threads/<thread-id>/takes" \
 
 Replies come only from the human (the API uses `/replies` for humans, `/takes` for you). Any `reply.added` event is a new user message.
 
-1. Fetch full state: `curl -s "$URL/api/state"` — parse the thread and all its replies/takes in order.
+1. Fetch full state directly from the retained map: `curl -s "$STATE_URL"` — parse the thread and all its replies/takes in order.
 2. Read the latest reply in context.
 3. Decide: is this a question, a challenge, or a genuine opening for more commentary? If yes, post a follow-up take. If it's closure ("thanks", "got it", "makes sense"), stay silent.
 4. If responding, POST another take to the same thread.
@@ -298,7 +318,7 @@ On stop:
 
 ## API reference
 
-All endpoints at the `url` from `session.started`. Request/response is JSON.
+Use the exact `session.started.payload.endpoints` value wherever a mapped key exists: `$STATE_URL`, `$EVENTS_URL`, `$CREATE_THREAD_URL`, substituted `$TAKE_TEMPLATE`, and `$DONE_URL`. Construct only routes absent from that map against `$API_BASE`. Request/response is JSON.
 
 | Method | Path | Body | Purpose |
 |---|---|---|---|
@@ -334,7 +354,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 ## Stdout event kinds
 
-- `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
+- `session.started` → `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), and `done`; ordinary sessions omit `proxyUrl`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
 - `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`

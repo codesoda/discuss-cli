@@ -34,10 +34,10 @@ pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use events::{Event, EventEmitter, EventKind};
 pub use exit::exit_code_for_error;
-pub use launch::{SystemBrowserLauncher, announce_listening, loopback_url};
+pub use launch::{SystemBrowserLauncher, announce_listening, loopback_url, session_endpoints};
 pub use logging::init_tracing;
 pub use render::render;
-pub use server::{AppState, serve, serve_with_ready};
+pub use server::{AppState, bind_loopback_listeners, serve, serve_listener, serve_with_ready};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
 pub use transcript::{
@@ -45,7 +45,14 @@ pub use transcript::{
 };
 pub use verdict::{Verdict, VerdictConfig, VerdictOption, VerdictStyle};
 
+/// Legacy fixed port retained for callers that explicitly pin a session port.
 pub const DEFAULT_PORT: u16 = 7777;
+
+pub const AGENT_INSTRUCTIONS: [&str; 3] = [
+    "Use payload.endpoints; do not assume port 7777.",
+    "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+    "Stop when session.done is received.",
+];
 
 pub async fn run(args: cli::Args) -> Result<()> {
     run_with_shutdown(args, pending()).await
@@ -208,7 +215,7 @@ where
             .collect(),
     };
 
-    let port = config.port.unwrap_or(DEFAULT_PORT);
+    let port = config.port.unwrap_or(0);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let auto_open = config.auto_open;
 
@@ -232,6 +239,9 @@ where
 
         let mut payload = serde_json::json!({
             "url": url.clone(),
+            "apiBaseUrl": url.clone(),
+            "endpoints": launch::session_endpoints(&url),
+            "agentInstructions": AGENT_INSTRUCTIONS,
             "mode": mode,
             "source_file": session_source_label,
             "files_count": files_count,
