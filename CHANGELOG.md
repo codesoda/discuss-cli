@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-24
+
 ### Added
 
 - **Thread summary navigation** — the resolved-thread count in the header now opens a popover listing every thread in document order with its status and a short preview. Selecting an entry switches files when needed and opens the matching thread; click-outside and Escape dismiss the popover.
