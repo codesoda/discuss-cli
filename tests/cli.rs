@@ -274,8 +274,7 @@ fn cli_auto_allocates_distinct_ports_for_concurrent_sessions() {
     let first_home = first_dir.path().join("home");
     fs::create_dir(&first_home).expect("first home should be created");
     let first_markdown = first_dir.path().join("review.md");
-    fs::write(&first_markdown, "# First Review\n")
-        .expect("first markdown file should be written");
+    fs::write(&first_markdown, "# First Review\n").expect("first markdown file should be written");
 
     let second_dir = tempdir().expect("second tempdir should be created");
     let second_home = second_dir.path().join("home");
@@ -448,8 +447,7 @@ fn assert_rfc3339(value: &str) {
 
 fn get_state(port: u16) -> String {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect to discuss");
-    let request =
-        "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let request = "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     stream
         .write_all(request.as_bytes())
         .expect("write state request");

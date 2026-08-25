@@ -221,9 +221,7 @@ fn read_config_layer(path: &Path) -> Result<Option<ConfigLayer>> {
     }
 }
 
-fn deserialize_port<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<u16>, D::Error>
+fn deserialize_port<'de, D>(deserializer: D) -> std::result::Result<Option<u16>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -476,8 +474,7 @@ porrt = 8888
         let user_path = temp_dir.path().join("user.toml");
         let project_path = temp_dir.path().join("project.toml");
         fs::write(&user_path, "port = 1111\n").expect("user config should be written");
-        fs::write(&project_path, "no_save = true\n")
-            .expect("project config should be written");
+        fs::write(&project_path, "no_save = true\n").expect("project config should be written");
 
         let config = Config::resolve_with_sources(
             ConfigOverrides::default(),

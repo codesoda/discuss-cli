@@ -63,7 +63,7 @@ The agent invokes the skill. If `discuss` isn't on your PATH yet, it'll prompt b
 
 > `discuss` isn't on your PATH. Install it now? (runs `curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh`)
 
-Confirm — the installer self-bootstraps in the background, the server launches on `http://127.0.0.1:7777`, your browser opens with the rendered doc, and the agent starts streaming events. Drop an inline thread anywhere and the agent replies with a take.
+Confirm — the installer self-bootstraps in the background, the server launches on the automatically chosen free loopback port printed at startup, your browser opens with the rendered doc, and the agent starts streaming events. Drop an inline thread anywhere and the agent replies with a take.
 
 ### Without an agent
 
@@ -71,7 +71,7 @@ Confirm — the installer self-bootstraps in the background, the server launches
 discuss ./plan.md
 ```
 
-Browser opens on `http://127.0.0.1:7777`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
+Browser opens on the automatically chosen free loopback port printed at startup. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
 ### Piping markdown via stdin
 
@@ -153,7 +153,7 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <N>` | `7777` | Bind port. No free-port fallback — fails fast if already bound. |
+| `--port <N>` | OS-assigned free port | Bind exactly to an explicit nonzero port; fail fast on collision. `0` is rejected. |
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |

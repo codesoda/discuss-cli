@@ -21,7 +21,7 @@ Review a Markdown file:
 Pin the port and suppress browser auto-open:
   discuss --port 9000 --no-open path/to/review.md
 
-When discuss starts it binds `127.0.0.1` and prints:
+When discuss starts it binds `127.0.0.1` on an OS-assigned free port unless `--port` is given, and prints:
   listening on http://127.0.0.1:<port>
 
 Open that URL in a browser. When the review is complete, click Finish review to finish the session.
@@ -35,7 +35,7 @@ Update check:
   discuss update --check
 
 Flags:
-  --port N            Bind the local review server to this port. Effective default: 7777.
+  --port N            Bind exactly to this nonzero port. Omit to let the OS assign a free port; 0 is rejected.
   --no-open           Do not open the browser automatically after the server starts.
   --no-save           Do not write a history archive when the review is done.
   --history-dir PATH  Write history archives under this directory for this invocation.
@@ -53,7 +53,7 @@ Config sources are applied in this order, with later sources winning:
   CLI flags
 
 Supported settings:
-  port = 7777
+  port = 9000                       # optional; omit for an OS-assigned port
   auto_open = true
   idle_timeout_secs = 600
   history_dir = "/path/to/history"   # optional; default is ~/.discuss/history
@@ -69,7 +69,7 @@ Environment variables:
   DISCUSS_LOG
 
 Example `discuss.config.toml`:
-  port = 7777
+  port = 9000                       # optional; omit for an OS-assigned port
   auto_open = true
   idle_timeout_secs = 600
   history_dir = "/Users/alice/.discuss/history"

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Sessions started without an explicit port now use an OS-assigned free loopback port. Pass `--port 7777` to restore the previous address. Explicit TOML `port = 0` and `DISCUSS_PORT=0` now fail with a configuration error and exit code 2; explicit nonzero ports still bind exactly and fail fast on collision.
+
+### Removed
+
+- Removed the public `discuss::DEFAULT_PORT` constant because sessions no longer have a fixed default port.
+
 ## [0.7.0] - 2026-08-24
 
 ### Added

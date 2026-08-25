@@ -306,11 +306,9 @@ mod tests {
     #[test]
     fn local_addr_failure_maps_to_server_bind_error() {
         let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-        let error = local_addr_or_bind_error(
-            requested,
-            Err(io::Error::other("local address failed")),
-        )
-        .expect_err("local address failure should fail startup");
+        let error =
+            local_addr_or_bind_error(requested, Err(io::Error::other("local address failed")))
+                .expect_err("local address failure should fail startup");
 
         match error {
             DiscussError::ServerBindError { addr, source } => {
