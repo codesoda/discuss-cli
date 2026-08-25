@@ -1,0 +1,18 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 d26fcdab79f154f02995ed289fea6411346fffd11660030742895c686574d460
+# run_id:   0001-a3-busy-port-exits-three-20260825T011901Z-4883
+# executed: cargo test --test cli cli_busy_port_exits_three_and_reports_port 
+# started:  20260825T011901Z
+# exit:     0 (1s)
+# output:   8 lines
+# ---
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/cli.rs (target/debug/deps/cli-7ce25a50a1b05136)
+
+running 1 test
+test cli_busy_port_exits_three_and_reports_port ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.04s
+

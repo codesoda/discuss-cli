@@ -1,0 +1,10 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 d26fcdab79f154f02995ed289fea6411346fffd11660030742895c686574d460
+# run_id:   0001-a9-full-CI-suite-20260825T011918Z-38d5
+# executed: cargo fmt --check 
+# started:  20260825T011918Z
+# exit:     0 (1s)
+# output:   0 lines
+# ---

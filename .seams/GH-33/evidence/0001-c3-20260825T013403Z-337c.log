@@ -1,0 +1,334 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 d26fcdab79f154f02995ed289fea6411346fffd11660030742895c686574d460
+# slot:     c3
+# slot_row_hash: 508f64a36f985e6d57de9625710fe0b0780ed0c12d451420f8d807760ef0edb8
+# run_id:   0001-c3-20260825T013403Z-337c
+# executed: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo build --all-targets && cargo test && sh -c 'if grep -n 7777 AGENTS.md README.md llms.txt; then exit 1; fi' && sh -c 'sed -n "/^## \[Unreleased\]/,/^## \[0\.7\.0\]/p" CHANGELOG.md > /tmp/gh33-unreleased.txt; for s in "--port 7777" "port = 0" "DISCUSS_PORT=0" "exit code 2" "### Removed" "discuss::DEFAULT_PORT"; do if ! grep -qF -- "$s" /tmp/gh33-unreleased.txt; then echo "missing: $s"; exit 1; fi; done'
+# started:  20260825T013403Z
+# exit:     0 (5s)
+# output:   322 lines
+# ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/discuss-7e34c7baef40e5cd)
+
+running 182 tests
+test assets::tests::shim_marks_blocks_for_prism_skip_before_loading_mermaid ... ok
+test assets::tests::shim_references_mermaid_selector_and_bundled_asset_path ... ok
+test assets::tests::shim_loads_mermaid_only_after_finding_blocks ... ok
+test assets::tests::inspector_asset_is_bundled_with_namespaced_messages ... ok
+test assets::tests::shim_uses_modern_mermaid_api_and_loose_security ... ok
+test cli::tests::bare_command_parses_with_no_file_or_subcommand ... ok
+test cli::tests::parses_diff_subcommand_with_defaults ... ok
+test cli::tests::parses_diff_subcommand_with_range_args ... ok
+test cli::tests::parses_files_combined_with_diff_subcommand ... ok
+test cli::tests::parses_diff_subcommand_with_max_diff_bytes ... ok
+test cli::tests::parses_diff_subcommand_with_unstaged_flag ... ok
+test cli::tests::parses_files_combined_with_bare_diff ... ok
+test cli::tests::parses_history_archive_flags ... ok
+test cli::tests::parses_mixed_stdin_and_file_arguments ... ok
+test cli::tests::parses_port_override ... ok
+test cli::tests::parses_stdin_dash_argument ... ok
+test cli::tests::parses_markdown_file_argument ... ok
+test cli::tests::parses_multiple_file_arguments ... ok
+test cli::tests::parses_update_subcommand ... ok
+test cli::tests::parses_update_yes_flag ... ok
+test cli::tests::parses_no_open_flag ... ok
+test cli::tests::help_contains_exit_codes_and_references ... ok
+test cli::tests::parses_update_check_flag ... ok
+test cli::tests::rejects_update_check_with_yes ... ok
+test cli::tests::parses_verdict_flags_before_file ... ok
+test cli::tests::parses_verdict_flags_before_diff_subcommand ... ok
+test cli::tests::rejects_unstaged_with_range_args ... ok
+test cli::tests::version_reports_package_version ... ok
+test config::tests::cli_overrides_win_over_env_vars ... ok
+test config::tests::default_config_uses_documented_values ... ok
+test cli::tests::rejects_zero_port_override ... ok
+test cli::tests::update_help_mentions_explicit_only_checks ... ok
+test config::tests::config_toml_without_port_defaults_to_none ... ok
+test config::tests::deserializes_partial_toml_using_config_defaults ... ok
+test config::tests::invalid_env_var_returns_config_parse_error ... ok
+test config::tests::deserializes_valid_toml_with_defaults_for_omitted_fields ... ok
+test config::tests::rejects_unknown_fields_as_config_parse_errors ... ok
+test config::tests::rejects_zero_port_from_env ... ok
+test diff::tests::default_diff_size_limit_is_five_megabytes ... ok
+test config::tests::rejects_zero_port_from_toml ... ok
+test diff::tests::diff_content_to_markdown_falls_back_to_plain_diff_fence_for_unknown_extensions ... ok
+test diff::tests::diff_content_to_markdown_emits_heading_stats_and_fenced_hunks ... ok
+test diff::tests::diff_content_to_markdown_flags_new_deleted_and_renamed_files ... ok
+test diff::tests::diff_content_to_markdown_renders_each_hunk_as_its_own_fence ... ok
+test diff::tests::diff_content_to_markdown_wraps_non_git_content_in_single_fence ... ok
+test diff::tests::parse_path_from_block_handles_renames_with_b_prefix ... ok
+test diff::tests::fences_grow_past_backtick_runs_inside_diff_content ... ok
+test diff::tests::split_into_files_ignores_diff_git_text_inside_hunk_lines ... ok
+test diff::tests::split_into_files_returns_empty_when_no_diff_headers ... ok
+test diff::tests::split_into_files_returns_one_per_diff_header ... ok
+test config::tests::resolve_ignores_missing_config_files ... ok
+test error::tests::file_not_found_message_names_path_and_suggestion ... ok
+test error::tests::config_parse_error_message_names_path_location_and_suggestion ... ok
+test error::tests::file_not_readable_message_names_path_source_and_suggestion ... ok
+test error::tests::logging_init_error_message_names_path_source_and_suggestion ... ok
+test error::tests::port_in_use_message_names_port_and_suggestion ... ok
+test error::tests::render_error_message_names_source_and_suggestion ... ok
+test config::tests::malformed_config_file_returns_path_aware_parse_error ... ok
+test error::tests::update_check_error_message_names_problem_and_suggestion ... ok
+test config::tests::rejects_zero_port_from_config_file_layer ... ok
+test error::tests::server_bind_error_message_names_addr_source_and_suggestion ... ok
+test error::tests::update_error_message_names_problem_and_suggestion ... ok
+test events::tests::all_event_kinds_are_covered_by_the_wire_name_test ... ok
+test events::tests::event_kinds_serialize_to_dotted_strings ... ok
+test exit::tests::maps_all_current_error_variants_to_documented_codes ... ok
+test events::tests::emit_writes_one_json_line_and_flushes ... ok
+test exit::tests::maps_port_in_use_to_server_exit_code ... ok
+test history::tests::archive_path_falls_back_to_unnamed_without_source_path ... ok
+test history::tests::archive_path_uses_multi_label_when_files_count_above_one ... ok
+test history::tests::archive_path_uses_sanitized_source_stem_and_iso_timestamp ... ok
+test launch::tests::announce_listening_suppresses_browser_open_when_disabled ... ok
+test launch::tests::announce_listening_writes_exact_url_line_and_opens_when_enabled ... ok
+test config::tests::env_vars_override_toml_layers ... ok
+test launch::tests::browser_open_failure_does_not_fail_announcement ... ok
+test launch::tests::loopback_url_uses_localhost_and_port ... ok
+test config::tests::config_layer_toml_without_port_preserves_lower_layer_port ... ok
+test logging::tests::log_filter_prefers_env_then_config_then_info ... ok
+test render::tests::frontmatter_block_escapes_html_special_chars ... ok
+test render::tests::empty_frontmatter_still_renders_block ... ok
+test render::tests::body_renders_normally_after_frontmatter ... ok
+test render::tests::leaves_mermaid_code_blocks_for_client_side_hydration ... ok
+test render::tests::no_frontmatter_when_dashes_not_at_top ... ok
+test render::tests::no_frontmatter_when_missing_closing_delimiter ... ok
+test config::tests::project_toml_overrides_user_toml_without_resetting_omitted_fields ... ok
+test render::tests::render_is_deterministic ... ok
+test render::tests::renders_heading_levels_one_through_five ... ok
+test render::tests::renders_lists_blockquotes_and_fenced_code_as_semantic_elements ... ok
+test render::tests::renders_yaml_frontmatter_as_collapsible_details_block ... ok
+test server::files::tests::injection_adds_base_and_inspector_before_closing_tags ... ok
+test server::files::tests::injection_neutralizes_csp_meta ... ok
+test server::tests::local_addr_failure_maps_to_server_bind_error ... ok
+test render::tests::renders_gfm_tables_task_lists_strikethrough_autolinks_and_footnotes ... ok
+test history::tests::write_history_archive_creates_parent_directory_and_writes_payload_json ... ok
+test server::tests::local_addr_success_returns_bound_address ... ok
+test state::store::tests::add_then_get_thread_returns_active_threads ... ok
+test state::store::tests::drafts_upsert_and_clear ... ok
+test state::store::tests::reply_take_and_resolution_mutators_return_stored_objects ... ok
+test state::store::tests::shared_state_wraps_state_in_arc_rw_lock ... ok
+test state::store::tests::snapshot_excludes_deleted_thread_related_values ... ok
+test sse::tests::publish_and_subscribe_delivers_event ... ok
+test sse::tests::dropping_a_subscriber_does_not_panic_publish ... ok
+test sse::tests::two_subscribers_each_receive_a_copy ... ok
+test state::store::tests::snapshot_returns_independent_clone_of_active_state ... ok
+test state::store::tests::soft_delete_removes_from_reads_but_preserves_thread ... ok
+test state::types::tests::drafts_deserialize_legacy_anchor_range_key_into_default_file ... ok
+test state::types::tests::element_anchor_round_trips_with_camel_case_keys ... ok
+test state::types::tests::drafts_round_trip_with_file_scoped_anchor_keys_and_thread_id_keys ... ok
+test state::types::tests::file_kind_serializes_to_lowercase_strings ... ok
+test state::types::tests::file_meta_derives_from_file_without_content ... ok
+test state::types::tests::image_anchor_round_trips_with_camel_case_basis_points ... ok
+test state::types::tests::invalid_new_thread_draft_key_is_rejected ... ok
+test state::types::tests::thread_id_serializes_transparently ... ok
+test state::types::tests::reply_take_and_resolution_use_camel_case_json ... ok
+test state::types::tests::thread_round_trips_with_line_range_in_camel_case ... ok
+test state::types::tests::thread_serializes_with_template_compatible_camel_case_keys ... ok
+test logging::tests::init_tracing_creates_daily_log_file_for_temp_home ... ok
+test state::types::tests::thread_without_file_id_deserializes_into_default_file ... ok
+test template::tests::bundled_template_interleaves_takes_and_replies_chronologically ... ok
+test template::tests::bundled_template_marks_thread_contributor_state ... ok
+test template::tests::bundled_template_links_thread_summary_to_thread_cards ... ok
+test template::tests::bundled_template_includes_theme_toggle_with_system_default ... ok
+test template::tests::bundled_template_sends_browser_heartbeat ... ok
+test template::tests::bundled_template_skips_prism_for_mermaid_blocks ... ok
+test events::tests::stdout_writes_are_isolated_to_events_module ... ok
+test template::tests::bundled_template_subscribes_to_sse_and_applies_incremental_events ... ok
+test template::tests::bundled_template_supports_image_pin_threads ... ok
+test template::tests::doc_content_injection_handles_empty_sections ... ok
+test template::tests::initial_state_json_is_safe_inside_script_tag ... ok
+test template::tests::bundled_template_hydrates_state_from_seed_or_api ... ok
+test template::tests::injects_mermaid_shim_before_main_script ... ok
+test template::tests::bundled_template_wires_html_prototype_inspection ... ok
+test template::tests::injects_rendered_markdown_inside_doc_content ... ok
+test template::tests::seeds_initial_state_json_before_main_script ... ok
+test tests::image_extensions_are_detected_case_insensitively_with_correct_mime_types ... ok
+test template::tests::preserves_template_markup_outside_injection_points ... ok
+test tests::missing_markdown_file_maps_to_file_not_found ... ok
+test template::tests::bundled_template_sends_thread_mutations_to_rest_api ... ok
+test template::tests::seeds_rendered_files_json_before_main_script ... ok
+test tests::resolve_inputs_rejects_duplicate_paths ... ok
+test transcript::tests::attaches_replies_takes_and_resolution_to_their_threads ... ok
+test tests::resolve_inputs_loads_image_bytes_without_string_decoding ... ok
+test transcript::tests::includes_soft_deleted_threads_with_deleted_timestamp ... ok
+test transcript::tests::old_archive_without_verdict_deserializes ... ok
+test transcript::tests::same_state_builds_the_same_transcript ... ok
+test transcript::tests::threads_are_sorted_by_document_order ... ok
+test transcript::tests::transcript_preserves_element_anchor ... ok
+test transcript::tests::serializes_with_camel_case_keys_and_preserved_iso_timestamps ... ok
+test transcript::tests::transcript_preserves_image_anchor_and_pin_order ... ok
+test transcript::tests::transcript_preserves_line_range_for_code_block_threads ... ok
+test transcript::tests::transcript_with_verdict_serializes_camel_case ... ok
+test transcript::tests::transcript_without_verdict_serializes_without_key ... ok
+test update::tests::compares_upgrade_downgrade_and_equal_versions ... ok
+test update::tests::checksum_verification_rejects_mismatched_archive_bytes ... ok
+test update::tests::checksum_verification_accepts_matching_archive_bytes ... ok
+test update::tests::missing_location_header_returns_actionable_error ... ok
+test update::tests::non_tty_update_requires_yes ... ok
+test tests::resolve_inputs_with_single_file_returns_file_metadata ... ok
+test update::tests::parses_latest_tag_from_location_header ... ok
+test update::tests::parses_latest_tag_from_relative_redirect_location ... ok
+test update::tests::release_asset_names_use_zip_for_windows ... ok
+test update::tests::target_triple_mapping_covers_supported_targets ... ok
+test update::tests::tty_prompt_accepts_yes_responses ... ok
+test update::tests::tty_prompt_rejects_default_response ... ok
+test update::tests::unsupported_target_returns_actionable_error ... ok
+test tests::resolve_inputs_returns_each_file_in_order_with_kinds ... ok
+test update::tests::yes_flag_skips_the_prompt ... ok
+test template::tests::bundled_template_sends_draft_mutations_to_rest_api ... ok
+test update::tests::extracts_windows_binary_from_zip_archive ... ok
+test verdict::tests::parses_default_labels_and_neutral_style ... ok
+test verdict::tests::parses_labels_styles_and_required_feedback ... ok
+test template::tests::bundled_template_finishes_session_through_done_api ... ok
+test template::tests::bundled_template_wires_prism_for_syntax_highlighting ... ok
+test verdict::tests::parses_style_without_label ... ok
+test verdict::tests::rejects_blank_label ... ok
+test verdict::tests::rejects_duplicate_ids ... ok
+test verdict::tests::rejects_duplicate_labels_case_insensitive ... ok
+test verdict::tests::rejects_fewer_than_two_options ... ok
+test verdict::tests::rejects_invalid_id_charset ... ok
+test verdict::tests::rejects_invalid_style ... ok
+test assets::tests::mermaid_asset_is_bundled_and_within_size_budget ... ok
+test template::tests::bundled_template_surfaces_rest_mutation_failures_inline ... ok
+test update::tests::update_check_is_only_referenced_from_the_update_subcommand ... ok
+
+test result: ok. 182 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/main.rs (target/debug/deps/discuss-683e45e415af0ca6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (target/debug/deps/cli-7ce25a50a1b05136)
+
+running 9 tests
+test cli_zero_env_port_exits_two ... ok
+test cli_update_requires_yes_when_stdin_is_not_tty ... ok
+test cli_bad_verdict_options_exits_two_and_reports_message ... ok
+test cli_no_open_logs_listening_url_to_stderr ... ok
+test cli_emits_single_session_started_event_after_listening ... ok
+test cli_busy_port_exits_three_and_reports_port ... ok
+test cli_auto_allocates_distinct_ports_for_concurrent_sessions ... ok
+test cli_no_save_flag_suppresses_history_archive ... ok
+test cli_history_dir_flag_overrides_config_history_dir_and_writes_archive ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/logging.rs (target/debug/deps/logging-d98faab3deb419e5)
+
+running 1 test
+test cli_tracing_uses_file_logs_without_polluting_stderr ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/server.rs (target/debug/deps/server-697ca2550ec8953d)
+
+running 72 tests
+test busy_port_maps_to_port_in_use ... ok
+test delete_api_drafts_followup_clears_idempotently_and_emits_events ... ok
+test delete_api_thread_returns_structured_404_for_unknown_thread ... ok
+test api_events_stream_ends_cleanly_on_shutdown ... ok
+test delete_api_thread_soft_deletes_user_thread_and_emits_events ... ok
+test api_drafts_followup_returns_structured_404_for_unknown_thread ... ok
+test get_api_state_returns_empty_snapshot_json ... ok
+test get_api_state_includes_configured_verdict_config ... ok
+test get_api_state_returns_seeded_threads ... ok
+test get_api_file_raw_returns_structured_404_for_non_images ... ok
+test get_api_events_streams_published_broadcast_event ... ok
+test api_events_disconnect_does_not_break_new_connections ... ok
+test drafts_with_same_anchors_on_different_files_coexist ... ok
+test delete_api_drafts_new_thread_clears_idempotently_and_emits_events ... ok
+test get_mermaid_shim_asset_returns_bundled_shim ... ok
+test get_api_file_raw_serves_startup_bytes_with_image_headers ... ok
+test get_root_seeds_current_state_for_reload ... ok
+test get_root_renders_image_review_shell ... ok
+test get_root_renders_template_and_shutdown_completes ... ok
+test get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions ... ok
+test post_api_done_emits_transcript_and_triggers_shutdown ... ok
+warning: failed to write history archive to /var/folders/p3/bc0bjl054mscbz5115ld49qw0000gn/T/.tmpPNFTSG/not-a-directory/review/2026-08-25T01:34:04Z.json: Not a directory (os error 20)
+test post_api_done_history_write_failure_still_succeeds_and_shutdown_exits ... ok
+test post_api_done_no_save_emits_transcript_without_history_archive ... ok
+test get_mermaid_js_asset_returns_bundled_bytes_with_cache_headers ... ok
+test post_api_done_with_verdict_config_rejects_missing_body_without_side_effects ... ok
+test html_asset_route_rejects_parent_and_symlink_escape ... ok
+test post_api_done_with_verdict_config_rejects_missing_required_feedback_without_side_effects ... ok
+test post_api_done_without_verdict_config_accepts_browser_empty_request ... ok
+test post_api_done_without_verdict_config_ignores_stray_body ... ok
+{"kind":"thread.created","at":"2026-08-25T01:34:04.961756Z","payload":{"anchorEnd":1,"anchorStart":1,"breadcrumb":"pin 1 at 10%,20%","createdAt":"2026-08-25T01:34:04.961756Z","fileId":"f-1","id":"u-1","imageAnchor":{"xPct":1000,"yPct":2000},"kind":"user","snippet":"","text":"pin 1"}}
+{"kind":"thread.created","at":"2026-08-25T01:34:04.962063Z","payload":{"anchorEnd":2,"anchorStart":2,"breadcrumb":"pin 2 at 20%,20%","createdAt":"2026-08-25T01:34:04.962063Z","fileId":"f-1","id":"u-2","imageAnchor":{"xPct":2000,"yPct":2000},"kind":"user","snippet":"","text":"pin 2"}}
+{"kind":"thread.created","at":"2026-08-25T01:34:04.962428Z","payload":{"anchorEnd":3,"anchorStart":3,"breadcrumb":"pin 3 at 30%,20%","createdAt":"2026-08-25T01:34:04.962428Z","fileId":"f-1","id":"u-3","imageAnchor":{"xPct":3000,"yPct":2000},"kind":"user","snippet":"","text":"pin 3"}}
+test image_pin_numbers_do_not_reuse_soft_deleted_pins ... ok
+test html_prototype_routes_inject_inspector_and_serve_safe_relative_assets ... ok
+test post_api_drafts_followup_upserts_replaces_and_emits_events ... ok
+test post_api_drafts_new_thread_returns_structured_400_for_bad_json ... ok
+test image_thread_and_source_routes_enforce_image_anchor_invariants ... ok
+test post_api_drafts_followup_whitespace_text_clears_draft ... ok
+test html_thread_creation_validates_serializes_and_reports_detachment ... ok
+test post_api_drafts_new_thread_upserts_replaces_and_emits_events ... ok
+test post_api_done_with_verdict_config_accepts_valid_body_and_emits_verdict ... ok
+test post_api_thread_replies_appends_reply_and_emits_events ... ok
+test post_api_thread_replies_returns_structured_400_for_empty_text ... ok
+test post_api_thread_replies_returns_structured_404_for_unknown_thread ... ok
+test post_api_thread_resolution_routes_return_structured_404_for_unknown_thread ... ok
+test post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events ... ok
+test post_api_thread_takes_appends_take_and_emits_events ... ok
+test post_api_done_with_verdict_config_rejects_unknown_option_without_side_effects ... ok
+test post_api_thread_takes_returns_structured_400_for_empty_text ... ok
+test post_api_thread_unresolve_clears_resolution_idempotently_and_emits_events ... ok
+test post_api_threads_assigns_image_pins_and_emits_coordinates ... ok
+{"kind":"thread.created","at":"2026-08-25T01:34:04.976860Z","payload":{"anchorEnd":2,"anchorStart":2,"breadcrumb":"","createdAt":"2026-08-25T01:34:04.976860Z","fileId":"f-2","id":"u-1","kind":"user","snippet":"Beta body.","text":"beta note"}}
+test post_api_drafts_new_thread_whitespace_text_clears_draft ... ok
+{"kind":"source.updated","at":"2026-08-25T01:34:04.977412Z","payload":{"fileId":"f-1","markdown":"# Alpha v2\n","orphanedThreadIds":[],"renderedHtml":"<h1>Alpha v2</h1>\n","sourceVersion":1,"threadAnchors":[]}}
+{"kind":"thread.created","at":"2026-08-25T01:34:04.977929Z","payload":{"anchorEnd":1,"anchorStart":1,"breadcrumb":"","createdAt":"2026-08-25T01:34:04.977929Z","fileId":"f-1","id":"u-1","kind":"user","snippet":"Solo","text":"no fileId needed"}}
+test post_api_source_scopes_coverage_and_payload_to_the_updated_file ... ok
+test post_api_threads_defaults_file_id_in_single_file_sessions ... ok
+test post_api_source_enforces_strict_thread_coverage ... ok
+test post_api_source_swaps_source_reanchors_threads_and_broadcasts ... ok
+test post_api_thread_takes_returns_structured_404_for_unknown_thread ... ok
+test post_api_threads_creates_thread_and_emits_events ... ok
+{"kind":"thread.created","at":"2026-08-25T01:34:04.989834Z","payload":{"anchorEnd":2,"anchorStart":2,"breadcrumb":"","createdAt":"2026-08-25T01:34:04.989834Z","fileId":"f-2","id":"u-1","kind":"user","snippet":"Beta body.","text":"note"}}
+test post_api_threads_validates_file_id_against_loaded_files ... ok
+test rejects_non_loopback_bind_addr ... ok
+test serve_with_ready_reports_listener_address_after_bind ... ok
+{"kind":"source.updated","at":"2026-08-25T01:34:04.991241Z","payload":{"fileId":"f-1","markdown":"# Doc v2","orphanedThreadIds":[],"renderedHtml":"<h1>Doc v2</h1>\n","sourceVersion":1,"threadAnchors":[]}}
+test serve_with_ready_reports_os_allocated_port_for_zero ... ok
+test post_api_threads_rejects_invalid_line_range ... ok
+test post_api_threads_returns_structured_400_for_bad_json ... ok
+{"kind":"thread.created","at":"2026-08-25T01:34:04.991938Z","payload":{"anchorEnd":1,"anchorStart":1,"breadcrumb":"","createdAt":"2026-08-25T01:34:04.991938Z","fileId":"f-1","id":"u-1","kind":"user","snippet":"Doc v2","text":"comment"}}
+test post_api_threads_rejects_stale_source_version ... ok
+test post_api_threads_returns_structured_400_for_missing_fields ... ok
+test post_api_threads_round_trips_line_range_for_code_block_threads ... ok
+test unknown_asset_path_returns_404 ... ok
+test text_threads_reject_image_anchors ... ok
+test shutdown_allows_started_request_to_complete ... ok
+test delete_api_thread_rejects_prepopulated_thread_without_events ... ok
+test post_api_heartbeat_updates_timestamp_silently ... ok
+test idle_timeout_zero_disables_prompt_suggest_done_event ... ok
+test heartbeat_prevents_idle_prompt_suggest_done_event ... ok
+test idle_timer_emits_prompt_suggest_done_once_per_idle_window ... ok
+
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s
+
+     Running tests/theme.rs (target/debug/deps/theme-5f9157674b507c1a)
+
+running 3 tests
+test allowlist_has_no_stale_entries ... ok
+test stylesheet_does_not_hardcode_new_colours ... ok
+test both_palettes_define_the_same_tokens ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests discuss
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

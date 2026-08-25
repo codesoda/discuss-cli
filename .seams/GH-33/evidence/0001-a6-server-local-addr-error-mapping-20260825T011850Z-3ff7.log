@@ -1,0 +1,19 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 d26fcdab79f154f02995ed289fea6411346fffd11660030742895c686574d460
+# run_id:   0001-a6-server-local-addr-error-mapping-20260825T011850Z-3ff7
+# executed: cargo test --lib server::tests::local_addr 
+# started:  20260825T011850Z
+# exit:     0 (0s)
+# output:   9 lines
+# ---
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/discuss-7e34c7baef40e5cd)
+
+running 2 tests
+test server::tests::local_addr_success_returns_bound_address ... ok
+test server::tests::local_addr_failure_maps_to_server_bind_error ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 180 filtered out; finished in 0.00s
+

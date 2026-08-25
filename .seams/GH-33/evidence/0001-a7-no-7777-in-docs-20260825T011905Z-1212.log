@@ -1,0 +1,10 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 d26fcdab79f154f02995ed289fea6411346fffd11660030742895c686574d460
+# run_id:   0001-a7-no-7777-in-docs-20260825T011905Z-1212
+# executed: sh -c if\ grep\ -n\ 7777\ AGENTS.md\ README.md\ llms.txt\;\ then\ exit\ 1\;\ fi 
+# started:  20260825T011905Z
+# exit:     0 (0s)
+# output:   0 lines
+# ---

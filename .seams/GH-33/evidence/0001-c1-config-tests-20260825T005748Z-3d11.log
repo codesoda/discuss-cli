@@ -1,0 +1,32 @@
+# seams verify
+# issue:    GH-33
+# seam:     0001
+# binding:  seams-diff-binding-v1 e390d1c713fd0cf60da6b2941453dbed81a9e6a52e6e97fdddafa37fff04e25d
+# run_id:   0001-c1-config-tests-20260825T005748Z-3d11
+# executed: cargo test --lib config::tests 
+# started:  20260825T005748Z
+# exit:     0 (0s)
+# output:   22 lines
+# ---
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src/lib.rs (target/debug/deps/discuss-7e34c7baef40e5cd)
+
+running 15 tests
+test config::tests::default_config_uses_documented_values ... ok
+test config::tests::cli_overrides_win_over_env_vars ... ok
+test config::tests::invalid_env_var_returns_config_parse_error ... ok
+test config::tests::rejects_zero_port_from_env ... ok
+test config::tests::resolve_ignores_missing_config_files ... ok
+test config::tests::deserializes_partial_toml_using_config_defaults ... ok
+test config::tests::config_toml_without_port_defaults_to_none ... ok
+test config::tests::deserializes_valid_toml_with_defaults_for_omitted_fields ... ok
+test config::tests::env_vars_override_toml_layers ... ok
+test config::tests::rejects_zero_port_from_toml ... ok
+test config::tests::rejects_unknown_fields_as_config_parse_errors ... ok
+test config::tests::config_layer_toml_without_port_preserves_lower_layer_port ... ok
+test config::tests::project_toml_overrides_user_toml_without_resetting_omitted_fields ... ok
+test config::tests::malformed_config_file_returns_path_aware_parse_error ... ok
+test config::tests::rejects_zero_port_from_config_file_layer ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.01s
+
