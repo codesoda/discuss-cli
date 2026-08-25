@@ -199,14 +199,14 @@ curl -s http://127.0.0.1:7777/api/state | jq -e 'has("threads")' > /dev/null \
   || { cat /tmp/discuss-startup.log; exit 1; }
 ```
 
-If you prefer automatic port allocation, omit `--port` and read the bound URL from the first `session.started` event in the startup log (parse `payload.url`). This approach works when you can capture and parse startup output.
+If you prefer automatic port allocation, omit `--port` and read the endpoints from the first `session.started` event in the startup log (parse `payload.endpoints`; use `endpoints.state` for the startup check above instead of the hardcoded URL). This approach works when you can capture and parse startup output.
 
 **2. Enter the event loop — blocking poller:**
 
-This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. After confirming startup above, take the `url` from `session.started.payload` or derive it from your explicit `--port`, then call the poller via Bash (blocking, timeout 600000ms):
+This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. The poller curls its argument verbatim, so it must be the **full state endpoint URL**, not the base session URL. After confirming startup above, take `endpoints.state` from `session.started.payload` — or, if you used an explicit `--port 7777`, construct `http://127.0.0.1:7777/api/state` — then call the poller via Bash (blocking, timeout 600000ms):
 
 ```bash
-bash <skill-dir>/poller.sh "$URL"
+bash <skill-dir>/poller.sh "$STATE_ENDPOINT"
 ```
 
 On the first invocation, pass no baseline — the poller snapshots current state itself. On every subsequent invocation, pass the baseline captured from the previous run's `snapshot` line (see below).
