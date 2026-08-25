@@ -44,7 +44,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Contextual Discussion Template</title>
+<title>Discuss</title>
 
 <!--
   Prism syntax highlighting (loaded from unpkg).
@@ -202,6 +202,19 @@
     gap: 16px;
   }
   header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .header-version { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  header .header-version .update-copy {
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  header .header-version .update-copy:hover { background: var(--accent-hover); }
+  header .header-version .update-copy.copied { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   header .meta { color: var(--muted); font-size: 13px; }
   header .thread-summary { position: relative; }
   header .thread-summary-toggle {
@@ -1555,7 +1568,8 @@
 <body>
 
 <header>
-  <h1>Contextual Discussion</h1>
+  <h1>Discuss</h1>
+  <span class="header-version" id="header-version" hidden></span>
   <div class="meta thread-summary" id="meta-status">Loading…</div>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
@@ -2225,6 +2239,73 @@
     renderAllThreads();
     scheduleReposition();
     setTimeout(scheduleReposition, 600);
+  }
+
+  // ---------- Version badge ----------
+  // Shows the running discuss version next to the header title. A background
+  // check against /api/version (which resolves the latest GitHub release
+  // server-side) upgrades the badge into a one-click copy of the update
+  // command when a newer version exists. Failures leave the badge hidden.
+  const UPDATE_COMMAND = 'discuss update -y';
+
+  function initVersionBadge() {
+    const el = document.getElementById('header-version');
+    if (!el) return;
+    fetch('/api/version', { headers: { Accept: 'application/json' } })
+      .then(response => (response.ok ? response.json() : null))
+      .then(info => {
+        if (!info || !info.current) return;
+        el.hidden = false;
+        if (info.updateAvailable && info.latest) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'update-copy';
+          button.textContent = `v${info.current} — update available (v${info.latest})`;
+          button.title = `Click to copy \`${UPDATE_COMMAND}\` for a terminal or agent`;
+          button.addEventListener('click', () => {
+            copyTextToClipboard(UPDATE_COMMAND).then(() => {
+              const label = button.textContent;
+              button.classList.add('copied');
+              button.textContent = `Copied \`${UPDATE_COMMAND}\` ✓`;
+              setTimeout(() => {
+                button.classList.remove('copied');
+                button.textContent = label;
+              }, 2000);
+            }).catch(() => {
+              button.textContent = `Copy failed — run \`${UPDATE_COMMAND}\``;
+            });
+          });
+          el.textContent = '';
+          el.appendChild(button);
+        } else {
+          el.textContent = `v${info.current}`;
+          el.title = 'discuss is up to date';
+        }
+      })
+      .catch(() => {});
+  }
+
+  function copyTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise((resolve, reject) => {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try {
+        if (document.execCommand('copy')) resolve();
+        else reject(new Error('copy rejected'));
+      } catch (error) {
+        reject(error);
+      } finally {
+        area.remove();
+      }
+    });
   }
 
   // ---------- Heartbeat ----------
@@ -5651,6 +5732,7 @@
 
   // ---------- Init ----------
   initThemeToggle();
+  initVersionBadge();
   attachPrismCompleteHook();
   hydrateState().then(() => {
     discussFiles = loadState().files || [];

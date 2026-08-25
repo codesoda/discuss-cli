@@ -8,10 +8,12 @@ use axum::http::header;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
 use crate::assets;
 use crate::state::{File, FileId, FileKind};
+use crate::update::{self, VersionStatus};
 use crate::{render, template};
 
 use super::app_state::AppState;
@@ -150,6 +152,26 @@ pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> 
             api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
         }
     }
+}
+
+/// Successful release lookups are cached for the life of the process so
+/// page reloads do not re-hit GitHub; failed lookups stay uncached and
+/// retry on the next request.
+static VERSION_STATUS_CACHE: OnceLock<VersionStatus> = OnceLock::new();
+
+pub(super) async fn get_api_version() -> Response {
+    if let Some(status) = VERSION_STATUS_CACHE.get() {
+        return Json(status.clone()).into_response();
+    }
+
+    let status = tokio::task::spawn_blocking(update::version_status)
+        .await
+        .unwrap_or_else(|_| VersionStatus::current_only());
+    if status.latest.is_some() {
+        let _ = VERSION_STATUS_CACHE.set(status.clone());
+    }
+
+    Json(status).into_response()
 }
 
 pub(super) async fn post_api_heartbeat(AxumState(app_state): AxumState<AppState>) -> Response {

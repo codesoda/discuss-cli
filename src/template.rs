@@ -489,8 +489,19 @@ mod tests {
         assert!(page.contains("if (reviewComplete) return;"));
         assert!(page.contains("document.body.classList.add('review-complete')"));
         assert!(page.contains("showMutationError(doneControl, \"couldn't finish"));
-        assert!(!page.contains("navigator.clipboard"));
         assert!(!page.contains("window.prompt"));
         assert!(!page.contains("function buildCopyText"));
+    }
+
+    #[test]
+    fn bundled_template_shows_version_badge_with_update_copy() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains("<h1>Discuss</h1>"));
+        assert!(!page.contains("Contextual Discussion"));
+        assert!(page.contains("id=\"header-version\""));
+        assert!(page.contains("fetch('/api/version'"));
+        assert!(page.contains("const UPDATE_COMMAND = 'discuss update -y';"));
+        assert!(page.contains("copyTextToClipboard(UPDATE_COMMAND)"));
     }
 }

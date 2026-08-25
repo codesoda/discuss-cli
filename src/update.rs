@@ -13,6 +13,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, LOCATION};
 use reqwest::redirect::Policy;
 use semver::Version;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use tempfile::{NamedTempFile, TempPath};
@@ -37,6 +38,43 @@ pub fn check() -> Result<String> {
     let latest = latest_release()?;
 
     Ok(status_line(&current, &latest.version))
+}
+
+/// Version info for the browser header badge. `latest` is `None` when the
+/// release lookup fails (offline, rate limited) so the UI can degrade quietly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionStatus {
+    pub current: String,
+    pub latest: Option<String>,
+    pub update_available: bool,
+}
+
+impl VersionStatus {
+    pub fn current_only() -> Self {
+        build_version_status(env!("CARGO_PKG_VERSION"), None)
+    }
+}
+
+/// Non-fatal version lookup backing `GET /api/version`; never errors so a
+/// failed release check cannot break the review page.
+pub fn version_status() -> VersionStatus {
+    build_version_status(env!("CARGO_PKG_VERSION"), latest_release().ok())
+}
+
+fn build_version_status(current: &str, latest: Option<LatestRelease>) -> VersionStatus {
+    let update_available = match (Version::parse(current).ok(), &latest) {
+        (Some(current), Some(release)) => {
+            compare_versions(&current, &release.version) == Ordering::Less
+        }
+        _ => false,
+    };
+
+    VersionStatus {
+        current: current.to_string(),
+        latest: latest.map(|release| release.version.to_string()),
+        update_available,
+    }
 }
 
 pub fn install(yes: bool) -> Result<String> {
@@ -511,6 +549,26 @@ mod tests {
             compare_versions(&current, &Version::parse("0.0.9").expect("valid version")),
             Ordering::Greater
         );
+    }
+
+    #[test]
+    fn version_status_flags_newer_release_only() {
+        let release = |version: &str| LatestRelease {
+            tag: format!("v{version}"),
+            version: Version::parse(version).expect("valid version"),
+        };
+
+        let newer = build_version_status("0.1.0", Some(release("0.2.0")));
+        assert_eq!(newer.current, "0.1.0");
+        assert_eq!(newer.latest.as_deref(), Some("0.2.0"));
+        assert!(newer.update_available);
+
+        let equal = build_version_status("0.2.0", Some(release("0.2.0")));
+        assert!(!equal.update_available);
+
+        let unknown = build_version_status("0.1.0", None);
+        assert_eq!(unknown.latest, None);
+        assert!(!unknown.update_available);
     }
 
     #[test]
