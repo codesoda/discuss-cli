@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use std::collections::{BTreeSet, HashMap};
 
+use chrono::Utc;
 use clap::CommandFactory;
 
 use crate::state::{File, FileId, FileKind, Source};
@@ -14,7 +15,6 @@ pub mod assets;
 pub mod cli;
 pub mod config;
 pub mod diff;
-pub mod endpoints;
 pub mod error;
 pub mod events;
 pub mod exit;
@@ -24,7 +24,6 @@ pub mod logging;
 pub mod render;
 pub mod server;
 pub mod sse;
-pub mod startup;
 pub mod state;
 pub mod template;
 pub mod transcript;
@@ -35,16 +34,25 @@ pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use events::{Event, EventEmitter, EventKind};
 pub use exit::exit_code_for_error;
-pub use launch::{SystemBrowserLauncher, announce_endpoints, loopback_url};
+pub use launch::{SystemBrowserLauncher, announce_listening, loopback_url, session_endpoints};
 pub use logging::init_tracing;
 pub use render::render;
-pub use server::{AppState, serve, serve_with_ready};
+pub use server::{AppState, bind_loopback_listeners, serve, serve_listener, serve_with_ready};
 pub use sse::{BroadcastEvent, EventBus};
 pub use template::render_page;
 pub use transcript::{
     Transcript, TranscriptThread, build_transcript, build_transcript_with_source,
 };
 pub use verdict::{Verdict, VerdictConfig, VerdictOption, VerdictStyle};
+
+/// Legacy fixed port retained for callers that explicitly pin a session port.
+pub const DEFAULT_PORT: u16 = 7777;
+
+pub const AGENT_INSTRUCTIONS: [&str; 3] = [
+    "Use payload.endpoints; do not assume port 7777.",
+    "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+    "Stop when session.done is received.",
+];
 
 pub async fn run(args: cli::Args) -> Result<()> {
     run_with_shutdown(args, pending()).await
@@ -207,7 +215,8 @@ where
             .collect(),
     };
 
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port.unwrap_or(0)));
+    let port = config.port.unwrap_or(0);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let auto_open = config.auto_open;
 
     let mut app_state = AppState::for_process()
@@ -223,25 +232,49 @@ where
         app_state = app_state.with_history_dir(history_dir);
     }
     let emitter = app_state.emitter.clone();
-    let facts = endpoints::SessionFacts {
-        mode: mode.to_string(),
-        source_file: session_source_label,
-        files_count,
-        git_args,
-    };
-    let mut stderr = io::stderr();
-    let started = startup::start_session(
-        addr,
-        None,
-        &facts,
-        emitter.as_ref(),
-        &mut stderr,
-        &launch::SystemBrowserLauncher,
-        auto_open,
-    )
-    .await?;
 
-    server::serve_on_listener(started.api.listener, started.api.addr, app_state, shutdown).await
+    server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {
+        let url = launch::loopback_url(listening_addr);
+        let started_at = Utc::now();
+
+        let mut payload = serde_json::json!({
+            "url": url.clone(),
+            "apiBaseUrl": url.clone(),
+            "endpoints": launch::session_endpoints(&url),
+            "agentInstructions": AGENT_INSTRUCTIONS,
+            "mode": mode,
+            "source_file": session_source_label,
+            "files_count": files_count,
+            "started_at": started_at.to_rfc3339(),
+        });
+        if !git_args.is_empty() {
+            payload["git_args"] = serde_json::json!(git_args);
+        }
+
+        if let Err(error) = emitter.emit(&Event {
+            kind: EventKind::SessionStarted,
+            at: started_at,
+            payload,
+        }) {
+            tracing::warn!(
+                %url,
+                error = %error,
+                "failed to emit session.started event"
+            );
+        }
+
+        let launcher = launch::SystemBrowserLauncher;
+        let mut stderr = io::stderr();
+
+        if let Err(error) = launch::announce_listening(&mut stderr, &launcher, &url, auto_open) {
+            tracing::warn!(
+                %url,
+                error = %error,
+                "failed to write listening URL to stderr"
+            );
+        }
+    })
+    .await
 }
 
 /// Whether stdin is attached to an interactive terminal.

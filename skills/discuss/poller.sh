@@ -2,19 +2,17 @@
 # poller.sh — blocking discuss event poller (fallback for when no Monitor-type
 # background monitoring tool is available)
 #
-# Usage: poller.sh <state_endpoint_url> [baseline_json]
+# Usage: poller.sh <state-endpoint-url> [baseline_json]
 #
-# Takes the complete state endpoint URL from session.started.payload.endpoints.state,
-# polls it every 5 seconds, and blocks until a change is detected. When something
-# changes, prints one JSON object per line for EVERY change detected, followed by
-# a final snapshot line:
+# The first argument is the exact payload.endpoints.state URL reported by the
+# session.started event. Polls that URL every 5 seconds. Blocks until a new
+# thread appears or an existing thread gains a new reply or take. When
+# something changes, prints one JSON object per line for EVERY change detected
+# in that poll, followed by a final snapshot line:
 #
 #   {"event": "thread.created", "thread": {...}}
 #   {"event": "thread.updated", "thread": {...}, "prev_count": 1, "current_count": 2}
 #   {"event": "snapshot", "baseline": {"<thread-id>": <count>, ...}}
-#
-# The URL must come from session.started.payload.endpoints.state to ensure
-# it uses the correct bound port and does not require reconstruction.
 #
 # Pass the "baseline" value from the snapshot line as $2 on the next
 # invocation so no events are dropped between invocations. If you post a reply
@@ -28,21 +26,21 @@
 
 set -euo pipefail
 
-URL="${1:-}"
+STATE_URL="${1:-}"
 BASELINE_JSON="${2:-}"
 TMPFILE=$(mktemp /tmp/discuss-state.XXXXXX)
 trap 'rm -f "$TMPFILE"' EXIT
 
-if [ -z "$URL" ]; then
+if [ -z "$STATE_URL" ]; then
   echo "Usage: poller.sh <state-endpoint-url> [baseline_json]" >&2
   exit 1
 fi
 
-# Fetch state endpoint into TMPFILE. Returns 0 if we got a 200 with a valid JSON
-# body containing .threads, non-zero otherwise. Never exits the script.
+# Fetch the reported state endpoint into TMPFILE. Returns 0 if we got a 200
+# with a valid JSON body containing .threads, non-zero otherwise.
 fetch_state() {
   local http_code
-  http_code=$(curl -s -o "$TMPFILE" -w "%{http_code}" "$URL" 2>/dev/null) || return 1
+  http_code=$(curl -s -o "$TMPFILE" -w "%{http_code}" "$STATE_URL" 2>/dev/null) || return 1
   [ "$http_code" = "200" ] || return 1
   jq -e '.threads' "$TMPFILE" > /dev/null 2>&1 || return 1
   return 0
@@ -71,7 +69,7 @@ if [ -z "$BASELINE_JSON" ]; then
   until fetch_state; do
     ATTEMPTS=$((ATTEMPTS + 1))
     if [ "$ATTEMPTS" -ge 3 ]; then
-      echo "discuss API unreachable at $URL" >&2
+      echo "discuss state endpoint unreachable at $STATE_URL" >&2
       exit 1
     fi
     sleep 2

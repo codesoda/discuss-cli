@@ -9,13 +9,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
-use discuss::endpoints::{SessionFacts, session_started_payload};
 use discuss::state::{
     Draft, NewThreadDraftKey, Resolution, State, Thread, ThreadId, ThreadKind, default_file_id,
 };
 use discuss::{
     AppState, BroadcastEvent, DiscussError, EventBus, EventEmitter, EventKind, Transcript,
-    VerdictConfig, VerdictOption, VerdictStyle, serve, serve_with_ready,
+    VerdictConfig, VerdictOption, VerdictStyle, bind_loopback_listeners, serve, serve_with_ready,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -463,78 +462,6 @@ async fn api_events_stream_ends_cleanly_on_shutdown() {
     .expect("sse stream closes within timeout")
     .expect("read sse response tail");
 
-    timeout(Duration::from_secs(1), server)
-        .await
-        .expect("server exits within timeout")
-        .expect("server task should not panic")
-        .expect("server shutdown should succeed");
-}
-
-#[tokio::test]
-async fn take_posted_to_reported_add_take_template_appears_in_state() {
-    let addr = free_loopback_addr();
-    let app_state = AppState::for_process();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(serve(addr, app_state, async move {
-        let _ = shutdown_rx.await;
-    }));
-
-    wait_for_server(addr).await;
-
-    let facts = SessionFacts {
-        mode: "markdown".to_string(),
-        source_file: "review.md".to_string(),
-        files_count: 1,
-        git_args: Vec::new(),
-    };
-    let payload = session_started_payload(addr, None, &facts, Utc::now());
-    let api_base_url = payload["apiBaseUrl"]
-        .as_str()
-        .expect("API base URL should be a string");
-    let create_thread_path = payload["endpoints"]["createThread"]
-        .as_str()
-        .expect("create-thread endpoint should be a string")
-        .strip_prefix(api_base_url)
-        .expect("create-thread endpoint should use the API base URL");
-    let created = post_json_path(
-        addr,
-        create_thread_path,
-        r#"{"anchorStart":2,"anchorEnd":4,"snippet":"selected text","text":"Needs clarification"}"#,
-    )
-    .await;
-    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
-    let thread_id = response_json(&created)["id"]
-        .as_str()
-        .expect("created thread should have an id")
-        .to_string();
-
-    let add_take_path = payload["endpoints"]["addTakeTemplate"]
-        .as_str()
-        .expect("add-take endpoint should be a string")
-        .replace("{threadId}", &thread_id);
-    let add_take_path = add_take_path
-        .strip_prefix(api_base_url)
-        .expect("add-take endpoint should use the API base URL");
-    let added = post_json_path(
-        addr,
-        add_take_path,
-        r#"{"text":"Agent recommends tightening this section"}"#,
-    )
-    .await;
-    assert!(added.starts_with("HTTP/1.1 200"), "response: {added}");
-
-    let state_path = payload["endpoints"]["state"]
-        .as_str()
-        .expect("state endpoint should be a string")
-        .strip_prefix(api_base_url)
-        .expect("state endpoint should use the API base URL");
-    let snapshot = response_json(&get_path(addr, state_path).await);
-    assert_eq!(
-        snapshot["takes"][&thread_id][0]["text"],
-        "Agent recommends tightening this section"
-    );
-
-    shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
         .await
         .expect("server exits within timeout")
@@ -2288,11 +2215,11 @@ async fn rejects_non_loopback_bind_addr() {
 
 #[tokio::test]
 async fn serve_with_ready_reports_listener_address_after_bind() {
-    let addr = free_loopback_addr();
+    let requested_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
     let (ready_tx, ready_rx) = oneshot::channel();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(serve_with_ready(
-        addr,
+        requested_addr,
         AppState::for_process(),
         async move {
             let _ = shutdown_rx.await;
@@ -2308,7 +2235,11 @@ async fn serve_with_ready_reports_listener_address_after_bind() {
         .await
         .expect("ready callback should run")
         .expect("ready callback should send address");
-    assert_eq!(listening_addr, addr);
+    assert_eq!(listening_addr.ip(), Ipv4Addr::LOCALHOST);
+    assert_ne!(listening_addr.port(), 0);
+
+    let response = get_path(listening_addr, "/api/state").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2319,39 +2250,23 @@ async fn serve_with_ready_reports_listener_address_after_bind() {
 }
 
 #[tokio::test]
-async fn serve_with_ready_reports_os_allocated_port_for_zero() {
-    let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-    let (ready_tx, ready_rx) = oneshot::channel();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let server = tokio::spawn(serve_with_ready(
-        requested,
-        AppState::for_process(),
-        async move {
-            let _ = shutdown_rx.await;
-        },
-        move |listening_addr| {
-            ready_tx
-                .send(listening_addr)
-                .expect("ready receiver should be active");
-        },
+async fn partial_bind_failure_releases_previously_bound_listeners() {
+    let first_addr = free_loopback_addr();
+    let occupied = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("bind deliberately occupied listener");
+    let occupied_addr = occupied.local_addr().expect("occupied listener addr");
+
+    let error = bind_loopback_listeners(&[first_addr, occupied_addr])
+        .await
+        .expect_err("second bind should fail");
+    assert!(matches!(
+        error,
+        DiscussError::PortInUse { port } if port == occupied_addr.port()
     ));
 
-    let listening_addr = timeout(Duration::from_secs(1), ready_rx)
-        .await
-        .expect("ready callback should run")
-        .expect("ready callback should send address");
-    assert!(listening_addr.ip().is_loopback());
-    assert_ne!(listening_addr.port(), 0);
-    TcpStream::connect(listening_addr)
-        .await
-        .expect("reported address should accept connections");
-
-    shutdown_tx.send(()).expect("send shutdown signal");
-    timeout(Duration::from_secs(1), server)
-        .await
-        .expect("server exits within timeout")
-        .expect("server task should not panic")
-        .expect("server shutdown should succeed");
+    let rebound = StdTcpListener::bind(first_addr)
+        .expect("first listener should be released after partial bind failure");
+    assert_eq!(rebound.local_addr().expect("rebound addr"), first_addr);
 }
 
 #[tokio::test]

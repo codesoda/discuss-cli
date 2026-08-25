@@ -27,7 +27,7 @@ pub struct Args {
         long,
         value_name = "N",
         value_parser = clap::value_parser!(u16).range(1..),
-        help = "Bind the local review server to this port"
+        help = "Bind the local review server to this exact port; when omitted, the OS assigns a port"
     )]
     pub port: Option<u16>,
 

@@ -61,6 +61,27 @@ const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MIN_IDLE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
+pub async fn bind_loopback_listeners(
+    requested_addrs: &[SocketAddr],
+) -> Result<Vec<(TcpListener, SocketAddr)>> {
+    for &addr in requested_addrs {
+        ensure_loopback(addr)?;
+    }
+
+    let mut listeners = Vec::with_capacity(requested_addrs.len());
+    for &addr in requested_addrs {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|error| bind_error(addr, error))?;
+        let listening_addr = listener
+            .local_addr()
+            .map_err(|source| DiscussError::ServerBindError { addr, source })?;
+        listeners.push((listener, listening_addr));
+    }
+
+    Ok(listeners)
+}
+
 pub async fn serve<F>(addr: SocketAddr, app_state: AppState, shutdown: F) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
@@ -68,26 +89,41 @@ where
     serve_with_ready(addr, app_state, shutdown, |_| {}).await
 }
 
-pub async fn bind_listener(addr: SocketAddr) -> Result<(TcpListener, SocketAddr)> {
-    ensure_loopback(addr)?;
+pub async fn serve_with_ready<F, R>(
+    addr: SocketAddr,
+    app_state: AppState,
+    shutdown: F,
+    on_ready: R,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce(SocketAddr),
+{
+    let mut listeners = bind_loopback_listeners(&[addr]).await?;
+    let (listener, listening_addr) = listeners
+        .pop()
+        .expect("one requested listener should be returned");
+    on_ready(listening_addr);
 
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|error| bind_error(addr, error))?;
-    let listening_addr = local_addr_or_bind_error(addr, listener.local_addr())?;
-
-    Ok((listener, listening_addr))
+    serve_listener(listener, app_state, shutdown).await
 }
 
-pub async fn serve_on_listener<F>(
+pub async fn serve_listener<F>(
     listener: TcpListener,
-    listening_addr: SocketAddr,
     app_state: AppState,
     shutdown: F,
 ) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let listening_addr = listener
+        .local_addr()
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            source,
+        })?;
+    ensure_loopback(listening_addr)?;
+
     spawn_idle_timer(app_state.clone());
 
     let router = build_router(app_state.clone());
@@ -107,21 +143,6 @@ where
             addr: listening_addr,
             source,
         })
-}
-
-pub async fn serve_with_ready<F, R>(
-    addr: SocketAddr,
-    app_state: AppState,
-    shutdown: F,
-    on_ready: R,
-) -> Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-    R: FnOnce(SocketAddr),
-{
-    let (listener, listening_addr) = bind_listener(addr).await?;
-    on_ready(listening_addr);
-    serve_on_listener(listener, listening_addr, app_state, shutdown).await
 }
 
 fn spawn_idle_timer(app_state: AppState) {
@@ -295,16 +316,6 @@ fn ensure_loopback(addr: SocketAddr) -> Result<()> {
     })
 }
 
-fn local_addr_or_bind_error(
-    requested: SocketAddr,
-    local_addr: io::Result<SocketAddr>,
-) -> Result<SocketAddr> {
-    local_addr.map_err(|source| DiscussError::ServerBindError {
-        addr: requested,
-        source,
-    })
-}
-
 fn bind_error(addr: SocketAddr, error: io::Error) -> DiscussError {
     if error.kind() == io::ErrorKind::AddrInUse {
         DiscussError::PortInUse { port: addr.port() }
@@ -313,49 +324,5 @@ fn bind_error(addr: SocketAddr, error: io::Error) -> DiscussError {
             addr,
             source: error,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn bind_listener_reports_os_allocated_port_for_zero() {
-        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-
-        let (_listener, listening_addr) = bind_listener(requested)
-            .await
-            .expect("listener should bind");
-
-        assert_eq!(listening_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_ne!(listening_addr.port(), 0);
-    }
-
-    #[test]
-    fn local_addr_failure_maps_to_server_bind_error() {
-        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-        let error =
-            local_addr_or_bind_error(requested, Err(io::Error::other("local address failed")))
-                .expect_err("local address failure should fail startup");
-
-        match error {
-            DiscussError::ServerBindError { addr, source } => {
-                assert_eq!(addr, requested);
-                assert_eq!(source.kind(), io::ErrorKind::Other);
-            }
-            other => panic!("expected server bind error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn local_addr_success_returns_bound_address() {
-        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-        let bound = SocketAddr::from((Ipv4Addr::LOCALHOST, 49152));
-
-        let listening_addr = local_addr_or_bind_error(requested, Ok(bound))
-            .expect("local address success should return bound address");
-
-        assert_eq!(listening_addr, bound);
     }
 }

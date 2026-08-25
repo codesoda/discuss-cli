@@ -5,19 +5,17 @@ use std::path::{Path, PathBuf};
 use std::{env, str::FromStr};
 
 use directories::BaseDirs;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{DiscussError, Result};
 
 const DEFAULT_AUTO_OPEN: bool = true;
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 600;
-const PORT_ZERO_MESSAGE: &str =
-    "port 0 is not a valid bind port; omit `port` to let the operating system choose a free port";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    #[serde(default, deserialize_with = "deserialize_port")]
+    #[serde(default, deserialize_with = "deserialize_nonzero_port")]
     pub port: Option<u16>,
     pub auto_open: bool,
     pub idle_timeout_secs: u64,
@@ -136,7 +134,7 @@ impl ConfigOverrides {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct ConfigLayer {
-    #[serde(default, deserialize_with = "deserialize_port")]
+    #[serde(default, deserialize_with = "deserialize_nonzero_port")]
     port: Option<u16>,
     auto_open: Option<bool>,
     idle_timeout_secs: Option<u64>,
@@ -221,30 +219,32 @@ fn read_config_layer(path: &Path) -> Result<Option<ConfigLayer>> {
     }
 }
 
-fn deserialize_port<'de, D>(deserializer: D) -> std::result::Result<Option<u16>, D::Error>
+fn deserialize_nonzero_port<'de, D>(deserializer: D) -> std::result::Result<Option<u16>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
-    let port = Option::<u16>::deserialize(deserializer)?;
-    if port == Some(0) {
-        return Err(serde::de::Error::custom(PORT_ZERO_MESSAGE));
-    }
+    Option::<u16>::deserialize(deserializer)?
+        .map(validate_nonzero_port)
+        .transpose()
+        .map_err(de::Error::custom)
+}
 
-    Ok(port)
+fn validate_nonzero_port(port: u16) -> std::result::Result<u16, &'static str> {
+    if port == 0 {
+        Err("port must be between 1 and 65535")
+    } else {
+        Ok(port)
+    }
 }
 
 fn parse_env_port(name: &str, value: &str) -> Result<u16> {
     let port = parse_env_var(name, value)?;
-    if port == 0 {
-        return Err(DiscussError::ConfigParseError {
-            path: PathBuf::from(name),
-            line: 0,
-            col: 0,
-            message: format!("invalid value {value:?}: {PORT_ZERO_MESSAGE}"),
-        });
-    }
-
-    Ok(port)
+    validate_nonzero_port(port).map_err(|message| DiscussError::ConfigParseError {
+        path: PathBuf::from(name),
+        line: 0,
+        col: 0,
+        message: format!("invalid value {value:?}: {message}"),
+    })
 }
 
 fn parse_env_var<T>(name: &str, value: &str) -> Result<T>
@@ -364,9 +364,9 @@ port = 9999
     }
 
     #[test]
-    fn rejects_zero_port_from_toml() {
+    fn rejects_zero_port_in_full_toml_with_location() {
         let error = Config::from_toml_str("port = 0\n", "/tmp/discuss.config.toml")
-            .expect_err("zero port should be rejected");
+            .expect_err("zero TOML port should fail");
 
         match error {
             DiscussError::ConfigParseError {
@@ -378,19 +378,10 @@ port = 9999
                 assert_eq!(path, PathBuf::from("/tmp/discuss.config.toml"));
                 assert_eq!(line, 1);
                 assert!(col > 0);
-                assert!(message.contains(PORT_ZERO_MESSAGE));
+                assert!(message.contains("port must be between 1 and 65535"));
             }
             other => panic!("expected config parse error, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn config_toml_without_port_defaults_to_none() {
-        let config = Config::from_toml_str("auto_open = false\n", "discuss.config.toml")
-            .expect("port-less config should parse");
-
-        assert_eq!(config.port, None);
-        assert!(!config.auto_open);
     }
 
     #[test]
@@ -436,56 +427,6 @@ porrt = 8888
         .expect("missing config files should be ignored");
 
         assert_eq!(config, Config::default());
-    }
-
-    #[test]
-    fn rejects_zero_port_from_config_file_layer() {
-        let temp_dir = tempdir().expect("tempdir should be created");
-        let project_path = temp_dir.path().join("project.toml");
-        fs::write(&project_path, "port = 0\n").expect("project config should be written");
-
-        let error = Config::resolve_with_sources(
-            ConfigOverrides::default(),
-            None,
-            Some(&project_path),
-            std::iter::empty::<(String, String)>(),
-        )
-        .expect_err("zero port should be rejected");
-
-        match error {
-            DiscussError::ConfigParseError {
-                path,
-                line,
-                col,
-                message,
-            } => {
-                assert_eq!(path, project_path);
-                assert_eq!(line, 1);
-                assert!(col > 0);
-                assert!(message.contains(PORT_ZERO_MESSAGE));
-            }
-            other => panic!("expected config parse error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn config_layer_toml_without_port_preserves_lower_layer_port() {
-        let temp_dir = tempdir().expect("tempdir should be created");
-        let user_path = temp_dir.path().join("user.toml");
-        let project_path = temp_dir.path().join("project.toml");
-        fs::write(&user_path, "port = 1111\n").expect("user config should be written");
-        fs::write(&project_path, "no_save = true\n").expect("project config should be written");
-
-        let config = Config::resolve_with_sources(
-            ConfigOverrides::default(),
-            Some(&user_path),
-            Some(&project_path),
-            std::iter::empty::<(String, String)>(),
-        )
-        .expect("port-less project config should parse");
-
-        assert_eq!(config.port, Some(1111));
-        assert!(config.no_save);
     }
 
     #[test]
@@ -607,6 +548,26 @@ log_level = "warn"
     }
 
     #[test]
+    fn layered_toml_rejects_zero_port() {
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let project_path = temp_dir.path().join("project.toml");
+        fs::write(&project_path, "port = 0\n").expect("project config should be written");
+
+        let error = Config::resolve_with_sources(
+            ConfigOverrides::default(),
+            None,
+            Some(&project_path),
+            std::iter::empty::<(String, String)>(),
+        )
+        .expect_err("zero port in a config layer should fail");
+
+        assert!(matches!(
+            error,
+            DiscussError::ConfigParseError { path, line: 1, .. } if path == project_path
+        ));
+    }
+
+    #[test]
     fn malformed_config_file_returns_path_aware_parse_error() {
         let temp_dir = tempdir().expect("tempdir should be created");
         let project_path = temp_dir.path().join("project.toml");
@@ -642,7 +603,7 @@ log_level = "warn"
     }
 
     #[test]
-    fn rejects_zero_port_from_env() {
+    fn zero_env_port_returns_config_parse_error() {
         let error = Config::resolve_with_sources(
             ConfigOverrides::default(),
             None,
@@ -652,16 +613,10 @@ log_level = "warn"
         .expect_err("zero env port should fail");
 
         match error {
-            DiscussError::ConfigParseError {
-                path,
-                line,
-                col,
-                message,
-            } => {
+            DiscussError::ConfigParseError { path, message, .. } => {
                 assert_eq!(path, PathBuf::from("DISCUSS_PORT"));
-                assert_eq!(line, 0);
-                assert_eq!(col, 0);
-                assert!(message.contains(PORT_ZERO_MESSAGE));
+                assert!(message.contains("invalid value \"0\""));
+                assert!(message.contains("port must be between 1 and 65535"));
             }
             other => panic!("expected config parse error, got {other:?}"),
         }

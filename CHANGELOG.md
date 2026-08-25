@@ -6,14 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- Sessions started without an explicit port now use an OS-assigned free loopback port. Pass `--port 7777` to restore the previous address. Explicit TOML `port = 0` and `DISCUSS_PORT=0` now fail with a configuration error and exit code 2; explicit nonzero ports still bind exactly and fail fast on collision.
-- Startup stderr now labels the review endpoint as `review UI/API` and conditionally reports a website proxy endpoint. The additive `session.started` payload now includes `apiBaseUrl`, an absolute endpoint map, optional `proxyUrl`, and agent instructions while retaining `url` and existing session fields.
-
-### Removed
-
-- Removed the public `discuss::DEFAULT_PORT` constant because sessions no longer have a fixed default port.
+- **Concurrent sessions and self-describing startup** — no-override sessions now bind `127.0.0.1:0` directly and use the OS-assigned port, while explicit nonzero CLI, environment, and TOML ports bind exactly and fail on collision without fallback. Startup acquires all required loopback listeners before readiness and releases partial acquisitions on failure. `session.started` preserves its existing fields and adds `apiBaseUrl`, an exact endpoint map, and agent instructions; ordinary sessions omit the optional `proxyUrl`. Stderr now reports `review UI/API: <actual-url>`, and bundled integrations consume reported endpoints instead of scanning ports or assuming `7777`. Closes [#33](https://github.com/codesoda/discuss-cli/issues/33).
 
 ## [0.7.0] - 2026-08-24
 

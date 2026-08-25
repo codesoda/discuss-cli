@@ -63,7 +63,7 @@ The agent invokes the skill. If `discuss` isn't on your PATH yet, it'll prompt b
 
 > `discuss` isn't on your PATH. Install it now? (runs `curl -sSL https://raw.githubusercontent.com/codesoda/discuss-cli/main/install.sh | sh`)
 
-Confirm — the installer self-bootstraps in the background, the server launches on the automatically chosen free loopback port printed at startup, your browser opens with the rendered doc, and the agent starts streaming events. Drop an inline thread anywhere and the agent replies with a take.
+Confirm — the installer self-bootstraps in the background, the server binds an OS-assigned loopback port, your browser opens at the reported address, and the agent starts streaming events. Drop an inline thread anywhere and the agent replies with a take.
 
 ### Without an agent
 
@@ -71,7 +71,7 @@ Confirm — the installer self-bootstraps in the background, the server launches
 discuss ./plan.md
 ```
 
-Browser opens on the automatically chosen free loopback port printed at startup. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
+The browser opens at the actual address printed on stderr as `review UI/API: http://127.0.0.1:<port>`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
 ### Piping markdown via stdin
 
@@ -153,7 +153,7 @@ The agent's per-file prose anchors block-level threads ("why is this changing?")
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <N>` | OS-assigned free port | Bind exactly to an explicit nonzero port; fail fast on collision. `0` is rejected. |
+| `--port <N>` | OS-assigned | Bind this exact nonzero port when a predictable URL is required (for example, `--port 7777`); fail if occupied. Without an override, Discuss binds loopback port `0` directly and uses the address assigned by the OS—there is no scan-then-bind race. |
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
@@ -173,7 +173,7 @@ For diff mode, put verdict flags before the `diff` subcommand. Use single quotes
 
 ## HTTP API
 
-While the server is running:
+While the server is running, agents should use the exact URLs in `session.started.payload.endpoints` rather than infer a port:
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -196,7 +196,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 
 | Kind | When |
 |------|------|
-| `session.started` | Server bound and listening |
+| `session.started` | Server bound and listening. The existing fields are joined by `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, and `done`), and short `agentInstructions`. Optional `proxyUrl` appears only for modes with a secondary proxy listener and is omitted for ordinary sessions. |
 | `thread.created` | User opened a new thread; HTML threads include `elementAnchor {selector, fallbacks, tag, textDigest?, outerHtml}` |
 | `reply.added` | Human posted a reply |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |
