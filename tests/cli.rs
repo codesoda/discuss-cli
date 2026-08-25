@@ -269,6 +269,33 @@ fn cli_no_save_flag_suppresses_history_archive() {
 }
 
 #[test]
+fn cli_zero_env_port_exits_two() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(&markdown_path, "# Review\n").expect("markdown file should be written");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg(&markdown_path)
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env("DISCUSS_PORT", "0")
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("spawn discuss binary");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should be reserved for JSON events"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("DISCUSS_PORT"));
+}
+
+#[test]
 fn cli_bad_verdict_options_exits_two_and_reports_message() {
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
