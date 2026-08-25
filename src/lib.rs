@@ -15,6 +15,7 @@ pub mod assets;
 pub mod cli;
 pub mod config;
 pub mod diff;
+pub mod endpoints;
 pub mod error;
 pub mod events;
 pub mod exit;

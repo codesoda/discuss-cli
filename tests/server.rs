@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use discuss::assets;
+use discuss::endpoints::{SessionFacts, session_started_payload};
 use discuss::state::{
     Draft, NewThreadDraftKey, Resolution, State, Thread, ThreadId, ThreadKind, default_file_id,
 };
@@ -462,6 +463,78 @@ async fn api_events_stream_ends_cleanly_on_shutdown() {
     .expect("sse stream closes within timeout")
     .expect("read sse response tail");
 
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn take_posted_to_reported_add_take_template_appears_in_state() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let facts = SessionFacts {
+        mode: "markdown".to_string(),
+        source_file: "review.md".to_string(),
+        files_count: 1,
+        git_args: Vec::new(),
+    };
+    let payload = session_started_payload(addr, None, &facts, Utc::now());
+    let api_base_url = payload["apiBaseUrl"]
+        .as_str()
+        .expect("API base URL should be a string");
+    let create_thread_path = payload["endpoints"]["createThread"]
+        .as_str()
+        .expect("create-thread endpoint should be a string")
+        .strip_prefix(api_base_url)
+        .expect("create-thread endpoint should use the API base URL");
+    let created = post_json_path(
+        addr,
+        create_thread_path,
+        r#"{"anchorStart":2,"anchorEnd":4,"snippet":"selected text","text":"Needs clarification"}"#,
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 200"), "response: {created}");
+    let thread_id = response_json(&created)["id"]
+        .as_str()
+        .expect("created thread should have an id")
+        .to_string();
+
+    let add_take_path = payload["endpoints"]["addTakeTemplate"]
+        .as_str()
+        .expect("add-take endpoint should be a string")
+        .replace("{threadId}", &thread_id);
+    let add_take_path = add_take_path
+        .strip_prefix(api_base_url)
+        .expect("add-take endpoint should use the API base URL");
+    let added = post_json_path(
+        addr,
+        add_take_path,
+        r#"{"text":"Agent recommends tightening this section"}"#,
+    )
+    .await;
+    assert!(added.starts_with("HTTP/1.1 200"), "response: {added}");
+
+    let state_path = payload["endpoints"]["state"]
+        .as_str()
+        .expect("state endpoint should be a string")
+        .strip_prefix(api_base_url)
+        .expect("state endpoint should use the API base URL");
+    let snapshot = response_json(&get_path(addr, state_path).await);
+    assert_eq!(
+        snapshot["takes"][&thread_id][0]["text"],
+        "Agent recommends tightening this section"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
         .await
         .expect("server exits within timeout")
