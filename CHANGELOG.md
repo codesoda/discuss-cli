@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-25
+
 ### Added
 
 - **Header version badge with update check** — the browser header now reads "Discuss" and shows the running version. `GET /api/version` performs a non-fatal, cached background check against the latest GitHub release; when a newer version exists the badge becomes a one-click button that copies `discuss update -y` for pasting into a terminal or agent.
