@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Header version badge with update check** — the browser header now reads "Discuss" and shows the running version. `GET /api/version` performs a non-fatal, cached background check against the latest GitHub release; when a newer version exists the badge becomes a one-click button that copies `discuss update -y` for pasting into a terminal or agent.
+
 - **Concurrent sessions and self-describing startup** — no-override sessions now bind `127.0.0.1:0` directly and use the OS-assigned port, while explicit nonzero CLI, environment, and TOML ports bind exactly and fail on collision without fallback. Startup acquires all required loopback listeners before readiness and releases partial acquisitions on failure. `session.started` preserves its existing fields and adds `apiBaseUrl`, an exact endpoint map, and agent instructions; ordinary sessions omit the optional `proxyUrl`. Stderr now reports `review UI/API: <actual-url>`, and bundled integrations consume reported endpoints instead of scanning ports or assuming `7777`. Closes [#33](https://github.com/codesoda/discuss-cli/issues/33).
 
 ## [0.7.0] - 2026-08-24
