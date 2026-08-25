@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Sessions started without an explicit port now use an OS-assigned free loopback port. Pass `--port 7777` to restore the previous address. Explicit TOML `port = 0` and `DISCUSS_PORT=0` now fail with a configuration error and exit code 2; explicit nonzero ports still bind exactly and fail fast on collision.
+- Startup stderr now labels the review endpoint as `review UI/API` and conditionally reports a website proxy endpoint. The additive `session.started` payload now includes `apiBaseUrl`, an absolute endpoint map, optional `proxyUrl`, and agent instructions while retaining `url` and existing session fields.
 
 ### Removed
 

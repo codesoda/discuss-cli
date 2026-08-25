@@ -18,20 +18,24 @@ pub fn loopback_url(addr: SocketAddr) -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
-pub fn announce_listening<W, L>(
+pub fn announce_endpoints<W, L>(
     writer: &mut W,
     launcher: &L,
-    url: &str,
+    review_url: &str,
+    proxy_url: Option<&str>,
     auto_open: bool,
 ) -> io::Result<()>
 where
     W: Write,
     L: BrowserLauncher,
 {
-    writeln!(writer, "listening on {url}")?;
+    writeln!(writer, "review UI/API: {review_url}")?;
+    if let Some(proxy_url) = proxy_url {
+        writeln!(writer, "website proxy: {proxy_url}")?;
+    }
 
-    if auto_open && let Err(error) = launcher.open(url) {
-        tracing::warn!(%url, error = %error, "failed to open browser");
+    if auto_open && let Err(error) = launcher.open(review_url) {
+        tracing::warn!(url = %review_url, error = %error, "failed to open browser");
     }
 
     Ok(())
@@ -69,16 +73,16 @@ mod tests {
     }
 
     #[test]
-    fn announce_listening_writes_exact_url_line_and_opens_when_enabled() {
+    fn announce_endpoints_writes_review_line_and_opens_browser() {
         let launcher = FakeLauncher::default();
         let mut stderr = Vec::new();
 
-        announce_listening(&mut stderr, &launcher, "http://127.0.0.1:7777", true)
+        announce_endpoints(&mut stderr, &launcher, "http://127.0.0.1:7777", None, true)
             .expect("announcement should succeed");
 
         assert_eq!(
             String::from_utf8(stderr).expect("stderr should be utf-8"),
-            "listening on http://127.0.0.1:7777\n"
+            "review UI/API: http://127.0.0.1:7777\n"
         );
         assert_eq!(
             launcher.opened_urls.borrow().as_slice(),
@@ -87,29 +91,49 @@ mod tests {
     }
 
     #[test]
-    fn announce_listening_suppresses_browser_open_when_disabled() {
+    fn announce_endpoints_writes_proxy_line_when_present() {
         let launcher = FakeLauncher::default();
         let mut stderr = Vec::new();
 
-        announce_listening(&mut stderr, &launcher, "http://127.0.0.1:7777", false)
+        announce_endpoints(
+            &mut stderr,
+            &launcher,
+            "http://127.0.0.1:7777",
+            Some("http://127.0.0.1:8888"),
+            false,
+        )
+        .expect("announcement should succeed");
+
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr should be utf-8"),
+            "review UI/API: http://127.0.0.1:7777\nwebsite proxy: http://127.0.0.1:8888\n"
+        );
+    }
+
+    #[test]
+    fn announce_endpoints_suppresses_browser_open_when_disabled() {
+        let launcher = FakeLauncher::default();
+        let mut stderr = Vec::new();
+
+        announce_endpoints(&mut stderr, &launcher, "http://127.0.0.1:7777", None, false)
             .expect("announcement should succeed");
 
         assert_eq!(
             String::from_utf8(stderr).expect("stderr should be utf-8"),
-            "listening on http://127.0.0.1:7777\n"
+            "review UI/API: http://127.0.0.1:7777\n"
         );
         assert!(launcher.opened_urls.borrow().is_empty());
     }
 
     #[test]
-    fn browser_open_failure_does_not_fail_announcement() {
+    fn announce_endpoints_browser_failure_does_not_fail_announcement() {
         let launcher = FakeLauncher {
             opened_urls: RefCell::new(Vec::new()),
             fail: true,
         };
         let mut stderr = Vec::new();
 
-        announce_listening(&mut stderr, &launcher, "http://127.0.0.1:7777", true)
+        announce_endpoints(&mut stderr, &launcher, "http://127.0.0.1:7777", None, true)
             .expect("browser failure should only be logged");
 
         assert_eq!(

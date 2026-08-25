@@ -22,7 +22,8 @@ Pin the port and suppress browser auto-open:
   discuss --port 9000 --no-open path/to/review.md
 
 When discuss starts it binds `127.0.0.1` on an OS-assigned free port unless `--port` is given, and prints:
-  listening on http://127.0.0.1:<port>
+  review UI/API: http://127.0.0.1:<port>
+A session with a second listener also prints `website proxy: <url>`.
 
 Open that URL in a browser. When the review is complete, click Finish review to finish the session.
 

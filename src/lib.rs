@@ -35,7 +35,7 @@ pub use config::{Config, ConfigOverrides};
 pub use error::{DiscussError, Result};
 pub use events::{Event, EventEmitter, EventKind};
 pub use exit::exit_code_for_error;
-pub use launch::{SystemBrowserLauncher, announce_listening, loopback_url};
+pub use launch::{SystemBrowserLauncher, announce_endpoints, loopback_url};
 pub use logging::init_tracing;
 pub use render::render;
 pub use server::{AppState, serve, serve_with_ready};

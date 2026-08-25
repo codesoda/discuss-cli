@@ -51,7 +51,7 @@ fn cli_busy_port_exits_three_and_reports_port() {
 }
 
 #[test]
-fn cli_no_open_logs_listening_url_to_stderr() {
+fn cli_no_open_logs_review_endpoint_line_to_stderr() {
     let port = free_port();
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
@@ -77,7 +77,7 @@ fn cli_no_open_logs_listening_url_to_stderr() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let _ = child.kill();
     let _ = child.wait();
@@ -138,7 +138,7 @@ fn cli_emits_single_session_started_event_after_listening() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let output = kill_and_collect(child);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
@@ -151,7 +151,36 @@ fn cli_emits_single_session_started_event_after_listening() {
     let event = &events[0];
     assert_eq!(event["kind"], "session.started");
     assert_rfc3339(event["at"].as_str().expect("event at should be a string"));
-    assert_eq!(event["payload"]["url"], format!("http://127.0.0.1:{port}"));
+    let api_base_url = format!("http://127.0.0.1:{port}");
+    assert_eq!(event["payload"]["url"], api_base_url);
+    assert_eq!(event["payload"]["apiBaseUrl"], api_base_url);
+    assert_eq!(
+        event["payload"]["endpoints"]["state"],
+        format!("{api_base_url}/api/state")
+    );
+    assert_eq!(
+        event["payload"]["endpoints"]["events"],
+        format!("{api_base_url}/api/events")
+    );
+    assert_eq!(
+        event["payload"]["endpoints"]["createThread"],
+        format!("{api_base_url}/api/threads")
+    );
+    assert_eq!(
+        event["payload"]["endpoints"]["addTakeTemplate"],
+        format!("{api_base_url}/api/threads/{{threadId}}/takes")
+    );
+    assert_eq!(
+        event["payload"]["endpoints"]["done"],
+        format!("{api_base_url}/api/done")
+    );
+    assert!(event["payload"].get("proxyUrl").is_none());
+    assert!(
+        !event["payload"]["agentInstructions"]
+            .as_array()
+            .expect("agentInstructions should be an array")
+            .is_empty()
+    );
     assert_eq!(event["payload"]["source_file"], source_file);
     assert_rfc3339(
         event["payload"]["started_at"]
@@ -200,7 +229,7 @@ fn cli_history_dir_flag_overrides_config_history_dir_and_writes_archive() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let response = post_done(port);
     assert!(
@@ -251,7 +280,7 @@ fn cli_no_save_flag_suppresses_history_archive() {
         .recv_timeout(Duration::from_secs(2))
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("listening on http://127.0.0.1:{port}\n"));
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
 
     let response = post_done(port);
     assert!(

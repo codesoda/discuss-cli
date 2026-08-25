@@ -179,7 +179,7 @@ Avoid piping another command's output in (`git diff … | discuss -`) — the co
 Notes:
 
 - `persistent: true` is required — discuss is a long-running server that only exits when the user is done. Without it the monitor will time out mid-review and take discuss down with it.
-- Do NOT redirect stderr. Monitor-type tools keep stderr out of the event stream (Claude Code writes it to the task output file, pi to a temp log), so discuss's `listening on …` stderr line can't pollute the JSON events — but `2>&1` would fold it in.
+- Do NOT redirect stderr. Monitor-type tools keep stderr out of the event stream (Claude Code writes it to the task output file, pi to a temp log), so discuss's `review UI/API: …` stderr line can't pollute the JSON events — but `2>&1` would fold it in.
 - Record the id returned by the launch call (`task_id` from Monitor, monitor id from `monitor_start`) — you need it to stop the session later.
 - If the port is already bound or the file doesn't exist, discuss exits immediately and the monitor ends without ever emitting a `session.started` event. Read the monitor's stderr log to surface the error, then stop.
 - In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.

@@ -62,11 +62,20 @@ where
         );
     }
 
-    if let Err(error) = launch::announce_listening(stderr, launcher, &review_url, auto_open) {
+    let proxy_url = proxy
+        .as_ref()
+        .map(|listener| launch::loopback_url(listener.addr));
+    if let Err(error) = launch::announce_endpoints(
+        stderr,
+        launcher,
+        &review_url,
+        proxy_url.as_deref(),
+        auto_open,
+    ) {
         tracing::warn!(
             url = %review_url,
             error = %error,
-            "failed to write listening URL to stderr"
+            "failed to write endpoint URLs to stderr"
         );
     }
 
@@ -183,9 +192,72 @@ mod tests {
         assert_eq!(event["payload"]["apiBaseUrl"], review_url);
         assert_eq!(
             String::from_utf8(stderr).expect("stderr should be UTF-8"),
-            format!("listening on {review_url}\n")
+            format!("review UI/API: {review_url}\n")
         );
         assert_eq!(launcher.opened_urls.borrow().as_slice(), [review_url]);
+    }
+
+    #[tokio::test]
+    async fn start_session_reports_proxy_endpoint_when_second_listener_binds() {
+        let emitter = EventEmitter::new(Vec::new());
+        let mut stderr = Vec::new();
+        let launcher = FakeLauncher::default();
+
+        let started = start_session(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+            &facts(),
+            &emitter,
+            &mut stderr,
+            &launcher,
+            false,
+        )
+        .await
+        .expect("both listeners should bind");
+        let review_url = launch::loopback_url(started.api.addr);
+        let proxy_url = launch::loopback_url(
+            started
+                .proxy
+                .as_ref()
+                .expect("proxy listener should be returned")
+                .addr,
+        );
+        let emitted = String::from_utf8(emitter.into_inner().expect("read event sink"))
+            .expect("event should be UTF-8");
+        let event: Value = serde_json::from_str(emitted.trim()).expect("event should be JSON");
+
+        assert_eq!(event["payload"]["proxyUrl"], proxy_url);
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr should be UTF-8"),
+            format!("review UI/API: {review_url}\nwebsite proxy: {proxy_url}\n")
+        );
+        assert!(launcher.opened_urls.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_session_suppresses_browser_open_when_auto_open_disabled() {
+        let emitter = EventEmitter::new(Vec::new());
+        let mut stderr = Vec::new();
+        let launcher = FakeLauncher::default();
+
+        let started = start_session(
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            None,
+            &facts(),
+            &emitter,
+            &mut stderr,
+            &launcher,
+            false,
+        )
+        .await
+        .expect("session should start");
+        let review_url = launch::loopback_url(started.api.addr);
+
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr should be UTF-8"),
+            format!("review UI/API: {review_url}\n")
+        );
+        assert!(launcher.opened_urls.borrow().is_empty());
     }
 
     #[tokio::test]
@@ -210,7 +282,7 @@ mod tests {
         assert!(TcpListener::bind(started.api.addr).await.is_err());
         assert_eq!(
             String::from_utf8(stderr).expect("stderr should be UTF-8"),
-            format!("listening on {review_url}\n")
+            format!("review UI/API: {review_url}\n")
         );
         assert_eq!(launcher.opened_urls.borrow().as_slice(), [review_url]);
     }
