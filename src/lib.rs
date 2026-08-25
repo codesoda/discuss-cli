@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use std::collections::{BTreeSet, HashMap};
 
-use chrono::Utc;
 use clap::CommandFactory;
 
 use crate::state::{File, FileId, FileKind, Source};
@@ -25,6 +24,7 @@ pub mod logging;
 pub mod render;
 pub mod server;
 pub mod sse;
+pub mod startup;
 pub mod state;
 pub mod template;
 pub mod transcript;
@@ -223,46 +223,25 @@ where
         app_state = app_state.with_history_dir(history_dir);
     }
     let emitter = app_state.emitter.clone();
+    let facts = endpoints::SessionFacts {
+        mode: mode.to_string(),
+        source_file: session_source_label,
+        files_count,
+        git_args,
+    };
+    let mut stderr = io::stderr();
+    let started = startup::start_session(
+        addr,
+        None,
+        &facts,
+        emitter.as_ref(),
+        &mut stderr,
+        &launch::SystemBrowserLauncher,
+        auto_open,
+    )
+    .await?;
 
-    server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {
-        let url = launch::loopback_url(listening_addr);
-        let started_at = Utc::now();
-
-        let mut payload = serde_json::json!({
-            "url": url.clone(),
-            "mode": mode,
-            "source_file": session_source_label,
-            "files_count": files_count,
-            "started_at": started_at.to_rfc3339(),
-        });
-        if !git_args.is_empty() {
-            payload["git_args"] = serde_json::json!(git_args);
-        }
-
-        if let Err(error) = emitter.emit(&Event {
-            kind: EventKind::SessionStarted,
-            at: started_at,
-            payload,
-        }) {
-            tracing::warn!(
-                %url,
-                error = %error,
-                "failed to emit session.started event"
-            );
-        }
-
-        let launcher = launch::SystemBrowserLauncher;
-        let mut stderr = io::stderr();
-
-        if let Err(error) = launch::announce_listening(&mut stderr, &launcher, &url, auto_open) {
-            tracing::warn!(
-                %url,
-                error = %error,
-                "failed to write listening URL to stderr"
-            );
-        }
-    })
-    .await
+    server::serve_on_listener(started.api.listener, started.api.addr, app_state, shutdown).await
 }
 
 /// Whether stdin is attached to an interactive terminal.

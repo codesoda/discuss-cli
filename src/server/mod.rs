@@ -68,24 +68,26 @@ where
     serve_with_ready(addr, app_state, shutdown, |_| {}).await
 }
 
-pub async fn serve_with_ready<F, R>(
-    addr: SocketAddr,
-    app_state: AppState,
-    shutdown: F,
-    on_ready: R,
-) -> Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-    R: FnOnce(SocketAddr),
-{
+pub async fn bind_listener(addr: SocketAddr) -> Result<(TcpListener, SocketAddr)> {
     ensure_loopback(addr)?;
 
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|error| bind_error(addr, error))?;
     let listening_addr = local_addr_or_bind_error(addr, listener.local_addr())?;
-    on_ready(listening_addr);
 
+    Ok((listener, listening_addr))
+}
+
+pub async fn serve_on_listener<F>(
+    listener: TcpListener,
+    listening_addr: SocketAddr,
+    app_state: AppState,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     spawn_idle_timer(app_state.clone());
 
     let router = build_router(app_state.clone());
@@ -105,6 +107,21 @@ where
             addr: listening_addr,
             source,
         })
+}
+
+pub async fn serve_with_ready<F, R>(
+    addr: SocketAddr,
+    app_state: AppState,
+    shutdown: F,
+    on_ready: R,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce(SocketAddr),
+{
+    let (listener, listening_addr) = bind_listener(addr).await?;
+    on_ready(listening_addr);
+    serve_on_listener(listener, listening_addr, app_state, shutdown).await
 }
 
 fn spawn_idle_timer(app_state: AppState) {
@@ -302,6 +319,18 @@ fn bind_error(addr: SocketAddr, error: io::Error) -> DiscussError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bind_listener_reports_os_allocated_port_for_zero() {
+        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+
+        let (_listener, listening_addr) = bind_listener(requested)
+            .await
+            .expect("listener should bind");
+
+        assert_eq!(listening_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_ne!(listening_addr.port(), 0);
+    }
 
     #[test]
     fn local_addr_failure_maps_to_server_bind_error() {

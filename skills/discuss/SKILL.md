@@ -239,7 +239,7 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 The first notification from the monitor should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","apiBaseUrl":"http://127.0.0.1:<port>","endpoints":{"state":"http://127.0.0.1:<port>/api/state","events":"http://127.0.0.1:<port>/api/events","createThread":"http://127.0.0.1:<port>/api/threads","addTakeTemplate":"http://127.0.0.1:<port>/api/threads/{threadId}/takes","done":"http://127.0.0.1:<port>/api/done"},"agentInstructions":["Use payload.endpoints; do not assume port 7777.","On thread.created, POST a take to addTakeTemplate with {threadId} replaced.","Stop when session.done is received."],"mode":"markdown","source_file":"...","files_count":1,"started_at":"..."}}
 ```
 
 Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
@@ -334,7 +334,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 ## Stdout event kinds
 
-- `session.started` → `{url, mode, source_file, files_count, started_at, git_args?}`
+- `session.started` → `{url, apiBaseUrl, proxyUrl?, endpoints: {state, events, createThread, addTakeTemplate, done}, agentInstructions, mode, source_file, files_count, started_at, git_args?}`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
 - `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
