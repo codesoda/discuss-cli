@@ -83,6 +83,10 @@
     --accent-hover: rgba(11, 95, 255, 0.05);
     --accent-dashed: rgba(11, 95, 255, 0.35);
     --accent-range: rgba(11, 95, 255, 0.12);
+    /* Body links. Not --accent: on the dark page --accent is 5.5:1, which
+       passes AA but sits well below body text at 12.5:1, so links read as
+       the dimmest thing on the page. The dark value is lifted to ~6.9:1. */
+    --link: #0b5fff;
     --line: #e5e5e2;
     --line-strong: #cfcfc9;
     --quote: #fffbea;
@@ -140,6 +144,7 @@
     --accent-hover: rgba(90, 155, 255, 0.10);
     --accent-dashed: rgba(90, 155, 255, 0.45);
     --accent-range: rgba(90, 155, 255, 0.18);
+    --link: #7cb0ff;
     --line: #3a3a38;
     --line-strong: #4c4c48;
     --quote: #3a3210;
@@ -668,6 +673,56 @@
   #doc-content p { margin: 8px 0; }
   #doc-content ul, #doc-content ol { padding-left: 22px; margin: 8px 0; }
   #doc-content li { margin: 3px 0; }
+  /* Without this, links fall back to the UA blue/purple, which is close to
+     unreadable on the dark background. :visited matches so the second colour
+     doesn't reintroduce the same problem. */
+  #doc-content a, #doc-content a:visited { color: var(--link); }
+  #doc-content a { text-underline-offset: 2px; }
+  /* Tables. The horizontal scroll lives on .table-scroll rather than on
+     .table-wrap because gutter markers hang off the right edge of their
+     anchor and overflow would clip them — the same split .pre-wrap makes
+     for code blocks. */
+  #doc-content .table-wrap {
+    position: relative;
+    margin: 10px 0;
+  }
+  #doc-content .table-scroll { overflow-x: auto; }
+  /* Only shown while there is more table to the right, so narrow tables
+     don't get a fade suggesting content that isn't there. */
+  #doc-content .table-wrap.can-scroll-right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--card));
+  }
+  /* max-width lets auto layout shrink columns to fit the pane — a long
+     prose column wraps instead of squeezing its neighbours. Sideways
+     scrolling only kicks in once even the minimum widths don't fit. */
+  #doc-content table {
+    border-collapse: collapse;
+    max-width: 100%;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  #doc-content th, #doc-content td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: break-word;
+  }
+  /* Markdown alignment (|---:|) becomes align="right" on the cell. Skip
+     those so an explicit choice isn't silently overridden. */
+  #doc-content th:not([align]) { text-align: left; }
+  #doc-content thead th {
+    background: var(--pre-bg);
+    border-bottom: 1px solid var(--line-strong);
+    font-weight: 600;
+  }
+  #doc-content tbody tr:last-child > td { border-bottom: none; }
   #doc-content code {
     font-family: var(--mono);
     font-size: 12.5px;
@@ -1031,6 +1086,33 @@
     outline-offset: 2px;
     border-radius: 3px;
     box-shadow: 0 1px 6px rgba(11, 95, 255, 0.18);
+  }
+
+  /* Row anchors keep the generic state backgrounds — deliberately not
+     restated here, so they track the shared palette rather than pinning a
+     second copy of each colour. Only the outline needs suppressing: on a
+     <tr> an offset outline draws outside the table edge. */
+  #doc-content tr[data-anchor-idx]:hover,
+  #doc-content tr[data-anchor-idx].focused,
+  #doc-content tr[data-anchor-idx].in-range,
+  #doc-content tr[data-anchor-idx].thread-active {
+    outline: none;
+    box-shadow: none;
+  }
+  /* Header cells carry an opaque background of their own, which would hide
+     the row state painted on the <tr> underneath. inherit re-uses whatever
+     the row resolved to instead of naming the colour again. */
+  #doc-content thead tr[data-anchor-idx]:hover > th,
+  #doc-content thead tr[data-anchor-idx].focused > th,
+  #doc-content thead tr[data-anchor-idx].in-range > th,
+  #doc-content thead tr[data-anchor-idx].has-thread > th,
+  #doc-content thead tr[data-anchor-idx].thread-active > th {
+    background-color: inherit;
+  }
+  /* Stands in for the outline the other anchors get. */
+  #doc-content tr[data-anchor-idx].focused > :first-child,
+  #doc-content tr[data-anchor-idx].thread-active > :first-child {
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   /* --- Gutter markers --- */
@@ -3046,7 +3128,41 @@
   // Any element matching this selector inside #doc-content becomes commentable.
   // <pre> is commented-on via a generated .pre-wrap wrapper because <pre>'s
   // own overflow-x: auto clips the absolutely-positioned gutter marker.
-  const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .quote, .decision, .callout, .context';
+  // The right-edge fade is a hint that the table continues past the pane, so
+  // it only shows while there is actually somewhere left to scroll.
+  function updateTableScrollFade(wrap) {
+    const scroll = wrap.querySelector('.table-scroll');
+    if (!scroll) return;
+    const more = scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft > 1;
+    wrap.classList.toggle('can-scroll-right', more);
+  }
+  function updateAllTableScrollFades() {
+    document.querySelectorAll('#doc-content .table-wrap').forEach(updateTableScrollFade);
+  }
+  // Row markers are placed by pixel offset, so a resize that rewraps a cell
+  // and changes row heights has to move them again.
+  function repositionRowMarkerStacks(wrap) {
+    const wrapTop = wrap.getBoundingClientRect().top;
+    wrap.querySelectorAll(':scope > .thread-marker-stack[data-for-anchor]').forEach(stack => {
+      const row = wrap.querySelector(`tr[data-anchor-idx="${stack.getAttribute('data-for-anchor')}"]`);
+      if (!row) return;
+      stack.style.top = Math.max(0, row.getBoundingClientRect().top - wrapTop + 1) + 'px';
+    });
+  }
+  // Catches the divider drag and font loads as well as window resizes.
+  const tableScrollObserver = new ResizeObserver(entries => {
+    entries.forEach(entry => {
+      const wrap = entry.target.closest('.table-wrap');
+      if (!wrap) return;
+      updateTableScrollFade(wrap);
+      repositionRowMarkerStacks(wrap);
+    });
+  });
+
+  // <tr> is commentable rather than <td>/<th>: anchors bind to the outermost
+  // match (see below), so rows and cells can't both be commentable, and rows
+  // are the granularity reviewers actually reach for.
+  const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, tr, .quote, .decision, .callout, .context';
   function assignAnchorIndices() {
     const doc = document.getElementById('doc-content');
     if (!doc || doc.querySelector(':scope > .image-review')) return;
@@ -3059,6 +3175,21 @@
       pre.parentElement.insertBefore(wrap, pre);
       wrap.appendChild(pre);
     });
+    // Tables get the same two-layer treatment: .table-scroll clips
+    // horizontally, .table-wrap stays unclipped so row markers survive.
+    doc.querySelectorAll('table').forEach(table => {
+      if (table.parentElement && table.parentElement.classList.contains('table-scroll')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      const scroll = document.createElement('div');
+      scroll.className = 'table-scroll';
+      table.parentElement.insertBefore(wrap, table);
+      wrap.appendChild(scroll);
+      scroll.appendChild(table);
+      scroll.addEventListener('scroll', () => updateTableScrollFade(wrap), { passive: true });
+      tableScrollObserver.observe(scroll);
+    });
+    updateAllTableScrollFades();
     const nodes = Array.from(doc.querySelectorAll(COMMENTABLE_SELECTOR));
     // If an element is nested inside another commentable (e.g. <li> inside a
     // <blockquote>), prefer the outermost ancestor so clicks don't ambiguate.
@@ -3422,6 +3553,13 @@
     if (!el) return '';
     const clone = el.cloneNode(true);
     clone.querySelectorAll('.thread-marker, .thread-marker-stack').forEach(n => n.remove());
+    // A row's cells would otherwise run together ("Fledge1—the first flight").
+    if (el.tagName === 'TR') {
+      return Array.from(clone.children)
+        .map(cell => (cell.textContent || '').trim())
+        .filter(Boolean)
+        .join(' · ');
+    }
     return (clone.textContent || '').trim();
   }
   function snippetOfAnchor(anchorEl) {
@@ -4185,6 +4323,32 @@
       });
   }
 
+  // A <tr> anchor lives inside .table-scroll, whose overflow would clip a
+  // marker hanging off the right edge. Host it on the unclipped .table-wrap
+  // instead, offset down to the row. Everything else hosts on the anchor.
+  // One wrap holds a stack per commented row, so stacks carry the anchor
+  // index they belong to.
+  function appendMarkerStack(anchor, stack) {
+    stack.setAttribute('data-for-anchor', anchor.getAttribute('data-anchor-idx'));
+    const wrap = anchor.tagName === 'TR' ? anchor.closest('.table-wrap') : null;
+    if (!wrap) { anchor.appendChild(stack); return; }
+    const top = anchor.getBoundingClientRect().top - wrap.getBoundingClientRect().top;
+    stack.style.top = Math.max(0, top + 1) + 'px';
+    wrap.appendChild(stack);
+  }
+  // Reuses the stack already built for this anchor so draft markers sit
+  // alongside thread markers instead of starting a second stack.
+  function markerStackFor(anchor) {
+    const idx = anchor.getAttribute('data-anchor-idx');
+    const host = (anchor.tagName === 'TR' && anchor.closest('.table-wrap')) || anchor;
+    let stack = host.querySelector(`:scope > .thread-marker-stack[data-for-anchor="${idx}"]`);
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'thread-marker-stack';
+      appendMarkerStack(anchor, stack);
+    }
+    return stack;
+  }
   function renderMarkers() {
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
@@ -4257,7 +4421,7 @@
           stack.appendChild(marker);
         }
       });
-      if (stack) anchor.appendChild(stack);
+      if (stack) appendMarkerStack(anchor, stack);
     });
 
     // Render new-thread draft markers (teal, dashed, "…"). These live
@@ -4320,13 +4484,7 @@
         marker.style.top = top + 'px';
         anchor.appendChild(marker);
       } else {
-        let stack = anchor.querySelector('.thread-marker-stack');
-        if (!stack) {
-          stack = document.createElement('div');
-          stack.className = 'thread-marker-stack';
-          anchor.appendChild(stack);
-        }
-        stack.appendChild(marker);
+        markerStackFor(anchor).appendChild(marker);
       }
     });
 
