@@ -45,8 +45,6 @@ pub use transcript::{
 };
 pub use verdict::{Verdict, VerdictConfig, VerdictOption, VerdictStyle};
 
-pub const DEFAULT_PORT: u16 = 7777;
-
 pub async fn run(args: cli::Args) -> Result<()> {
     run_with_shutdown(args, pending()).await
 }
@@ -208,8 +206,7 @@ where
             .collect(),
     };
 
-    let port = config.port.unwrap_or(DEFAULT_PORT);
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port.unwrap_or(0)));
     let auto_open = config.auto_open;
 
     let mut app_state = AppState::for_process()

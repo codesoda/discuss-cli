@@ -269,6 +269,98 @@ fn cli_no_save_flag_suppresses_history_archive() {
 }
 
 #[test]
+fn cli_auto_allocates_distinct_ports_for_concurrent_sessions() {
+    let first_dir = tempdir().expect("first tempdir should be created");
+    let first_home = first_dir.path().join("home");
+    fs::create_dir(&first_home).expect("first home should be created");
+    let first_markdown = first_dir.path().join("review.md");
+    fs::write(&first_markdown, "# First Review\n")
+        .expect("first markdown file should be written");
+
+    let second_dir = tempdir().expect("second tempdir should be created");
+    let second_home = second_dir.path().join("home");
+    fs::create_dir(&second_home).expect("second home should be created");
+    let second_markdown = second_dir.path().join("review.md");
+    fs::write(&second_markdown, "# Second Review\n")
+        .expect("second markdown file should be written");
+
+    let mut first_child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg(&first_markdown)
+        .current_dir(first_dir.path())
+        .env("HOME", &first_home)
+        .env_remove("DISCUSS_PORT")
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn first discuss binary");
+    let mut second_child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg(&second_markdown)
+        .current_dir(second_dir.path())
+        .env("HOME", &second_home)
+        .env_remove("DISCUSS_PORT")
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn second discuss binary");
+
+    let first_stdout = first_child
+        .stdout
+        .take()
+        .expect("first stdout pipe should be present");
+    let second_stdout = second_child
+        .stdout
+        .take()
+        .expect("second stdout pipe should be present");
+    let first_line_rx = read_first_line(first_stdout);
+    let second_line_rx = read_first_line(second_stdout);
+
+    let first_line = first_line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first startup event should be written")
+        .expect("first startup event should be readable");
+    let second_line = second_line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("second startup event should be written")
+        .expect("second startup event should be readable");
+    let first_event: Value =
+        serde_json::from_str(&first_line).expect("first startup event should be JSON");
+    let second_event: Value =
+        serde_json::from_str(&second_line).expect("second startup event should be JSON");
+
+    assert_eq!(first_event["kind"], "session.started");
+    assert_eq!(second_event["kind"], "session.started");
+    let first_port = first_event["payload"]["url"]
+        .as_str()
+        .expect("first URL should be a string")
+        .rsplit(':')
+        .next()
+        .expect("first URL should contain a port")
+        .parse::<u16>()
+        .expect("first URL port should be numeric");
+    let second_port = second_event["payload"]["url"]
+        .as_str()
+        .expect("second URL should be a string")
+        .rsplit(':')
+        .next()
+        .expect("second URL should contain a port")
+        .parse::<u16>()
+        .expect("second URL port should be numeric");
+
+    assert_ne!(first_port, 0);
+    assert_ne!(second_port, 0);
+    assert_ne!(first_port, second_port);
+    assert!(get_state(first_port).starts_with("HTTP/1.1 200"));
+    assert!(get_state(second_port).starts_with("HTTP/1.1 200"));
+
+    let _ = kill_and_collect(first_child);
+    let _ = kill_and_collect(second_child);
+}
+
+#[test]
 fn cli_zero_env_port_exits_two() {
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
@@ -352,6 +444,21 @@ fn kill_and_collect(mut child: Child) -> Output {
 
 fn assert_rfc3339(value: &str) {
     DateTime::parse_from_rfc3339(value).expect("timestamp should be RFC3339");
+}
+
+fn get_state(port: u16) -> String {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect to discuss");
+    let request =
+        "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    stream
+        .write_all(request.as_bytes())
+        .expect("write state request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read state response");
+    response
 }
 
 fn post_done(port: u16) -> String {

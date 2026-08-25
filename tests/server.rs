@@ -2246,6 +2246,42 @@ async fn serve_with_ready_reports_listener_address_after_bind() {
 }
 
 #[tokio::test]
+async fn serve_with_ready_reports_os_allocated_port_for_zero() {
+    let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve_with_ready(
+        requested,
+        AppState::for_process(),
+        async move {
+            let _ = shutdown_rx.await;
+        },
+        move |listening_addr| {
+            ready_tx
+                .send(listening_addr)
+                .expect("ready receiver should be active");
+        },
+    ));
+
+    let listening_addr = timeout(Duration::from_secs(1), ready_rx)
+        .await
+        .expect("ready callback should run")
+        .expect("ready callback should send address");
+    assert!(listening_addr.ip().is_loopback());
+    assert_ne!(listening_addr.port(), 0);
+    TcpStream::connect(listening_addr)
+        .await
+        .expect("reported address should accept connections");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_mermaid_js_asset_returns_bundled_bytes_with_cache_headers() {
     let addr = free_loopback_addr();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

@@ -83,7 +83,7 @@ where
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|error| bind_error(addr, error))?;
-    let listening_addr = listener.local_addr().unwrap_or(addr);
+    let listening_addr = local_addr_or_bind_error(addr, listener.local_addr())?;
     on_ready(listening_addr);
 
     spawn_idle_timer(app_state.clone());
@@ -101,7 +101,10 @@ where
             shutdown_signal.signal();
         })
         .await
-        .map_err(|source| DiscussError::ServerBindError { addr, source })
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: listening_addr,
+            source,
+        })
 }
 
 fn spawn_idle_timer(app_state: AppState) {
@@ -275,6 +278,16 @@ fn ensure_loopback(addr: SocketAddr) -> Result<()> {
     })
 }
 
+fn local_addr_or_bind_error(
+    requested: SocketAddr,
+    local_addr: io::Result<SocketAddr>,
+) -> Result<SocketAddr> {
+    local_addr.map_err(|source| DiscussError::ServerBindError {
+        addr: requested,
+        source,
+    })
+}
+
 fn bind_error(addr: SocketAddr, error: io::Error) -> DiscussError {
     if error.kind() == io::ErrorKind::AddrInUse {
         DiscussError::PortInUse { port: addr.port() }
@@ -283,5 +296,39 @@ fn bind_error(addr: SocketAddr, error: io::Error) -> DiscussError {
             addr,
             source: error,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_addr_failure_maps_to_server_bind_error() {
+        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let error = local_addr_or_bind_error(
+            requested,
+            Err(io::Error::other("local address failed")),
+        )
+        .expect_err("local address failure should fail startup");
+
+        match error {
+            DiscussError::ServerBindError { addr, source } => {
+                assert_eq!(addr, requested);
+                assert_eq!(source.kind(), io::ErrorKind::Other);
+            }
+            other => panic!("expected server bind error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_addr_success_returns_bound_address() {
+        let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let bound = SocketAddr::from((Ipv4Addr::LOCALHOST, 49152));
+
+        let listening_addr = local_addr_or_bind_error(requested, Ok(bound))
+            .expect("local address success should return bound address");
+
+        assert_eq!(listening_addr, bound);
     }
 }
