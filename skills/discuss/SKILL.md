@@ -190,21 +190,23 @@ Use this only when no monitor-type background tool is enabled in the current con
 
 **1. Start discuss in the background:**
 
+When a monitor-type tool is unavailable, you may use an explicit `--port` for predictability:
+
 ```bash
-discuss "$ARGUMENTS" --port <port> > /tmp/discuss-startup.log 2>&1 &
+discuss "$ARGUMENTS" --port 7777 > /tmp/discuss-startup.log 2>&1 &
 sleep 2
-curl -s http://127.0.0.1:<port>/api/state | jq -e 'has("threads")' > /dev/null \
+curl -s http://127.0.0.1:7777/api/state | jq -e 'has("threads")' > /dev/null \
   || { cat /tmp/discuss-startup.log; exit 1; }
 ```
 
-Pick a free port by checking which of 7777–7782 isn't already bound (`curl -s http://127.0.0.1:<port>/api/state`). If all are in use, discuss is already running — attach to the existing one.
+If you prefer automatic port allocation, omit `--port` and read the bound URL from the first `session.started` event in the startup log (parse `payload.url`). This approach works when you can capture and parse startup output.
 
 **2. Enter the event loop — blocking poller:**
 
-This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. Call it via Bash (blocking, timeout 600000ms). It polls `/api/state` every 5 seconds and exits as soon as something changes:
+This skill's directory (the directory containing this SKILL.md) also contains `poller.sh`. After confirming startup above, take the `url` from `session.started.payload` or derive it from your explicit `--port`, then call the poller via Bash (blocking, timeout 600000ms):
 
 ```bash
-bash <skill-dir>/poller.sh "http://127.0.0.1:<port>"
+bash <skill-dir>/poller.sh "$URL"
 ```
 
 On the first invocation, pass no baseline — the poller snapshots current state itself. On every subsequent invocation, pass the baseline captured from the previous run's `snapshot` line (see below).
@@ -242,7 +244,15 @@ The first notification from the monitor should be a `session.started` event:
 {"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<port>","apiBaseUrl":"http://127.0.0.1:<port>","endpoints":{"state":"http://127.0.0.1:<port>/api/state","events":"http://127.0.0.1:<port>/api/events","createThread":"http://127.0.0.1:<port>/api/threads","addTakeTemplate":"http://127.0.0.1:<port>/api/threads/{threadId}/takes","done":"http://127.0.0.1:<port>/api/done"},"agentInstructions":["Use payload.endpoints; do not assume port 7777.","On thread.created, POST a take to addTakeTemplate with {threadId} replaced.","Stop when session.done is received."],"mode":"markdown","source_file":"...","files_count":1,"started_at":"..."}}
 ```
 
-Parse `url` from the payload — **use this URL for every subsequent API call**. The port is configurable (`--port`, config file), so don't hardcode `7777`.
+Extract three fields from the `session.started.payload`:
+- `url` — the full base address for all subsequent API calls (equivalent to `apiBaseUrl`)
+- `endpoints` — a map with pre-built endpoint URLs:
+  - `endpoints.state` — for polling state (already constructed with the bound port)
+  - `endpoints.events` — for SSE (already constructed)
+  - `endpoints.createThread`, `endpoints.addTakeTemplate`, `endpoints.done` — each with the bound port
+- `agentInstructions` — guidance on how to consume the payload
+
+**Always use the endpoints and URL as reported** — never reconstruct or assume a port.
 
 If the monitor ends without emitting `session.started`, discuss failed to start. Read its stderr log for the error, report it, and stop.
 
@@ -262,10 +272,11 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through `/api/state.files` and inspect `imageAnchor`'s percentage coordinates. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
-5. Post it as a **take**, not a reply (substitute the URL from `session.started`):
+5. Post it as a **take**, not a reply. Substitute `{threadId}` in the `addTakeTemplate` from `session.started.payload.endpoints`:
 
 ```bash
-curl -s -X POST "$URL/api/threads/<thread-id>/takes" \
+TAKE_URL="${endpoints_addTakeTemplate//\{threadId\}/$THREAD_ID}"
+curl -s -X POST "$TAKE_URL" \
   -H 'Content-Type: application/json' \
   -d '{"text":"..."}'
 ```
@@ -274,10 +285,10 @@ curl -s -X POST "$URL/api/threads/<thread-id>/takes" \
 
 Replies come only from the human (the API uses `/replies` for humans, `/takes` for you). Any `reply.added` event is a new user message.
 
-1. Fetch full state: `curl -s "$URL/api/state"` — parse the thread and all its replies/takes in order.
+1. Fetch full state using `endpoints.state` from `session.started.payload`: `curl -s "$STATE_ENDPOINT"` — parse the thread and all its replies/takes in order.
 2. Read the latest reply in context.
 3. Decide: is this a question, a challenge, or a genuine opening for more commentary? If yes, post a follow-up take. If it's closure ("thanks", "got it", "makes sense"), stay silent.
-4. If responding, POST another take to the same thread.
+4. If responding, POST another take using `endpoints.addTakeTemplate` (with `{threadId}` substituted) to the same thread.
 
 ### `thread.resolved` / `thread.deleted`
 
@@ -298,23 +309,23 @@ On stop:
 
 ## API reference
 
-All endpoints at the `url` from `session.started`. Request/response is JSON.
+Use the endpoints reported in `session.started.payload.endpoints` — each is a complete, absolute URL with the bound port already substituted. Request/response is JSON.
 
-| Method | Path | Body | Purpose |
+| Method | Endpoint key | Body | Purpose |
 |---|---|---|---|
-| GET | `/api/state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
-| GET | `/api/events` | — | SSE stream (alternative to stdout) |
-| GET | `/api/files/{fileId}/raw` | — | Startup-stable bytes for an image file |
-| GET | `/files/{fileId}` | — | Served HTML prototype document |
-| POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
-| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
+| GET | `endpoints.state` | — | Full snapshot: threads, replies, takes, drafts, verdictConfig |
+| GET | `endpoints.events` | — | SSE stream (alternative to stdout) |
+| GET | — | — | Image file raw bytes (resolved via `/api/state.files`) |
+| GET | — | — | Served HTML prototype document (resolved via `/api/state.files`) |
+| POST | — | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors (via `/api/anchors/resolve`) |
+| POST | `createThread` (via `/api/threads`) | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
-| POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
+| POST | `addTakeTemplate` (substitute `{threadId}`) | `{text}` | **Agent** take. Use the template from `endpoints.addTakeTemplate`. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
 | POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
-| POST | `/api/done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
+| POST | `endpoints.done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
 
 ### Live source updates (`POST /api/source`)
 
