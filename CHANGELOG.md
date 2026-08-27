@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Prominent thread navigation** — the "X of Y resolved" control moved out of the muted header meta text into the right-hand tool area next to "Show all", restyled as a real bordered button with a ▾ caret and an accent state while its thread-summary popover is open; the popover now anchors to the right edge of the header. Open thread panels gain ‹ / › buttons that step to the previous/next thread in the same order the summary popover uses (file order → anchor position → creation order), switching files when needed; ‹ disables on the first thread and › on the last. Closes [#40](https://github.com/codesoda/discuss-cli/issues/40).
 
+### Fixed
+
+- **Tables are now commentable in markdown reviews** — each rendered GFM table gets a `.table-wrap` anchor (the same pattern as code blocks' `.pre-wrap`), so clicking a table or selecting cell text opens the comment affordance instead of doing nothing. The server-side block splitter counts each table as one block to match, so `GET /api/files/{fileId}/blocks` and agent-computed anchors stay in lockstep with the browser. Closes [#36](https://github.com/codesoda/discuss-cli/issues/36).
+
 ## [0.8.0] - 2026-08-25
 
 ### Added

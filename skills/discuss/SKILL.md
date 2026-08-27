@@ -360,7 +360,7 @@ If you regenerate the markdown mid-session (e.g. the user fixed code under revie
 }
 ```
 
-Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
+Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks, tables) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
 
 ## Stdout event kinds
 
