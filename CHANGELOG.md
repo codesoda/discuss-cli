@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-27
+
 ### Added
 
 - **Agent-initiated review annotations** — agents that edited the document under review can now pre-annotate it before the human comments. `POST /api/threads` accepts an optional `kind: "agent"` that allocates an `a-N` thread whose opening prose is stored as its first take, rendered in the browser with the pending-take visual language and the normal reply/resolve/delete lifecycle. A new `GET /api/files/{fileId}/blocks` endpoint returns the server's commentable-block segmentation (index, snippet, breadcrumb, `sourceVersion`) so agents can compute anchors without reimplementing the markdown splitter, and `session.started` advertises the capability via a new `agentInstructions` line and an `endpoints.blocksTemplate` entry. Closes [#39](https://github.com/codesoda/discuss-cli/issues/39).
