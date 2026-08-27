@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Agent-initiated review annotations** — agents that edited the document under review can now pre-annotate it before the human comments. `POST /api/threads` accepts an optional `kind: "agent"` that allocates an `a-N` thread whose opening prose is stored as its first take, rendered in the browser with the pending-take visual language and the normal reply/resolve/delete lifecycle. A new `GET /api/files/{fileId}/blocks` endpoint returns the server's commentable-block segmentation (index, snippet, breadcrumb, `sourceVersion`) so agents can compute anchors without reimplementing the markdown splitter, and `session.started` advertises the capability via a new `agentInstructions` line and an `endpoints.blocksTemplate` entry. Closes [#39](https://github.com/codesoda/discuss-cli/issues/39).
 
+- **Prominent thread navigation** — the "X of Y resolved" control moved out of the muted header meta text into the right-hand tool area next to "Show all", restyled as a real bordered button with a ▾ caret and an accent state while its thread-summary popover is open; the popover now anchors to the right edge of the header. Open thread panels gain ‹ / › buttons that step to the previous/next thread in the same order the summary popover uses (file order → anchor position → creation order), switching files when needed; ‹ disables on the first thread and › on the last. Closes [#40](https://github.com/codesoda/discuss-cli/issues/40).
+
 ## [0.8.0] - 2026-08-25
 
 ### Added
