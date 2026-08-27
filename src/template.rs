@@ -353,7 +353,7 @@ mod tests {
     fn bundled_template_links_thread_summary_to_thread_cards() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
-        assert!(page.contains("class=\"thread-summary-toggle\""));
+        assert!(page.contains("class=\"toggle thread-summary-toggle\""));
         assert!(page.contains("function threadSummaryEntries(state)"));
         assert!(page.contains("function jumpToThread(threadId, fileId)"));
         assert!(page.contains("jumpToThread(threadId, fileId)"));

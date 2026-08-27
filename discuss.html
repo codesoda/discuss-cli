@@ -217,22 +217,10 @@
   header .header-version .update-copy.copied { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   header .meta { color: var(--muted); font-size: 13px; }
   header .thread-summary { position: relative; }
-  header .thread-summary-toggle {
-    font: inherit;
-    color: inherit;
-    padding: 2px 4px;
-    margin: -2px -4px;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    cursor: pointer;
-  }
-  header .thread-summary-toggle:hover,
-  header .thread-summary-toggle[aria-expanded="true"] { background: var(--accent-hover); color: var(--ink); }
   header .thread-summary-popover {
     position: absolute;
     top: calc(100% + 12px);
-    left: 0;
+    right: 0;
     width: min(380px, calc(100vw - 32px));
     max-height: min(480px, calc(100vh - var(--header-h) - 24px));
     overflow-y: auto;
@@ -279,6 +267,8 @@
   header .toggle:hover { background: var(--accent-hover); }
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  header .thread-summary-toggle[aria-expanded="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  header .thread-summary-toggle .caret { font-size: 9px; }
   #inspect-toggle { display: none; }
   body.html-file #inspect-toggle { display: inline-flex; }
   #inspect-banner {
@@ -1252,7 +1242,8 @@
     color: var(--muted);
   }
   .thread-close,
-  .thread-delete {
+  .thread-delete,
+  .thread-nav {
     background: none;
     border: none;
     color: var(--muted);
@@ -1262,6 +1253,9 @@
     margin-left: 6px;
   }
   .thread-close { font-size: 16px; }
+  .thread-nav { font-size: 14px; }
+  .thread-nav:hover:not(:disabled) { color: var(--accent); }
+  .thread-nav:disabled { opacity: 0.4; cursor: default; }
   .thread-delete {
     font-size: 10px;
     letter-spacing: 0.06em;
@@ -1570,11 +1564,15 @@
 <header>
   <h1>Discuss</h1>
   <span class="header-version" id="header-version" hidden></span>
-  <div class="meta thread-summary" id="meta-status">Loading…</div>
+  <div class="meta" id="meta-status">Loading…</div>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
   </a>
+  <span class="thread-summary" id="thread-summary-wrap">
+    <button class="toggle thread-summary-toggle" id="thread-summary-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="thread-summary-popover" title="Jump to a thread" hidden></button>
+    <div class="thread-summary-popover" id="thread-summary-popover" role="region" aria-label="Threads" hidden></div>
+  </span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
   <button class="toggle" id="inspect-toggle" title="Inspect prototype elements (I)" aria-pressed="false">Inspect</button>
   <span class="theme-menu" id="theme-menu">
@@ -3529,6 +3527,8 @@
         <span>${escapeHtml(headIndex)}${t.pending ? ' · INITIAL TAKE' : ''}</span>
         <span>
           <span class="thread-anchor">#${t.anchorIdx}</span>
+          <button class="thread-nav thread-nav-prev" title="Previous thread" aria-label="Previous thread">‹</button>
+          <button class="thread-nav thread-nav-next" title="Next thread" aria-label="Next thread">›</button>
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
@@ -3552,6 +3552,10 @@
     `;
     wireFollowup(el, t.id);
     el.querySelector('.thread-close').addEventListener('click', (e) => { e.stopPropagation(); closeThread(el); });
+    el.querySelectorAll('.thread-nav').forEach(btn => btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigateThread(el, btn.classList.contains('thread-nav-prev') ? -1 : 1);
+    }));
     renderFollowups(el, t.id);
     renderResolution(el, t.id);
     return el;
@@ -3594,6 +3598,8 @@
         <span>${isAgentThread ? 'Agent take' : 'Your thread'}</span>
         <span>
           <span class="thread-anchor">${escapeHtml(rangeLabel)}</span>
+          <button class="thread-nav thread-nav-prev" title="Previous thread" aria-label="Previous thread">‹</button>
+          <button class="thread-nav thread-nav-next" title="Next thread" aria-label="Next thread">›</button>
           <button class="thread-delete" title="Delete this thread">Delete</button>
           <button class="thread-close" title="Close">×</button>
         </span>
@@ -3621,6 +3627,10 @@
       deleteUserThread(el, t.id);
     });
     el.querySelector('.thread-close').addEventListener('click', (e) => { e.stopPropagation(); closeThread(el); });
+    el.querySelectorAll('.thread-nav').forEach(btn => btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigateThread(el, btn.classList.contains('thread-nav-prev') ? -1 : 1);
+    }));
     renderFollowups(el, t.id);
     renderResolution(el, t.id);
     return el;
@@ -4020,28 +4030,26 @@
       segments.push(isImageFile() ? 'Click the image to drop a pin' : 'Click any element · drag-select for multi-element');
       if (draftSeg) segments.push(draftSeg);
     } else {
-      segments.push(`<button class="thread-summary-toggle" id="thread-summary-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="thread-summary-popover"><b>${resolvedCount} of ${totalThreads}</b> resolved</button>`);
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
       if (openPending) segments.push(`<span class="meta-stat-pending">${openPending} pending discussion</span>`);
       if (draftSeg) segments.push(draftSeg);
       segments.push('click a marker to open');
     }
     el.innerHTML = segments.join(' · ');
-    if (totalThreads > 0) {
-      const popover = document.createElement('div');
-      popover.className = 'thread-summary-popover';
-      popover.id = 'thread-summary-popover';
-      popover.hidden = true;
-      popover.setAttribute('role', 'region');
-      popover.setAttribute('aria-label', 'Threads');
-      popover.innerHTML = threadSummaryEntries(state).map(entry => `
+    const summaryToggle = document.getElementById('thread-summary-toggle');
+    const summaryPopover = document.getElementById('thread-summary-popover');
+    if (summaryToggle && summaryPopover) {
+      summaryToggle.hidden = totalThreads === 0;
+      if (totalThreads === 0) closeThreadSummary();
+      summaryToggle.innerHTML = `<b>${resolvedCount} of ${totalThreads}</b> resolved <span class="caret" aria-hidden="true">▾</span>`;
+      summaryPopover.innerHTML = threadSummaryEntries(state).map(entry => `
         <button class="thread-summary-item" type="button" data-thread-id="${escapeHtml(entry.id)}" data-file-id="${escapeHtml(entry.fileId)}">
           <span class="thread-summary-title">${escapeHtml(entry.title)}</span>
           <span class="thread-summary-status${entry.resolved ? ' resolved' : ''}">${entry.resolved ? 'Resolved' : escapeHtml(entry.status)}</span>
           <span class="thread-summary-preview">${escapeHtml(entry.preview)}</span>
         </button>
       `).join('');
-      el.appendChild(popover);
+      updateThreadNavButtons();
     }
     updateFileSidebar();
   }
@@ -4092,6 +4100,23 @@
       if (thread) openThread(thread);
     });
   }
+  function navigateThread(threadEl, delta) {
+    const entries = threadSummaryEntries(loadState());
+    const idx = entries.findIndex(entry => entry.id === threadEl.getAttribute('data-thread-id'));
+    const target = idx === -1 ? null : entries[idx + delta];
+    if (target) jumpToThread(target.id, target.fileId);
+  }
+  function updateThreadNavButtons() {
+    const entries = threadSummaryEntries(loadState());
+    document.querySelectorAll('.thread').forEach(threadEl => {
+      const prev = threadEl.querySelector('.thread-nav-prev');
+      const next = threadEl.querySelector('.thread-nav-next');
+      if (!prev || !next) return;
+      const idx = entries.findIndex(entry => entry.id === threadEl.getAttribute('data-thread-id'));
+      prev.disabled = idx <= 0;
+      next.disabled = idx === -1 || idx >= entries.length - 1;
+    });
+  }
   function openThread(threadEl, { scroll = true } = {}) {
     if (!showAllBtn.classList.contains('on')) {
       document.querySelectorAll('.thread.open').forEach(t => { if (t !== threadEl) closeThread(t); });
@@ -4102,6 +4127,7 @@
     document.querySelectorAll('.thread-marker, .image-pin-marker').forEach(m => m.classList.remove('active'));
     document.querySelectorAll(`.thread-marker[data-thread-id="${tid}"], .image-pin-marker[data-thread-id="${tid}"]`).forEach(m => m.classList.add('active'));
     syncThreadActiveAnchors();
+    updateThreadNavButtons();
     reposition();
     updateEmptyState();
     if (scroll) {
@@ -5207,7 +5233,7 @@
     if (e.target.closest('#verdict-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('#inspect-toggle')) return;
-    if (e.target.closest('#meta-status')) return;
+    if (e.target.closest('#thread-summary-wrap')) return;
     if (e.target.closest('.thread-marker')) return;
     if (e.target.closest('.image-pin-marker')) return;
     if (e.target.closest('.thread')) return;
@@ -5597,7 +5623,7 @@
       if (restoreFocus) toggle.focus();
     }
   }
-  document.getElementById('meta-status').addEventListener('click', (event) => {
+  document.getElementById('thread-summary-wrap').addEventListener('click', (event) => {
     const item = event.target.closest('.thread-summary-item');
     if (item) {
       event.stopPropagation();
@@ -5617,7 +5643,7 @@
     if (!popover.hidden) popover.querySelector('.thread-summary-item')?.focus();
   });
   document.addEventListener('click', (event) => {
-    if (!event.target.closest('#meta-status')) closeThreadSummary();
+    if (!event.target.closest('#thread-summary-wrap')) closeThreadSummary();
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeThreadSummary({ restoreFocus: true });
