@@ -29,6 +29,7 @@ pub struct AppState {
     pub(super) source_path: Arc<Option<PathBuf>>,
     pub(super) history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
+    done_started: Arc<AtomicBool>,
     pub(super) shutdown: ShutdownSignal,
     pub(super) activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
@@ -55,6 +56,7 @@ impl AppState {
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
+            done_started: Arc::new(AtomicBool::new(false)),
             shutdown: ShutdownSignal::new(),
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
@@ -259,6 +261,24 @@ impl AppState {
 
     pub(super) fn no_save(&self) -> bool {
         self.no_save.load(Ordering::Relaxed)
+    }
+
+    /// Marks the point of no return in `POST /api/done`: called immediately
+    /// before the transcript read lock is taken.
+    ///
+    /// `shutdown` cannot answer "would a mutation still reach the transcript?"
+    /// because Done builds and emits the transcript *before* signalling
+    /// shutdown. Background writers that must not diverge from the emitted
+    /// transcript check `done_started()` instead. `SeqCst` gives a single total
+    /// order with the state lock hand-off: a writer that observes `false` while
+    /// holding the state write lock necessarily released that lock before Done
+    /// could acquire the read lock, so its mutation is in the transcript.
+    pub(super) fn begin_done(&self) {
+        self.done_started.store(true, Ordering::SeqCst);
+    }
+
+    pub(super) fn done_started(&self) -> bool {
+        self.done_started.load(Ordering::SeqCst)
     }
 
     pub(super) fn next_user_thread_id(&self) -> ThreadId {

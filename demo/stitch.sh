@@ -40,3 +40,17 @@ echo "wrote docs/demo.mp4 ($(du -h docs/demo.mp4 | cut -f1))"
 ffmpeg -y -loglevel error -i demo/main-cut.mp4 -vf "fps=10,scale=960:-1" "$FRAMES/frame%04d.png"
 gifski --fps 10 --width 960 --quality 70 -o docs/demo.gif "$FRAMES"/frame*.png
 echo "wrote docs/demo.gif ($(du -h docs/demo.gif | cut -f1))"
+
+# docs/demo.gif is embedded into every release binary by `discuss demo`
+# (src/server/demo.rs: include_bytes!("../../docs/demo.gif")), so a re-record
+# silently grows the shipped binary. Fail here, where the fix is obvious, rather
+# than in the seemingly unrelated demo.rs size test. Keep DEMO_GIF_MAX_BYTES in
+# src/server/demo.rs in sync with this cap.
+GIF_MAX_BYTES=3670016 # 3.5 MiB
+GIF_BYTES=$(wc -c < docs/demo.gif | tr -d ' ')
+if [ "$GIF_BYTES" -gt "$GIF_MAX_BYTES" ]; then
+  echo "error: docs/demo.gif is $GIF_BYTES B, over the $GIF_MAX_BYTES B embed cap." >&2
+  echo "       It ships inside every discuss binary. Lower the gifski" >&2
+  echo "       --quality/--width above, or shorten the recording, and re-run." >&2
+  exit 1
+fi

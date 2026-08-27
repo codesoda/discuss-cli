@@ -333,20 +333,94 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        // localStorage may only persist UI preferences (theme, ⌘-Enter-to-send),
-        // never document/thread state. The old state-in-localStorage pattern used
-        // STORAGE_KEY = 'discuss-state' — that must stay removed.
+        // localStorage may only persist UI preferences (theme, ⌘-Enter-to-send,
+        // sidebar collapse), never document/thread state. The old
+        // state-in-localStorage pattern used STORAGE_KEY = 'discuss-state' —
+        // that must stay removed.
         for (offset, _) in page.match_indices("localStorage") {
             let window_end = (offset + 80).min(page.len());
             let context = &page[offset..window_end];
             assert!(
                 context.contains("discuss-theme")
                     || context.contains("THEME_STORAGE_KEY")
-                    || context.contains("CMD_ENTER_KEY"),
+                    || context.contains("CMD_ENTER_KEY")
+                    || context.contains("FILES_COLLAPSED_KEY"),
                 "localStorage may only persist UI preferences; saw: {context}",
             );
         }
         assert!(!page.contains("STORAGE_KEY = 'discuss-state'"));
+    }
+
+    #[test]
+    fn bundled_template_has_accessible_collapsible_file_sidebar() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        // Toggle markup + accessibility wiring.
+        assert!(page.contains("file-sidebar-toggle"));
+        assert!(page.contains("toggle.setAttribute('aria-controls', 'file-sidebar')"));
+        assert!(
+            page.contains("toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true')")
+        );
+        assert!(page.contains("'Expand file list'"));
+        assert!(page.contains("'Collapse file list'"));
+        // Sighted mouse users get the same hover affordance as AT users.
+        assert!(page.contains("toggle.title = label"));
+        // aria-label overrides button content for assistive tech, so the whole
+        // accessible name is composed: path, plus the file kind (the icon is
+        // aria-hidden and the .file-kind tag is hidden in the collapsed rail),
+        // plus the open-thread count whenever the badges refresh.
+        assert!(page.contains("item.dataset.a11yBase"));
+        assert!(page.contains("item.setAttribute('aria-label', item.dataset.a11yBase)"));
+        assert!(page.contains("file.kind !== 'markdown' ? `${path}, ${file.kind}` : path"));
+        assert!(page.contains("${open} open thread"));
+
+        // Collapsed rail width sits in the required 48-52px range via one var.
+        assert!(page.contains("body.multi-file.files-collapsed { --files-w: 50px; }"));
+
+        // Per-kind icons for markdown, diff, image, and HTML files.
+        assert!(page.contains("const FILE_KIND_ICONS"));
+        for kind in ["markdown", "diff", "image", "html"] {
+            assert!(
+                page.contains(&format!("{kind}: '<")),
+                "expected an icon for kind {kind}"
+            );
+        }
+        assert!(page.contains("file-icon file-icon-"));
+        assert!(page.contains("svg.setAttribute('aria-hidden', 'true')"));
+
+        // Compact open-thread badge survives collapse.
+        assert!(page.contains("body.files-collapsed .file-item .file-count"));
+
+        // Open thread cards are positioned in pixels and a class toggle fires
+        // no resize event, so the toggle must reposition them explicitly.
+        // (Markers, minimap, and image pins re-anchor from CSS on their own.)
+        let toggle_setup = page
+            .find("toggle.className = 'file-sidebar-toggle'")
+            .expect("sidebar toggle construction");
+        let toggle_handler = page[toggle_setup..]
+            .find("toggle.addEventListener('click'")
+            .expect("sidebar toggle click handler")
+            + toggle_setup;
+        let reposition = page[toggle_handler..]
+            .find("scheduleReposition();")
+            .expect("toggle handler must reschedule repositioning");
+        assert!(
+            reposition < 1000,
+            "scheduleReposition should be inside the toggle handler"
+        );
+    }
+
+    #[test]
+    fn file_sidebar_collapse_pref_defaults_to_expanded_and_persists_ui_pref_only() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("const FILES_COLLAPSED_KEY = 'discuss-files-collapsed'"));
+        // Absent/anything-but-'1' reads as expanded: the first-run default.
+        assert!(page.contains("return stored === '1';"));
+        assert!(page.contains("localStorage.getItem(FILES_COLLAPSED_KEY)"));
+        assert!(page.contains("localStorage.setItem(FILES_COLLAPSED_KEY, collapsed ? '1' : '0')"));
+        // Only the UI pref is stored - never review state.
+        assert!(!page.contains("localStorage.setItem('discuss-state'"));
     }
 
     #[test]

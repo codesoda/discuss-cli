@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Demo mode** — `discuss demo` opens a fully bundled six-file feature gallery: the feature-tour GIF (selected on load), two revised markdown documents pre-annotated with agent takes anchored to the changed passages, a matching diff, a dashboard screenshot, and a self-contained HTML prototype. Every file is embedded in the binary (which grows by roughly the size of the tour GIF, ~3 MB), and the session takes no file arguments of its own. A deterministic Demo agent answers threads you open and replies you send, in-process after a ~1.5 s pause, as ordinary takes over the normal SSE flow — tailored follow-ups on the pre-seeded threads, kind-aware prose (markdown, diff, image pin, HTML element) on your own — and stays silent once a thread is resolved, deleted, or the review is finished. No agent session, no LLM, no history writes; the review page still loads Prism syntax highlighting from a CDN and runs the usual release check, so with no network the demo runs minus code highlighting and per-line diff comments. Top-level flags go first: `discuss --port 4000 --no-open demo`.
+- **Collapsible file sidebar** — multi-file sessions can collapse the sidebar from full width to a ~50px icon rail with per-kind file icons (markdown, diff, image, HTML) and compact open-thread badges. The toggle is a labelled button whose tooltip and `aria-expanded` state track the sidebar, and each file button keeps its path as a hover tooltip plus an accessible name mirroring the visible row — path, the kind tag when one is shown, and the open-thread count — so the rail stays legible to screen readers once the names and badges shrink away. Defaults to expanded and persists to `localStorage` under `discuss-files-collapsed` — a UI preference only, and, like the theme preference, scoped to the session's origin, so it carries across sessions only when you pin a fixed `--port`.
+
 ## [0.9.0] - 2026-08-27
 
 ### Added

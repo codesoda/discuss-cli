@@ -1,0 +1,14 @@
+diff --git a/src/charge.rs b/src/charge.rs
+index 3f9c2ab..b71d4e0 100644
+--- a/src/charge.rs
++++ b/src/charge.rs
+@@ -10,7 +10,8 @@ use crate::provider::ChargeError;
+ /// Charges with a bounded, jittered retry. Safe to retry because every
+ /// attempt carries the same idempotency key and the provider deduplicates
+ /// on it, so a retry can never double-charge.
+ pub async fn charge_with_retry(req: ChargeRequest) -> Result<Receipt, ChargeError> {
+     let key = req.idempotency_key.clone();
+-    retry::with_backoff(3, Jitter::Full, || client.charge(&req, &key)).await
++    let budget = RetryBudget::attempts(5).with_ceiling(Duration::from_secs(30));
++    retry::with_backoff(budget, Jitter::Full, || client.charge(&req, &key)).await
+ }

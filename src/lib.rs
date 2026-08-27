@@ -1,8 +1,9 @@
 use std::fs;
 use std::future::{Future, pending};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -112,8 +113,69 @@ where
         Some(cli::Commands::Diff(diff_args)) => {
             run_review_session(files, Some(diff_args), verdict_config, &config, shutdown).await
         }
+        Some(cli::Commands::Demo) => {
+            if !files.is_empty() {
+                return Err(DiscussError::ConfigError {
+                    message: "`discuss demo` does not accept file arguments - run `discuss demo` \
+                              on its own, or review the files without the demo subcommand"
+                        .to_string(),
+                });
+            }
+            run_demo_session(verdict_config, &config, shutdown).await
+        }
         None => run_review_session(files, None, verdict_config, &config, shutdown).await,
     }
+}
+
+/// Runs the bundled demo session: six embedded files (GIF first), four
+/// pre-seeded agent threads, and the canned Demo agent responder. No agent
+/// session is involved and history archives are always disabled; everything
+/// else (session.started, stderr announce, Done semantics) matches a normal
+/// review session, including the page's usual Prism/version-check fetches.
+async fn run_demo_session<F>(
+    verdict_config: Option<verdict::VerdictConfig>,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (source, file_bytes) = server::demo::demo_source();
+    let files_count = source.files.len();
+
+    let port = config.port.unwrap_or(0);
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let auto_open = config.auto_open;
+
+    let app_state = AppState::for_process()
+        .with_source(source)
+        .with_file_bytes(file_bytes)
+        .with_verdict_config(verdict_config)
+        .with_no_save(true)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    // Seed before serving so the first GET / snapshot includes the threads.
+    let seeded = server::demo::seed_demo_threads(&app_state);
+    server::demo::spawn_demo_responder(
+        app_state.clone(),
+        seeded,
+        server::demo::DEMO_RESPONSE_DELAY,
+    );
+    let emitter = app_state.emitter.clone();
+
+    server::serve_with_ready(
+        addr,
+        app_state,
+        shutdown,
+        session_ready_callback(
+            emitter,
+            server::demo::DEMO_MODE,
+            server::demo::DEMO_SOURCE_LABEL.to_string(),
+            files_count,
+            Vec::new(),
+            auto_open,
+        ),
+    )
+    .await
 }
 
 async fn run_review_session<F>(
@@ -235,7 +297,34 @@ where
     }
     let emitter = app_state.emitter.clone();
 
-    server::serve_with_ready(addr, app_state, shutdown, move |listening_addr| {
+    server::serve_with_ready(
+        addr,
+        app_state,
+        shutdown,
+        session_ready_callback(
+            emitter,
+            mode,
+            session_source_label,
+            files_count,
+            git_args,
+            auto_open,
+        ),
+    )
+    .await
+}
+
+/// Builds the `serve_with_ready` readiness callback shared by normal and demo
+/// sessions: emits `session.started`, then announces the URL on stderr and
+/// opens the browser when `auto_open` remains true.
+fn session_ready_callback(
+    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    mode: &'static str,
+    session_source_label: String,
+    files_count: usize,
+    git_args: Vec<String>,
+    auto_open: bool,
+) -> impl FnOnce(SocketAddr) {
+    move |listening_addr| {
         let url = launch::loopback_url(listening_addr);
         let started_at = Utc::now();
 
@@ -275,8 +364,7 @@ where
                 "failed to write listening URL to stderr"
             );
         }
-    })
-    .await
+    }
 }
 
 /// Whether stdin is attached to an interactive terminal.
