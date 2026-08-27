@@ -12,6 +12,7 @@ use clap::CommandFactory;
 use crate::state::{File, FileId, FileKind, Source};
 
 pub mod assets;
+pub mod blocks;
 pub mod cli;
 pub mod config;
 pub mod diff;
@@ -48,9 +49,10 @@ pub use verdict::{Verdict, VerdictConfig, VerdictOption, VerdictStyle};
 /// Legacy fixed port retained for callers that explicitly pin a session port.
 pub const DEFAULT_PORT: u16 = 7777;
 
-pub const AGENT_INSTRUCTIONS: [&str; 3] = [
+pub const AGENT_INSTRUCTIONS: [&str; 4] = [
     "Use payload.endpoints; do not assume port 7777.",
     "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+    "If you edited the reviewed document, you may pre-annotate it: POST createThread with kind=\"agent\" to leave leading takes; use blocksTemplate to compute anchors.",
     "Stop when session.done is received.",
 ];
 

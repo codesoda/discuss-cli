@@ -1694,7 +1694,7 @@
     <div class="pane-right" id="pane-right">
       <div class="empty-state" id="empty-state">
         <b>Click a marker in the left margin</b> to open a comment.<br>
-        Blue = pre-seeded · Yellow = pending · Pink = your thread.<br><br>
+        Blue = pre-seeded · Yellow = agent take pending your reply · Pink = your thread.<br><br>
         <b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.
       </div>
       <div id="threads-host"></div>
@@ -1846,9 +1846,10 @@
   function normalizeUserThreads(sourceThreads) {
     if (!Array.isArray(sourceThreads)) return [];
     return sourceThreads
-      .filter(t => t && (!t.kind || t.kind === 'user'))
+      .filter(t => t && (!t.kind || t.kind === 'user' || t.kind === 'agent'))
       .map(t => ({
         id: String(t.id || ''),
+        kind: t.kind === 'agent' ? 'agent' : 'user',
         fileId: threadFileId(t),
         anchorStart: parseInt(t.anchorStart, 10),
         anchorEnd: parseInt(t.anchorEnd, 10),
@@ -2571,7 +2572,8 @@
     if (!alreadyKnown) reconcilePendingThread(state, thread);
 
     upsertThread(state.threads, thread);
-    if ((thread.kind || 'user') === 'user') upsertThread(state.userThreads, thread);
+    const threadKind = thread.kind || 'user';
+    if (threadKind === 'user' || threadKind === 'agent') upsertThread(state.userThreads, thread);
     ensureThreadInitialComment(state, thread);
     setCurrentState(state);
     refreshAllThreadsFromState();
@@ -3046,6 +3048,8 @@
   // Any element matching this selector inside #doc-content becomes commentable.
   // <pre> is commented-on via a generated .pre-wrap wrapper because <pre>'s
   // own overflow-x: auto clips the absolutely-positioned gutter marker.
+  // The server mirrors this segmentation in src/blocks.rs for the
+  // GET /api/files/{fileId}/blocks endpoint; keep the two in sync.
   const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .quote, .decision, .callout, .context';
   function assignAnchorIndices() {
     const doc = document.getElementById('doc-content');
@@ -3556,7 +3560,11 @@
   function createUserThread(t) {
     const el = document.createElement('div');
     const isImageThread = !!t.imageAnchor;
-    el.className = t.orphaned ? 'thread user orphaned' : 'thread user';
+    // Agent threads reuse the pending-take visual language (yellow marker,
+    // "Initial take" affordance) but keep the user thread lifecycle.
+    const isAgentThread = t.kind === 'agent';
+    const baseClass = isAgentThread ? 'thread pending' : 'thread user';
+    el.className = t.orphaned ? baseClass + ' orphaned' : baseClass;
     if (t.elementAnchor) el.classList.add('element-thread');
     el.setAttribute('data-thread-id', t.id);
     if (!t.orphaned && !t.elementAnchor) {
@@ -3583,7 +3591,7 @@
           : (t.anchorStart === t.anchorEnd ? `#${t.anchorStart}` : `#${t.anchorStart}–${t.anchorEnd}`) + lineLabel));
     el.innerHTML = `
       <div class="thread-head">
-        <span>Your thread</span>
+        <span>${isAgentThread ? 'Agent take' : 'Your thread'}</span>
         <span>
           <span class="thread-anchor">${escapeHtml(rangeLabel)}</span>
           <button class="thread-delete" title="Delete this thread">Delete</button>
@@ -3592,7 +3600,8 @@
       </div>
       ${isImageThread ? '' : `<div class="thread-sub">${escapeHtml(t.elementAnchor ? (t.breadcrumb || t.snippet || '') : (t.snippet || ''))}</div>`}
       <div class="thread-body">
-        <div class="section-mini-label">Your notes</div>
+        ${isAgentThread ? '<div class="thread-sub placeholder">Initial take — reply below to steer.</div>' : ''}
+        <div class="section-mini-label">${isAgentThread ? 'Discussion' : 'Your notes'}</div>
         <div class="user-comment-list"></div>
         <div class="resolution-banner"></div>
         <div class="followup">
@@ -3998,7 +4007,9 @@
     const resolvedIds = new Set(Object.keys(state.resolutions || {}));
     const resolvedCount = resolvedIds.size;
     const openPrep = prepopulated.filter(t => !resolvedIds.has(t.id));
-    const openPending = openPrep.filter(t => !!t.pending).length;
+    // Unreplied agent takes are exactly "pending discussion" too.
+    const openPending = openPrep.filter(t => !!t.pending).length
+      + userThreads.filter(t => t.kind === 'agent' && !resolvedIds.has(String(t.id)) && !hasThreadReply(state, String(t.id))).length;
     const openWalkedThrough = openPrep.filter(t => !t.pending).length;
     const draftCount = countLiveDrafts(state);
     const draftSeg = draftCount
@@ -4052,7 +4063,7 @@
       fileId: threadFileId(thread),
       anchor: thread.orphaned ? Number.MAX_SAFE_INTEGER : thread.anchorStart,
       order: prepopulated.length + index,
-      title: thread.imageAnchor ? `📍 Pin ${thread.anchorStart}` : 'Your thread',
+      title: thread.imageAnchor ? `📍 Pin ${thread.anchorStart}` : (thread.kind === 'agent' ? 'Agent take' : 'Your thread'),
       preview: thread.imageAnchor ? (thread.text || '(no preview)') : (thread.snippet || thread.text || (thread.orphaned ? 'Orphaned from the current document' : '(no preview)')),
       status: thread.orphaned ? 'Open · orphaned' : 'Open',
       resolved: resolvedIds.has(String(thread.id)),
@@ -4129,7 +4140,7 @@
     if (!anyOpen && isImageFile()) {
       emptyState.innerHTML = '<b>Click the image to drop a pin</b>, then type your comment.<br>Click a numbered pin to reopen its thread.';
     } else if (!anyOpen) {
-      emptyState.innerHTML = '<b>Click a marker in the left margin</b> to open a comment.<br>Blue = pre-seeded · Yellow = pending · Pink = your thread.<br><br><b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.';
+      emptyState.innerHTML = '<b>Click a marker in the left margin</b> to open a comment.<br>Blue = pre-seeded · Yellow = agent take pending your reply · Pink = your thread.<br><br><b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.';
     }
   }
 
@@ -4409,6 +4420,8 @@
       quote = prep.userComment || prep.take?.replace(/<[^>]+>/g, '') || '(no text)';
       extra = prep.subtitle || '';
     } else {
+      const userThread = (state.userThreads || []).find(t => String(t.id) === tid);
+      if (userThread && userThread.kind === 'agent') kindLabel = 'Agent take';
       const start = parseInt(thread.getAttribute('data-anchor-start'));
       const end = parseInt(thread.getAttribute('data-anchor-end'));
       extra = start === end ? `#${start}` : `#${start}–${end}`;

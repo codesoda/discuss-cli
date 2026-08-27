@@ -424,6 +424,7 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
             "events": format!("{base_url}/api/events"),
             "createThread": format!("{base_url}/api/threads"),
             "addTakeTemplate": format!("{base_url}/api/threads/{{threadId}}/takes"),
+            "blocksTemplate": format!("{base_url}/api/files/{{fileId}}/blocks"),
             "done": format!("{base_url}/api/done"),
         })
     );
@@ -432,6 +433,7 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
         serde_json::json!([
             "Use payload.endpoints; do not assume port 7777.",
             "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+            "If you edited the reviewed document, you may pre-annotate it: POST createThread with kind=\"agent\" to leave leading takes; use blocksTemplate to compute anchors.",
             "Stop when session.done is received."
         ])
     );

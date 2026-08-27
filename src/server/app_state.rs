@@ -34,6 +34,7 @@ pub struct AppState {
     idle_timeout_secs: Arc<AtomicU64>,
     pub(super) verdict_config: Arc<Option<VerdictConfig>>,
     next_thread_number: Arc<AtomicU64>,
+    next_agent_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
     next_take_number: Arc<AtomicU64>,
 }
@@ -59,6 +60,7 @@ impl AppState {
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
             verdict_config: Arc::new(None),
             next_thread_number: Arc::new(AtomicU64::new(1)),
+            next_agent_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
             next_take_number: Arc::new(AtomicU64::new(1)),
         }
@@ -263,6 +265,14 @@ impl AppState {
         let number = self.next_thread_number.fetch_add(1, Ordering::Relaxed);
 
         ThreadId(format!("u-{number}"))
+    }
+
+    pub(super) fn next_agent_thread_id(&self) -> ThreadId {
+        let number = self
+            .next_agent_thread_number
+            .fetch_add(1, Ordering::Relaxed);
+
+        ThreadId(format!("a-{number}"))
     }
 
     pub(super) fn next_reply_id(&self) -> String {
