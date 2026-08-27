@@ -29,7 +29,6 @@
   const stableAnchors = new Map();
   const resolvedElements = new Map();
   let inspectOn = false;
-  let hovered = null;
   let scheduled = false;
   let previousCursor = '';
   let focusedThreadId = null;
@@ -186,7 +185,9 @@
       try {
         const matches = document.querySelectorAll(selector);
         if (matches.length === 1) return matches[0];
-      } catch (_) {}
+      } catch (_) {
+        // Invalid selector — try the next fallback.
+      }
     }
     if (!anchor.tag || !anchor.textDigest) return null;
     const candidates = Array.from(document.getElementsByTagName(anchor.tag));
@@ -200,7 +201,6 @@
   }
 
   function setOutline(element) {
-    hovered = element;
     host.toggleAttribute('data-discuss-hovering', !!element);
     if (!element) { outline.style.display = 'none'; return; }
     const rect = element.getBoundingClientRect();
