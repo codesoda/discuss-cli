@@ -182,13 +182,14 @@ While the server is running, agents should use the exact URLs in `session.starte
 | `GET` | `/files/{fileId}` | Served HTML prototype with inspector/base injection |
 | `GET` | `/files/{fileId}/assets/{path}` | Sandboxed relative prototype asset |
 | `POST` | `/api/anchors/resolve` | Report detached HTML element anchors |
-| `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded; HTML threads include `elementAnchor`) |
+| `GET` | `/api/files/{fileId}/blocks` | Server's commentable-block segmentation (`index`, `snippet`, `breadcrumb`, `sourceVersion`) for computing anchors |
+| `POST` | `/api/threads` | Create a thread (`fileId` required when several files are loaded; HTML threads include `elementAnchor`; optional `kind: "agent"` stores `text` as the opening take) |
 | `POST` | `/api/threads/{id}/replies` | Add a **human** reply |
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
 | `POST` | `/api/done` | Finish the review; requires a verdict body when verdict options are configured |
-| `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` only) |
+| `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` or `"agent"`; `"prepopulated"` is 403) |
 
 ## Stdout events
 
@@ -196,7 +197,7 @@ One newline-delimited JSON object per line. Consumed by the `/discuss` skill via
 
 | Kind | When |
 |------|------|
-| `session.started` | Server bound and listening. The existing fields are joined by `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, and `done`), and short `agentInstructions`. Optional `proxyUrl` appears only for modes with a secondary proxy listener and is omitted for ordinary sessions. |
+| `session.started` | Server bound and listening. The existing fields are joined by `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `blocksTemplate` with literal `{fileId}`, and `done`), and short `agentInstructions` (including the invitation to pre-annotate edited documents with `kind: "agent"` threads). Optional `proxyUrl` appears only for modes with a secondary proxy listener and is omitted for ordinary sessions. |
 | `thread.created` | User opened a new thread; HTML threads include `elementAnchor {selector, fallbacks, tag, textDigest?, outerHtml}` |
 | `reply.added` | Human posted a reply |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled |

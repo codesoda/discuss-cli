@@ -275,6 +275,40 @@ mod tests {
     }
 
     #[test]
+    fn transcript_preserves_agent_thread_kind_and_initial_take() {
+        let mut agent_thread = thread("a-1", 2, 2);
+        agent_thread.kind = ThreadKind::Agent;
+        agent_thread.text = String::new();
+
+        let mut state = State::default();
+        state.add_thread(thread("u-1", 1, 1));
+        state.add_thread(agent_thread);
+        state.add_take(Take {
+            id: "t-1".to_string(),
+            thread_id: ThreadId("a-1".to_string()),
+            text: "I restructured this section".to_string(),
+            created_at: timestamp(10),
+        });
+
+        let transcript = build_transcript(&state);
+        let agent = transcript
+            .threads
+            .iter()
+            .find(|thread| thread.id.0 == "a-1")
+            .expect("agent thread in transcript");
+        assert_eq!(agent.kind, ThreadKind::Agent);
+        assert_eq!(agent.text, "");
+        assert_eq!(agent.takes.len(), 1);
+        assert_eq!(agent.takes[0].text, "I restructured this section");
+
+        let value = serde_json::to_value(&transcript).expect("serialize transcript");
+        assert_eq!(value["threads"][1]["kind"], "agent");
+        let round_tripped: Transcript =
+            serde_json::from_value(value).expect("deserialize transcript");
+        assert_eq!(round_tripped, transcript);
+    }
+
+    #[test]
     fn transcript_preserves_image_anchor_and_pin_order() {
         let mut later = thread("u-pin-2", 2, 2);
         later.file_id = FileId("f-2".to_string());

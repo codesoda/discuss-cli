@@ -511,6 +511,12 @@ async fn post_api_threads_creates_thread_and_emits_events() {
     assert_eq!(snapshot.threads[0].snippet, "selected text");
     assert_eq!(snapshot.threads[0].text, "Needs clarification");
 
+    assert_eq!(body["kind"], Value::Null);
+    assert!(
+        body.get("takeId").is_none(),
+        "user threads must not carry a takeId: {body}"
+    );
+
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: thread.created"));
     assert!(sse_event.contains("\"id\":\"u-1\""));
@@ -632,6 +638,254 @@ async fn post_api_threads_returns_structured_400_for_bad_json() {
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "bad_request");
     assert!(body["error"]["message"].as_str().is_some());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_with_kind_agent_creates_prefixed_thread_with_initial_take() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":2,"anchorEnd":4,"snippet":"Rollout plan","text":"I rewrote this; verify the ordering.","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    assert_eq!(body["id"], "a-1");
+    assert_eq!(body["takeId"], "t-1");
+
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["threads"][0]["id"], "a-1");
+    assert_eq!(snapshot["threads"][0]["kind"], "agent");
+    assert_eq!(snapshot["threads"][0]["text"], "");
+    assert_eq!(
+        snapshot["takes"]["a-1"][0]["text"],
+        "I rewrote this; verify the ordering."
+    );
+    assert_eq!(snapshot["takes"]["a-1"][0]["id"], "t-1");
+
+    // Resolving an agent annotation is the per-annotation approval gesture.
+    let resolve = post_json_path(
+        addr,
+        "/api/threads/a-1/resolve",
+        r#"{"decision":"reviewed"}"#,
+    )
+    .await;
+    assert!(resolve.starts_with("HTTP/1.1 200"), "response: {resolve}");
+
+    // Exactly thread.created and thread.resolved on stdout; the opening take
+    // stays SSE-only like every other take.
+    let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(1)).await;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["kind"], "thread.created");
+    assert_eq!(events[0]["payload"]["id"], "a-1");
+    assert_eq!(events[0]["payload"]["kind"], "agent");
+    assert_eq!(events[0]["payload"]["text"], "");
+    assert_eq!(events[1]["kind"], "thread.resolved");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_broadcasts_thread_created_then_take_added() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"intro","text":"Leading take","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Both events may arrive in one chunk; read until the take payload shows
+    // up and assert the broadcast order within the stream.
+    let stream = read_until(&mut sse, "\"text\":\"Leading take\"").await;
+    let created_at = stream
+        .find("event: thread.created")
+        .expect("thread.created on SSE stream");
+    let take_at = stream
+        .find("event: take.added")
+        .expect("take.added on SSE stream");
+    assert!(created_at < take_at, "stream: {stream}");
+    assert!(stream.contains("\"id\":\"a-1\""));
+    assert!(stream.contains("\"kind\":\"agent\""));
+    assert!(stream.contains("\"threadId\":\"a-1\""));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_rejects_unknown_or_prepopulated_kind() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for kind in ["prepopulated", "bogus"] {
+        let body = json!({
+            "anchorStart": 1,
+            "anchorEnd": 1,
+            "snippet": "x",
+            "text": "y",
+            "kind": kind
+        });
+        let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400"),
+            "kind {kind}: {response}"
+        );
+        assert_eq!(response_json(&response)["error"]["code"], "bad_request");
+    }
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_requires_non_empty_text() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"x","text":"   ","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "validation_error");
+    assert_eq!(
+        body["error"]["message"],
+        "agent thread text must not be empty"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn agent_and_user_thread_id_counters_are_independent() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let user = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"x","text":"user first"}"#,
+    )
+    .await;
+    assert_eq!(response_json(&user)["id"], "u-1");
+
+    let agent = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":2,"anchorEnd":2,"snippet":"y","text":"agent second","kind":"agent"}"#,
+    )
+    .await;
+    assert_eq!(response_json(&agent)["id"], "a-1");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn delete_api_thread_soft_deletes_agent_threads() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread_with_kind("a-1", 2, ThreadKind::Agent));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = delete_path(addr, "/api/threads/a-1").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_eq!(response_json(&response)["ok"], true);
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    assert!(snapshot.threads.is_empty());
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(1)).await;
+    assert_eq!(events[0]["kind"], "thread.deleted");
+    assert_eq!(events[0]["payload"]["threadId"], "a-1");
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2576,6 +2830,210 @@ async fn post_api_threads_rejects_stale_source_version() {
     });
     let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
     assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_respects_stale_source_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let body = json!({ "markdown": "# Doc v2", "threadAnchors": [] });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    let body = json!({
+        "anchorStart": 1,
+        "anchorEnd": 1,
+        "snippet": "Doc",
+        "text": "leading take",
+        "kind": "agent",
+        "sourceVersion": 0
+    });
+    let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "stale_source_version"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_source_requires_anchors_for_agent_threads() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"Doc","text":"leading take","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Coverage is kind-agnostic: an active a-N thread missing from
+    // threadAnchors rejects the update.
+    let body = json!({ "markdown": "# Doc v2", "threadAnchors": [] });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert!(
+        response_json(&response)["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("a-1")
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_returns_segmentation_with_source_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Rollout plan\n\nWe will stage the rollout.\n\n- by region\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["fileId"], "f-1");
+    assert_eq!(body["sourceVersion"], 0);
+    assert_eq!(
+        body["blocks"],
+        json!([
+            { "index": 1, "snippet": "Rollout plan", "breadcrumb": "Rollout plan" },
+            { "index": 2, "snippet": "We will stage the rollout.", "breadcrumb": "Rollout plan" },
+            { "index": 3, "snippet": "by region", "breadcrumb": "Rollout plan" }
+        ])
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_maps_diff_files_through_synthesized_markdown() {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(Source {
+        files: vec![File {
+            id: FileId("f-1".to_string()),
+            path: "foo.rs".to_string(),
+            kind: FileKind::Diff,
+            content: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+        }],
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    // The synthesized diff document is a heading plus one fenced block per
+    // hunk — the same blocks the browser renders and indexes.
+    assert_eq!(body["blocks"][0]["index"], 1);
+    assert_eq!(body["blocks"][0]["snippet"], "foo.rs");
+    assert_eq!(body["blocks"][1]["index"], 2);
+    assert!(
+        body["blocks"][1]["snippet"]
+            .as_str()
+            .expect("snippet")
+            .contains("+new")
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_rejects_image_and_html_files_and_unknown_ids() {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(Source {
+        files: vec![
+            File {
+                id: FileId("f-1".to_string()),
+                path: "mockup.png".to_string(),
+                kind: FileKind::Image,
+                content: String::new(),
+            },
+            File {
+                id: FileId("f-2".to_string()),
+                path: "proto.html".to_string(),
+                kind: FileKind::Html,
+                content: "<html></html>".to_string(),
+            },
+        ],
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for file_id in ["f-1", "f-2"] {
+        let response = get_path(addr, &format!("/api/files/{file_id}/blocks")).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+        assert_eq!(
+            response_json(&response)["error"]["code"],
+            "validation_error"
+        );
+    }
+
+    let response = get_path(addr, "/api/files/f-9/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "unknown_file");
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

@@ -84,7 +84,7 @@ Example `discuss.config.toml` with an explicitly pinned port:
 
 - `stdout` is reserved for JSONL events.
 - `stderr` is reserved for status and error text.
-- The first stdout event for a normal session is `session.started`. Existing payload fields are preserved; `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `done`), and short `agentInstructions` are additive. Agents must retain and use those exact endpoint URLs. Optional `proxyUrl` is omitted for ordinary sessions and is present only when a secondary listener exists.
+- The first stdout event for a normal session is `session.started`. Existing payload fields are preserved; `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `blocksTemplate` with literal `{fileId}`, `done`), and short `agentInstructions` (including the invitation to pre-annotate edited documents with `kind: "agent"` threads) are additive. Agents must retain and use those exact endpoint URLs. Optional `proxyUrl` is omitted for ordinary sessions and is present only when a secondary listener exists.
 - When the review finishes, discuss emits `session.done` with the final transcript payload. With `--verdict-options`, finishing requires the human to pick a verdict, which is included in that payload.
 - After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
 - Logs are written under `~/.discuss/logs`.
@@ -135,6 +135,8 @@ The `session.done` payload and the saved archive use the same transcript shape; 
       "decidedAt": "2026-04-23T02:30:20Z"
     }
   }
+
+`kind` may also be "agent" (an agent-created annotation whose opening prose is stored as the thread's first take).
 
 ## Exit Codes
 

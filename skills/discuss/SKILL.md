@@ -258,10 +258,10 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 The first notification from the monitor should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","blocksTemplate":".../api/files/{fileId}/blocks","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
 ```
 
-Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` when posting a take. Use `apiBaseUrl` only for routes absent from the endpoint map. Optional `proxyUrl` is present only when a secondary proxy listener exists and is omitted for ordinary sessions.
+Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` when posting a take and the literal `{fileId}` in `endpoints.blocksTemplate` when fetching block anchors. Use `apiBaseUrl` only for routes absent from the endpoint map. Optional `proxyUrl` is present only when a secondary proxy listener exists and is omitted for ordinary sessions.
 
 If the monitor ends without emitting `session.started`, startup failed before readiness and no partial session exists. Read its stderr log for the error, report it, and stop.
 
@@ -303,6 +303,15 @@ Replies come only from the human (the API uses `/replies` for humans, `/takes` f
 
 Acknowledge in chat ("`u-3` resolved" / "`u-2` deleted") but do not post anything to the thread.
 
+## Pre-annotating an edited document
+
+When **you** edited the document under review (you rewrote the plan, then launched discuss for approval), you can pre-annotate it with leading takes before the human comments — guided review markers the reviewer sees the moment the browser opens. `session.started.payload.agentInstructions` and `endpoints.blocksTemplate` advertise the capability; treat `payload.endpoints` as authoritative and never construct routes by hand.
+
+1. **Compute anchors.** Fetch `endpoints.state` to get the `files` array, substitute the target `{fileId}` into `endpoints.blocksTemplate`, and GET it. The response is `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` — the server's own segmentation into 1-based commentable blocks, the same units as `anchorStart`. Match each of your edits to a block `index` and note the returned `sourceVersion`.
+2. **Create annotations.** For each meaningful change, POST to `endpoints.createThread` with `kind: "agent"`, the anchor range, the block `snippet`, the `sourceVersion`, and prose covering: what changed, why, and what the reviewer should verify. The server allocates an `a-N` thread and stores your text as its opening take (`takeId` in the response); on `409 stale_source_version`, re-fetch blocks and retry.
+3. **Annotate intent, not mechanics.** One annotation per logical change; stay silent on mechanical changes (same rule as diff mode).
+4. **Event handling.** Ignore `thread.created` echoes whose `id` starts with `a-` — those are your own annotations (unlike takes, `thread.created` does echo to stdout). Respond normally when `reply.added` arrives on them. The human resolving an agent thread means "reviewed this change"; if you push new markdown via `POST /api/source`, your `a-N` threads need `threadAnchors` entries like any other active thread.
+
 ## Step 4: Stop conditions
 
 End the session and shut down when any of these happen:
@@ -327,8 +336,9 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | GET | `/api/files/{fileId}/raw` | — | Startup-stable bytes for an image file |
 | GET | `/files/{fileId}` | — | Served HTML prototype document |
 | POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
-| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
-| DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
+| GET | `/api/files/{fileId}/blocks` | — | Server's commentable-block segmentation `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` for computing anchors (markdown/diff only) |
+| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors; optional `kind: "agent"` stores `text` as the opening take and returns `takeId` | Create a thread. User threads are rare via API; `kind: "agent"` is how you pre-annotate. `fileId` required with multiple files. |
+| DELETE | `/api/threads/{id}` | — | Soft delete (`kind = "user"` or `"agent"`; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
@@ -354,9 +364,9 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 
 ## Stdout event kinds
 
-- `session.started` → `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), and `done`; ordinary sessions omit `proxyUrl`
+- `session.started` → `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; ordinary sessions omit `proxyUrl`
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`

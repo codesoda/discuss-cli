@@ -65,6 +65,7 @@ impl From<&File> for FileMeta {
 pub enum ThreadKind {
     User,
     Prepopulated,
+    Agent,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -304,6 +305,32 @@ mod tests {
         assert!(value.get("orphaned").is_none());
 
         let round_tripped: Thread = serde_json::from_value(value).expect("deserialize thread");
+        assert_eq!(round_tripped, thread);
+    }
+
+    #[test]
+    fn thread_kind_agent_serializes_lowercase() {
+        let thread = Thread {
+            id: ThreadId("a-1".to_string()),
+            file_id: FileId("f-1".to_string()),
+            anchor_start: 2,
+            anchor_end: 4,
+            image_anchor: None,
+            snippet: "selected text".to_string(),
+            breadcrumb: String::new(),
+            text: String::new(),
+            created_at: timestamp(),
+            kind: ThreadKind::Agent,
+            line_range: None,
+            orphaned: false,
+            element_anchor: None,
+        };
+
+        let value = serde_json::to_value(&thread).expect("serialize agent thread");
+        assert_eq!(value["kind"], "agent");
+
+        let round_tripped: Thread =
+            serde_json::from_value(value).expect("deserialize agent thread");
         assert_eq!(round_tripped, thread);
     }
 

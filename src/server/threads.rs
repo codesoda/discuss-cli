@@ -20,6 +20,16 @@ use super::app_state::AppState;
 use super::resolve_file_id;
 use super::response::{OkResponse, api_error_response};
 
+/// Accepted values for `CreateThreadRequest.kind`. `"prepopulated"` (and any
+/// other unknown value) is rejected by serde as a `bad_request`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum RequestThreadKind {
+    #[default]
+    User,
+    Agent,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CreateThreadRequest {
@@ -43,6 +53,10 @@ pub(super) struct CreateThreadRequest {
     element_anchor: Option<ElementAnchor>,
     #[serde(default)]
     line_range: Option<LineRange>,
+    /// `"agent"` creates an `a-N` thread whose opening prose is stored as the
+    /// thread's first take instead of `thread.text`. Defaults to `"user"`.
+    #[serde(default)]
+    kind: RequestThreadKind,
     /// Optional optimistic-concurrency guard: when set, the thread is only
     /// created if the server's current source version matches, so anchors
     /// computed against an outdated document are rejected instead of drifting.
@@ -61,6 +75,9 @@ pub(super) struct CreateThreadResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     element_anchor: Option<ElementAnchor>,
     created_at: DateTime<Utc>,
+    /// Id of the opening take created alongside `kind: "agent"` threads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    take_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,8 +330,16 @@ pub(super) async fn post_api_threads(
             }
         };
 
+    if request.kind == RequestThreadKind::Agent && text.trim().is_empty() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "agent thread text must not be empty",
+        );
+    }
+
     let created_at = Utc::now();
-    let thread = {
+    let (thread, initial_take) = {
         let mut state = match app_state.state.write() {
             Ok(state) => state,
             Err(_) => {
@@ -347,23 +372,47 @@ pub(super) async fn post_api_threads(
             let (anchor_start, anchor_end) = text_anchor.expect("validated anchors");
             (anchor_start, anchor_end, breadcrumb)
         };
+        let (id, kind, thread_text, take_text) = match request.kind {
+            RequestThreadKind::User => (
+                app_state.next_user_thread_id(),
+                ThreadKind::User,
+                text,
+                None,
+            ),
+            RequestThreadKind::Agent => (
+                app_state.next_agent_thread_id(),
+                ThreadKind::Agent,
+                String::new(),
+                Some(text),
+            ),
+        };
         let thread = Thread {
-            id: app_state.next_user_thread_id(),
+            id,
             file_id: file_id.clone(),
             anchor_start,
             anchor_end,
             image_anchor,
             snippet,
             breadcrumb,
-            text,
+            text: thread_text,
             created_at,
-            kind: ThreadKind::User,
+            kind,
             line_range,
             orphaned: false,
             element_anchor,
         };
         state.add_thread(thread.clone());
-        thread
+        // Still under the write lock so no snapshot can observe an agent
+        // thread without its opening take.
+        let initial_take = take_text.map(|take_text| {
+            state.add_take(Take {
+                id: app_state.next_take_id(),
+                thread_id: thread.id.clone(),
+                text: take_text,
+                created_at,
+            })
+        });
+        (thread, initial_take)
     };
     app_state.record_mutation();
 
@@ -395,6 +444,24 @@ pub(super) async fn post_api_threads(
         );
     }
 
+    // The opening take mirrors `post_api_thread_takes`: SSE only, no stdout.
+    if let Some(take) = &initial_take {
+        let take_payload = match serde_json::to_value(take) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return api_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("failed to serialize initial take: {error}"),
+                );
+            }
+        };
+        app_state.bus.publish(BroadcastEvent {
+            kind: "take.added".to_string(),
+            payload: take_payload,
+        });
+    }
+
     Json(CreateThreadResponse {
         id: thread.id,
         file_id,
@@ -402,6 +469,7 @@ pub(super) async fn post_api_threads(
         image_anchor: thread.image_anchor,
         element_anchor: thread.element_anchor,
         created_at,
+        take_id: initial_take.map(|take| take.id),
     })
     .into_response()
 }

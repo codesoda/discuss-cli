@@ -102,6 +102,7 @@ fn bundled_integrations_consume_reported_endpoint_map() {
         "endpoints.events",
         "endpoints.createThread",
         "endpoints.addTakeTemplate",
+        "endpoints.blocksTemplate",
         "endpoints.done",
         "apiBaseUrl",
         "proxyUrl",
