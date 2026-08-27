@@ -10,7 +10,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
     match error {
         DiscussError::ConfigParseError { .. }
         | DiscussError::DuplicateInputPath { .. }
-        | DiscussError::VerdictSpecError { .. } => EXIT_CONFIG_ERROR,
+        | DiscussError::VerdictSpecError { .. }
+        | DiscussError::ConfigError { .. } => EXIT_CONFIG_ERROR,
         DiscussError::PortInUse { .. } | DiscussError::ServerBindError { .. } => EXIT_SERVER_ERROR,
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
@@ -67,6 +68,12 @@ mod tests {
             (
                 DiscussError::VerdictSpecError {
                     message: "duplicate verdict option id: approved".to_string(),
+                },
+                EXIT_CONFIG_ERROR,
+            ),
+            (
+                DiscussError::ConfigError {
+                    message: "`discuss demo` does not accept file arguments".to_string(),
                 },
                 EXIT_CONFIG_ERROR,
             ),

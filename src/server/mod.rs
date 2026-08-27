@@ -6,6 +6,7 @@
 mod anchors;
 mod app_state;
 mod blocks;
+pub mod demo;
 mod done;
 mod drafts;
 mod files;

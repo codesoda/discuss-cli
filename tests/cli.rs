@@ -11,6 +11,17 @@ use chrono::DateTime;
 use serde_json::Value;
 use tempfile::tempdir;
 
+/// Ceiling for every "wait for the spawned binary to announce itself" step.
+///
+/// Each of these tests spawns `CARGO_BIN_EXE_discuss` and blocks on its first
+/// stderr/stdout line. Locally that lands in milliseconds; the ceiling exists
+/// for loaded machines, where process spawn and first-touch paging of a large
+/// debug binary are the variable costs. `recv_timeout` returns as soon as the
+/// line arrives, so a generous ceiling costs nothing on the passing path — it
+/// only changes how long a genuine hang takes to report. Kept as a single
+/// constant so the startup waits cannot drift apart per test.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[test]
 fn cli_busy_port_exits_three_and_reports_port() {
     let busy_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind busy listener");
@@ -75,7 +86,7 @@ fn cli_no_open_logs_listening_url_to_stderr() {
     let line_rx = read_first_line(stderr);
 
     let line = line_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .expect("listening line should be written")
         .expect("stderr line should be readable");
     assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
@@ -136,7 +147,7 @@ fn cli_emits_single_session_started_event_after_listening() {
     let line_rx = read_first_line(stderr);
 
     let line = line_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .expect("listening line should be written")
         .expect("stderr line should be readable");
     assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
@@ -257,7 +268,7 @@ fn cli_history_dir_flag_overrides_config_history_dir_and_writes_archive() {
     let line_rx = read_first_line(stderr);
 
     let line = line_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .expect("listening line should be written")
         .expect("stderr line should be readable");
     assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
@@ -308,7 +319,7 @@ fn cli_no_save_flag_suppresses_history_archive() {
     let line_rx = read_first_line(stderr);
 
     let line = line_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .expect("listening line should be written")
         .expect("stderr line should be readable");
     assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
@@ -326,6 +337,164 @@ fn cli_no_save_flag_suppresses_history_archive() {
         json_files_in(&history_dir.join("review")).is_empty(),
         "--no-save should suppress history archive writes"
     );
+}
+
+#[test]
+fn cli_demo_serves_bundled_session_with_normal_stdout_semantics() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+
+    // Top-level flags must precede the subcommand.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("demo")
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .env_remove("DISCUSS_PORT")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn discuss binary");
+    let stdout_rx = read_all_lines(child.stdout.take().expect("stdout pipe should be present"));
+    let stderr = child.stderr.take().expect("stderr pipe should be present");
+    let line_rx = read_first_line(stderr);
+
+    let line = line_rx
+        .recv_timeout(STARTUP_TIMEOUT)
+        .expect("listening line should be written")
+        .expect("stderr line should be readable");
+    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
+
+    let started_line = stdout_rx
+        .recv_timeout(STARTUP_TIMEOUT)
+        .expect("session.started should be emitted")
+        .expect("stdout line should be readable");
+    let started: Value = serde_json::from_str(&started_line).expect("startup line should be JSON");
+    assert_eq!(started["kind"], "session.started");
+    assert_eq!(started["payload"]["mode"], "demo");
+    assert_eq!(started["payload"]["source_file"], "demo");
+    assert_eq!(started["payload"]["files_count"], 6);
+    let base_url = format!("http://127.0.0.1:{port}");
+    assert_endpoint_contract(&started["payload"], &base_url);
+
+    // Bundled page: sidebar shell plus the seeded agent threads.
+    let page = http_request_url(&base_url, "GET", None);
+    assert!(page.starts_with("HTTP/1.1 200"), "{}", &page[..60]);
+    assert!(page.contains("id=\"file-sidebar\""));
+    assert!(page.contains("file-sidebar-toggle"));
+    for seeded in ["\"a-1\"", "\"a-2\"", "\"a-3\"", "\"a-4\""] {
+        assert!(page.contains(seeded), "page should seed thread {seeded}");
+    }
+
+    // Embedded GIF served with the image contract (raw bytes, so no utf-8 read).
+    let raw_headers = http_request_head_bytes(port, "/api/files/f-1/raw");
+    assert!(raw_headers.starts_with("HTTP/1.1 200"), "{raw_headers}");
+    assert!(
+        raw_headers
+            .to_ascii_lowercase()
+            .contains("content-type: image/gif")
+    );
+
+    // Embedded HTML prototype served from memory.
+    let prototype = http_request_url(&format!("{base_url}/files/f-6"), "GET", None);
+    assert!(
+        prototype.starts_with("HTTP/1.1 200"),
+        "{}",
+        &prototype[..60]
+    );
+    assert!(prototype.contains("Ledgerly"));
+
+    // A user thread gets a canned Demo agent response after the delay, and
+    // stdout keeps normal wire semantics: no take-shaped events, ever.
+    let create_body = serde_json::json!({
+        "fileId": "f-2",
+        "anchorStart": 3,
+        "anchorEnd": 3,
+        "snippet": "failure rate",
+        "text": "Is 2.1% still current?",
+    })
+    .to_string();
+    let create_response = http_request_url(
+        &format!("{base_url}/api/threads"),
+        "POST",
+        Some(&create_body),
+    );
+    assert!(
+        create_response.starts_with("HTTP/1.1 200"),
+        "{create_response}"
+    );
+    let thread_id = response_json(&create_response)["id"]
+        .as_str()
+        .expect("created thread should have an id")
+        .to_string();
+
+    // Wait past the 1.5 s responder delay for the canned take.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let take_text = loop {
+        let state_response = http_request_url(&format!("{base_url}/api/state"), "GET", None);
+        let state = response_json(&state_response);
+        if let Some(takes) = state["takes"][&thread_id].as_array()
+            && !takes.is_empty()
+        {
+            break takes[0]["text"].as_str().expect("take text").to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "demo responder should add a take within the deadline"
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert!(take_text.starts_with("Demo agent — "));
+
+    let response = post_done(port);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(0));
+
+    // Drain the remaining stdout lines (the pipe was consumed line-by-line
+    // above): session.done must be present, take events must not.
+    let mut events = vec![started];
+    while let Ok(line) = stdout_rx.recv_timeout(Duration::from_millis(200)) {
+        let line = line.expect("stdout line should be readable");
+        events.push(serde_json::from_str(&line).expect("stdout line should be JSON"));
+    }
+    assert!(
+        events.iter().any(|event| event["kind"] == "session.done"),
+        "stdout should contain session.done, got {events:?}"
+    );
+    assert!(
+        events.iter().all(|event| event["kind"] != "take.added"),
+        "takes are SSE-only; stdout must stay take-free: {events:?}"
+    );
+}
+
+#[test]
+fn cli_demo_with_file_arguments_exits_two() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("somefile.md")
+        .arg("demo")
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("spawn discuss binary");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should be reserved for JSON events"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(stderr.contains("`discuss demo` does not accept file arguments"));
 }
 
 #[test]
@@ -389,7 +558,7 @@ fn spawn_dynamic_session(cwd: &Path, home: &Path, markdown: &Path) -> RunningSes
 fn receive_startup(session: &RunningSession, label: &str) -> Value {
     let line = session
         .stdout
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .unwrap_or_else(|error| panic!("{label} session should emit session.started: {error}"))
         .expect("stdout line should be readable");
     serde_json::from_str(&line).expect("startup line should be JSON")
@@ -410,7 +579,7 @@ fn assert_startup_contract(session: &RunningSession, started: &Value, base_url: 
 
     let stderr = session
         .stderr
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(STARTUP_TIMEOUT)
         .expect("stderr should report the bound URL")
         .expect("stderr line should be readable");
     assert_eq!(stderr, format!("review UI/API: {base_url}"));
@@ -505,6 +674,26 @@ fn http_request_url(url: &str, method: &str, body: Option<&str>) -> String {
         .read_to_string(&mut response)
         .expect("read endpoint response");
     response
+}
+
+/// Reads only the response head for endpoints whose bodies are not utf-8
+/// (e.g. the raw image route).
+fn http_request_head_bytes(port: u16, path: &str) -> String {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect to discuss");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .expect("write raw request");
+
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("read raw response");
+    let head_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(response.len());
+    String::from_utf8_lossy(&response[..head_end]).into_owned()
 }
 
 fn response_json(response: &str) -> Value {

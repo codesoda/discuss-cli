@@ -86,6 +86,20 @@ Combines with the file list: `discuss plan.md diff HEAD~1..HEAD` reviews the mar
 the diff together in one session."
     )]
     Diff(DiffArgs),
+
+    #[command(
+        about = "Open a self-contained demo review session with bundled example files.",
+        long_about = "Open a self-contained demo review session with bundled example files.\n\n\
+Every file is embedded in the binary: a feature-tour GIF, two revised markdown documents\n\
+pre-annotated with agent takes, a diff, an image, and an HTML prototype. A deterministic\n\
+Demo agent replies to comments you leave, entirely in-process: no agent session, no LLM,\n\
+and no history archive is written.\n\n\
+The review page behaves like any other session, so it still loads Prism syntax\n\
+highlighting from a CDN and checks for a newer release. With no network the demo still\n\
+runs; code fences lose highlighting and per-line diff comments.\n\n\
+Top-level flags must come first: `discuss --port 4000 --no-open demo`."
+    )]
+    Demo,
 }
 
 #[derive(Debug, clap::Args)]
@@ -362,6 +376,67 @@ mod tests {
             .expect_err("port 0 should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn parses_demo_subcommand() {
+        let args = Args::try_parse_from(["discuss", "demo"]).expect("demo should parse");
+
+        assert!(args.files.is_empty());
+        assert!(matches!(args.command, Some(Commands::Demo)));
+    }
+
+    #[test]
+    fn parses_demo_with_flags_before_subcommand() {
+        let args = Args::try_parse_from(["discuss", "--port", "4000", "--no-open", "demo"])
+            .expect("flags before demo should parse");
+
+        assert_eq!(args.port, Some(4000));
+        assert!(args.no_open);
+        assert!(matches!(args.command, Some(Commands::Demo)));
+    }
+
+    #[test]
+    fn parses_verdict_options_before_demo_subcommand() {
+        let args = Args::try_parse_from(["discuss", "--verdict-options", "Ship it,Hold", "demo"])
+            .expect("verdict options before demo should parse");
+
+        assert_eq!(args.verdict_options, Some("Ship it,Hold".to_string()));
+        assert!(matches!(args.command, Some(Commands::Demo)));
+    }
+
+    #[test]
+    fn help_lists_demo_subcommand() {
+        let help = Args::command().render_long_help().to_string();
+
+        assert!(
+            help.contains("demo") && help.contains("self-contained demo review session"),
+            "expected help to list the demo subcommand\n{help}"
+        );
+    }
+
+    #[test]
+    fn demo_help_documents_flag_ordering() {
+        let mut command = Args::command();
+        let demo = command
+            .find_subcommand_mut("demo")
+            .expect("demo subcommand should exist");
+        let help = demo.render_long_help().to_string();
+
+        for expected in [
+            "Open a self-contained demo review session with bundled example files.",
+            "no agent session, no LLM",
+            // The offline claim is scoped: the page still fetches Prism and the
+            // version check, so the help must not promise a network-free run.
+            "loads Prism syntax",
+            "Top-level flags must come first",
+            "discuss --port 4000 --no-open demo",
+        ] {
+            assert!(
+                help.contains(expected),
+                "expected demo help to contain {expected:?}\n{help}"
+            );
+        }
     }
 
     #[test]

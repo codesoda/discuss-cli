@@ -59,6 +59,11 @@ pub(super) async fn post_api_done(
             );
         }
     };
+    // Past validation, this request will emit a transcript. Latch that before
+    // taking the read lock so background writers (the demo responder) can tell
+    // that anything they add from here on would be absent from the transcript;
+    // `shutdown` is only signalled further below, after the emit.
+    app_state.begin_done();
     let transcript = match app_state.state.read() {
         Ok(state) => {
             let transcript = build_transcript_with_source(&state, &source);

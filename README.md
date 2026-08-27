@@ -83,6 +83,8 @@ discuss ./plan.md
 
 The browser opens at the address printed on stderr as `review UI/API: http://127.0.0.1:<port>`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
+First time here? `discuss demo` opens a self-contained six-file tour — the feature GIF, two markdown docs pre-annotated with agent takes, a diff, an image, and an HTML prototype — with a canned Demo agent that replies to your comments. Every file is embedded in the binary: no agent session, no LLM, no history writes. The page itself behaves like any other session, so it still loads Prism syntax highlighting from a CDN and checks for a newer release; with no network the demo runs, minus code highlighting and per-line diff comments.
+
 ### Piping markdown via stdin
 
 `discuss` reads from stdin when given `-` explicitly. It also auto-detects a non-TTY stdin when you give no file argument. Use this for ad-hoc review of generated markdown without a temp file:
@@ -150,6 +152,7 @@ Diff output is capped at 5 MB to keep the browser responsive. Override with `--m
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
 | `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
 | `discuss <file>... diff [args]` | Review files and a git diff together in one session |
+| `discuss demo` | Self-contained demo session: bundled example files plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
 | `discuss update` | Check for a newer release and confirm interactively before installing |
 | `discuss update --check` | Check GitHub for a newer release (check only) |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |

@@ -74,6 +74,9 @@ pub enum DiscussError {
     #[error("verdict options error: {message}")]
     VerdictSpecError { message: String },
 
+    #[error("{message}")]
+    ConfigError { message: String },
+
     #[error("diff error: {message}")]
     DiffError { message: String },
 }
@@ -211,6 +214,16 @@ mod tests {
                 "network connection",
                 "discuss update --check",
             ],
+        );
+    }
+
+    #[test]
+    fn config_error_message_passes_through() {
+        assert_display_contains(
+            DiscussError::ConfigError {
+                message: "`discuss demo` does not accept file arguments".to_string(),
+            },
+            &["`discuss demo` does not accept file arguments"],
         );
     }
 
