@@ -26,8 +26,9 @@ pub struct Block {
 }
 
 /// Segments markdown into the commentable blocks the browser will index:
-/// headings h1–h5, paragraphs, top-level list items, blockquotes, and code
-/// blocks (including the frontmatter `pre`, which the browser counts first).
+/// headings h1–h5, paragraphs, top-level list items, blockquotes, tables, and
+/// code blocks (including the frontmatter `pre`, which the browser counts
+/// first).
 /// Footnote definitions render as list items at the end of the document, so
 /// they are appended after all other blocks.
 pub fn markdown_blocks(markdown: &str) -> Vec<Block> {
@@ -63,6 +64,14 @@ pub fn markdown_blocks(markdown: &str) -> Vec<Block> {
                     breadcrumb(&heading_stack),
                 ));
             }
+            NodeValue::Table(_) => {
+                // The browser wraps each <table> in a .table-wrap anchor —
+                // one block per table.
+                blocks.push((
+                    truncate_snippet(&plain_text(node)),
+                    breadcrumb(&heading_stack),
+                ));
+            }
             NodeValue::CodeBlock(code_block) => {
                 blocks.push((
                     truncate_snippet(code_block.literal.trim_end()),
@@ -93,7 +102,7 @@ pub fn markdown_blocks(markdown: &str) -> Vec<Block> {
                     breadcrumb(&heading_stack),
                 ));
             }
-            // Tables, thematic breaks, and raw HTML blocks are not commentable.
+            // Thematic breaks and raw HTML blocks are not commentable.
             _ => {}
         }
     }
@@ -217,10 +226,22 @@ mod tests {
     }
 
     #[test]
-    fn tables_and_thematic_breaks_are_skipped() {
+    fn tables_are_single_blocks_and_thematic_breaks_are_skipped() {
         let blocks = snippets("before\n\n| a | b |\n| - | - |\n| c | d |\n\n---\n\nafter\n");
 
-        assert_eq!(blocks, vec!["before", "after"]);
+        assert_eq!(blocks, vec!["before", "a b c d", "after"]);
+    }
+
+    #[test]
+    fn tables_get_heading_breadcrumb_and_document_order_index() {
+        let blocks = markdown_blocks("# Plan\n\nintro\n\n| a |\n| - |\n| b |\n\nafter\n");
+
+        assert_eq!(
+            blocks.iter().map(|b| b.index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(blocks[2].snippet, "a b");
+        assert_eq!(blocks[2].breadcrumb, "Plan");
     }
 
     #[test]

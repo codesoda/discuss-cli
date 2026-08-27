@@ -2952,6 +2952,40 @@ async fn get_api_file_blocks_returns_segmentation_with_source_version() {
 }
 
 #[tokio::test]
+async fn get_api_file_blocks_counts_tables_as_single_blocks() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Plan\n\nintro\n\n| a | b |\n| - | - |\n| c | d |\n\nafter\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    // The table is one block, matching the browser's .table-wrap anchor.
+    assert_eq!(
+        body["blocks"],
+        json!([
+            { "index": 1, "snippet": "Plan", "breadcrumb": "Plan" },
+            { "index": 2, "snippet": "intro", "breadcrumb": "Plan" },
+            { "index": 3, "snippet": "a b c d", "breadcrumb": "Plan" },
+            { "index": 4, "snippet": "after", "breadcrumb": "Plan" }
+        ])
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_api_file_blocks_maps_diff_files_through_synthesized_markdown() {
     use discuss::state::{File, FileId, FileKind, Source};
 

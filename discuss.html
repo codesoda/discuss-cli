@@ -15,7 +15,8 @@
        sibling of the source document for a committed review artefact).
     2. Replace the content inside <section id="doc-content"> with whatever
        document you want reviewed. Keep it to these commentable elements:
-       h1-h5, p, li, blockquote, pre, .quote, .decision, .context, .callout.
+       h1-h5, p, li, blockquote, pre, table, .quote, .decision, .context,
+       .callout.
        (You can nest freely; only the outermost commentable ancestor is
        used as the anchor when a user clicks.)
     3. Optionally pre-seed threads via the JSON block
@@ -670,6 +671,7 @@
     margin: 10px 0;
   }
   #doc-content .pre-wrap pre { margin: 0; }
+  #doc-content .table-wrap { position: relative; }
   #doc-content pre {
     background: var(--pre-bg);
     padding: 10px 12px;
@@ -1627,7 +1629,7 @@
       <!-- ==================== REPLACE THIS BLOCK WITH YOUR CONTENT ==================== -->
       <section id="doc-content">
         <h1>Sample discussion document</h1>
-        <p>This template renders any HTML you place in <code>#doc-content</code> as a commentable document. Every heading, paragraph, list item, blockquote, code block, or stylized box (<code>.quote</code>, <code>.decision</code>, <code>.callout</code>, <code>.context</code>) becomes clickable on load — it gets a stable <code>data-anchor-idx</code> assigned so comments bind to a position that survives page reloads.</p>
+        <p>This template renders any HTML you place in <code>#doc-content</code> as a commentable document. Every heading, paragraph, list item, blockquote, code block, table, or stylized box (<code>.quote</code>, <code>.decision</code>, <code>.callout</code>, <code>.context</code>) becomes clickable on load — it gets a stable <code>data-anchor-idx</code> assigned so comments bind to a position that survives page reloads.</p>
 
         <h2>Markup conventions understood out of the box</h2>
         <ul>
@@ -3046,9 +3048,11 @@
   // Any element matching this selector inside #doc-content becomes commentable.
   // <pre> is commented-on via a generated .pre-wrap wrapper because <pre>'s
   // own overflow-x: auto clips the absolutely-positioned gutter marker.
+  // <table> gets a generated .table-wrap wrapper for the same reason:
+  // position: relative on table elements is unreliable across engines.
   // The server mirrors this segmentation in src/blocks.rs for the
   // GET /api/files/{fileId}/blocks endpoint; keep the two in sync.
-  const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .quote, .decision, .callout, .context';
+  const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .table-wrap, .quote, .decision, .callout, .context';
   function assignAnchorIndices() {
     const doc = document.getElementById('doc-content');
     if (!doc || doc.querySelector(':scope > .image-review')) return;
@@ -3060,6 +3064,14 @@
       wrap.className = 'pre-wrap';
       pre.parentElement.insertBefore(wrap, pre);
       wrap.appendChild(pre);
+    });
+    // Wrap tables the same way so each table is one commentable anchor.
+    doc.querySelectorAll('table').forEach(table => {
+      if (table.parentElement && table.parentElement.classList.contains('table-wrap')) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      table.parentElement.insertBefore(wrap, table);
+      wrap.appendChild(table);
     });
     const nodes = Array.from(doc.querySelectorAll(COMMENTABLE_SELECTOR));
     // If an element is nested inside another commentable (e.g. <li> inside a
