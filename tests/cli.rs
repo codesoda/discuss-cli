@@ -177,6 +177,64 @@ fn cli_emits_single_session_started_event_after_listening() {
 }
 
 #[test]
+fn cli_serves_server_stamped_markdown_anchors_matching_blocks_api() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let markdown_path = temp_dir.path().join("review.md");
+    fs::write(
+        &markdown_path,
+        "---\ntitle: Review\n---\n# Plan\n\nBody.\n\n| a |\n| - |\n| b |\n\n```rust\nfn main() {}\n```\n\nReference.[^note]\n\n[^note]: Detail.\n",
+    )
+    .expect("markdown file should be written");
+
+    let mut session = spawn_dynamic_session(temp_dir.path(), &home_dir, &markdown_path);
+    let started = receive_startup(&session, "anchor HTML");
+    let base_url = startup_base_url(&started);
+    assert_startup_contract(&session, &started, &base_url);
+
+    let root_response = http_request_url(&base_url, "GET", None);
+    assert!(root_response.starts_with("HTTP/1.1 200"), "{root_response}");
+    let html = doc_content(response_body(&root_response));
+    assert!(html.contains("<h1 data-anchor-idx=\"2\">Plan</h1>"));
+    assert!(html.contains("class=\"table-wrap\" data-anchor-idx=\"4\""));
+    assert!(html.contains("class=\"pre-wrap\" data-anchor-idx=\"5\""));
+
+    let blocks_url = started["payload"]["endpoints"]["blocksTemplate"]
+        .as_str()
+        .expect("blocksTemplate endpoint should be a string")
+        .replace("{fileId}", "f-1");
+    let blocks_response = http_request_url(&blocks_url, "GET", None);
+    assert!(
+        blocks_response.starts_with("HTTP/1.1 200"),
+        "{blocks_response}"
+    );
+    let blocks = response_json(&blocks_response);
+    let block_indices = blocks["blocks"]
+        .as_array()
+        .expect("blocks array")
+        .iter()
+        .map(|block| block["index"].as_u64().expect("numeric block index"))
+        .collect::<Vec<_>>();
+    assert_eq!(stamped_indices(html), block_indices);
+    assert_eq!(block_indices, (1..=7).collect::<Vec<_>>());
+
+    let done_url = started["payload"]["endpoints"]["done"]
+        .as_str()
+        .expect("done endpoint should be a string");
+    let done_response = http_request_url(done_url, "POST", None);
+    assert!(done_response.starts_with("HTTP/1.1 200"), "{done_response}");
+    let output = wait_with_timeout(
+        session
+            .child
+            .take()
+            .expect("session child should be present"),
+        Duration::from_secs(2),
+    );
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
 fn concurrent_sessions_use_distinct_reported_endpoints_without_state_leakage() {
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
@@ -696,12 +754,39 @@ fn http_request_head_bytes(port: u16, path: &str) -> String {
     String::from_utf8_lossy(&response[..head_end]).into_owned()
 }
 
-fn response_json(response: &str) -> Value {
-    let body = response
+fn response_body(response: &str) -> &str {
+    response
         .split_once("\r\n\r\n")
         .expect("HTTP response should contain a body")
-        .1;
-    serde_json::from_str(body).expect("HTTP response body should be JSON")
+        .1
+}
+
+fn response_json(response: &str) -> Value {
+    serde_json::from_str(response_body(response)).expect("HTTP response body should be JSON")
+}
+
+fn doc_content(body: &str) -> &str {
+    let open = "<section id=\"doc-content\">";
+    let start = body.find(open).expect("doc-content open") + open.len();
+    let end = body[start..]
+        .find("</section>")
+        .map(|offset| start + offset)
+        .expect("doc-content close");
+    &body[start..end]
+}
+
+fn stamped_indices(html: &str) -> Vec<u64> {
+    html.split("data-anchor-idx=\"")
+        .skip(1)
+        .map(|suffix| {
+            suffix
+                .split_once('"')
+                .expect("anchor stamp should have a closing quote")
+                .0
+                .parse()
+                .expect("anchor stamp should be numeric")
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
