@@ -46,7 +46,10 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("cache-control: no-store")
     );
-    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
+    assert!(
+        doc_content(response_body(&response))
+            .contains("<h1 data-anchor-idx=\"1\">Review Plan</h1>")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -122,7 +125,9 @@ async fn get_root_seeds_current_state_for_reload() {
 
     assert!(initial_state.contains("\"u-one\""));
     assert!(initial_state.contains("\"u-two\""));
-    assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+    assert!(
+        doc_content(response_body(&response)).contains("<h1 data-anchor-idx=\"1\">State Seed</h1>")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2646,12 +2651,11 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
 
     let payload = response_json(&response);
     assert_eq!(payload["markdown"], "# New Title\n\nNew body.");
-    assert!(
-        payload["renderedHtml"]
-            .as_str()
-            .expect("renderedHtml string")
-            .contains("<h1>New Title</h1>")
-    );
+    let rendered_html = payload["renderedHtml"]
+        .as_str()
+        .expect("renderedHtml string");
+    assert!(rendered_html.contains("<h1 data-anchor-idx=\"1\">New Title</h1>"));
+    assert_eq!(stamped_indices(rendered_html), vec![1, 2]);
     assert_eq!(payload["sourceVersion"], 1);
     assert_eq!(payload["orphanedThreadIds"], json!(["u-lost"]));
     let anchors = payload["threadAnchors"]
@@ -2673,7 +2677,8 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
     // SSE broadcast carries the same payload.
     let event = read_until(&mut sse, "\n\n").await;
     assert!(event.contains("event: source.updated"), "event: {event}");
-    assert!(event.contains("<h1>New Title</h1>"));
+    let event_payload = sse_data_json(&event);
+    assert_eq!(event_payload["renderedHtml"], payload["renderedHtml"]);
 
     // Stdout event emitted for observing agents.
     let stdout_line = stdout_string(&stdout);
@@ -2684,7 +2689,12 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
 
     // Root page renders the new source; state reflects new anchors + version.
     let response = get_root(addr).await;
-    assert!(doc_content(response_body(&response)).contains("<h1>New Title</h1>"));
+    assert_eq!(
+        stamped_indices(doc_content(response_body(&response))),
+        vec![1, 2]
+    );
+    let blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    assert_eq!(block_indices(&blocks), vec![1, 2]);
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 1);
     let threads = state["threads"].as_array().expect("threads array");
@@ -2779,7 +2789,7 @@ async fn post_api_source_enforces_strict_thread_coverage() {
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 0);
     let response = get_root(addr).await;
-    assert!(doc_content(response_body(&response)).contains("<h1>Doc</h1>"));
+    assert!(doc_content(response_body(&response)).contains("<h1 data-anchor-idx=\"1\">Doc</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2917,6 +2927,98 @@ async fn post_api_source_requires_anchors_for_agent_threads() {
 }
 
 #[tokio::test]
+async fn markdown_stamp_delivery_matches_blocks_api_for_every_supported_block_kind() {
+    let addr = free_loopback_addr();
+    let initial_markdown = all_commentable_blocks_markdown("Initial heading");
+    let app_state = AppState::for_process().with_markdown_source(initial_markdown.as_str());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let initial_blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    let expected_indices: Vec<u64> = (1..=16).collect();
+    assert_eq!(block_indices(&initial_blocks), expected_indices);
+
+    let root = get_root(addr).await;
+    let root_body = response_body(&root);
+    let initial_html = doc_content(root_body);
+    assert_eq!(
+        stamped_indices(initial_html),
+        block_indices(&initial_blocks)
+    );
+    assert!(initial_html.contains("class=\"front-matter\""));
+    assert!(initial_html.contains("class=\"table-wrap\" data-anchor-idx=\"11\""));
+    assert!(initial_html.contains("class=\"language-mermaid\""));
+    assert!(initial_html.contains("class=\"footnotes\""));
+    let rendered_files = rendered_files_json(root_body);
+    assert_eq!(
+        stamped_indices(
+            rendered_files[0]["html"]
+                .as_str()
+                .expect("rendered file HTML")
+        ),
+        block_indices(&initial_blocks)
+    );
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let updated_markdown = all_commentable_blocks_markdown("Updated heading");
+    let update = post_json_path(
+        addr,
+        "/api/source",
+        &json!({ "markdown": updated_markdown, "threadAnchors": [] }).to_string(),
+    )
+    .await;
+    assert!(update.starts_with("HTTP/1.1 200"), "response: {update}");
+    let update_payload = response_json(&update);
+    let updated_html = update_payload["renderedHtml"]
+        .as_str()
+        .expect("source update renderedHtml");
+
+    let event = read_until(&mut sse, "\n\n").await;
+    assert!(event.contains("event: source.updated"), "event: {event}");
+    assert_eq!(
+        sse_data_json(&event)["renderedHtml"],
+        update_payload["renderedHtml"]
+    );
+
+    let updated_blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    assert_eq!(
+        stamped_indices(updated_html),
+        block_indices(&updated_blocks)
+    );
+    assert_eq!(block_indices(&updated_blocks), expected_indices);
+
+    let updated_root = get_root(addr).await;
+    let updated_root_body = response_body(&updated_root);
+    assert_eq!(
+        stamped_indices(doc_content(updated_root_body)),
+        block_indices(&updated_blocks)
+    );
+    let updated_rendered_files = rendered_files_json(updated_root_body);
+    assert_eq!(
+        stamped_indices(
+            updated_rendered_files[0]["html"]
+                .as_str()
+                .expect("updated rendered file HTML")
+        ),
+        block_indices(&updated_blocks)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn get_api_file_blocks_returns_segmentation_with_source_version() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process()
@@ -2941,6 +3043,22 @@ async fn get_api_file_blocks_returns_segmentation_with_source_version() {
             { "index": 2, "snippet": "We will stage the rollout.", "breadcrumb": "Rollout plan" },
             { "index": 3, "snippet": "by region", "breadcrumb": "Rollout plan" }
         ])
+    );
+
+    let root = get_root(addr).await;
+    let root_body = response_body(&root);
+    assert_eq!(
+        stamped_indices(doc_content(root_body)),
+        block_indices(&body)
+    );
+    let rendered_files = rendered_files_json(root_body);
+    assert_eq!(
+        stamped_indices(
+            rendered_files[0]["html"]
+                .as_str()
+                .expect("rendered file HTML")
+        ),
+        block_indices(&body)
     );
 
     shutdown_tx.send(()).expect("send shutdown signal");
@@ -3420,7 +3538,7 @@ async fn get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions
 
     // First file is injected into #doc-content; every file is seeded into
     // the rendered-files map for client-side switching.
-    assert!(doc_content(body).contains("<h1>Alpha</h1>"));
+    assert!(doc_content(body).contains("<h1 data-anchor-idx=\"1\">Alpha</h1>"));
     assert!(body.contains("window.__DISCUSS_RENDERED_FILES__ = "));
     assert!(body.contains(r#"{"id":"f-1","html":"#));
     assert!(body.contains(r#"{"id":"f-2","html":"#));
@@ -3566,7 +3684,7 @@ async fn post_api_source_scopes_coverage_and_payload_to_the_updated_file() {
         payload["renderedHtml"]
             .as_str()
             .unwrap()
-            .contains("<h1>Alpha v2</h1>")
+            .contains("<h1 data-anchor-idx=\"1\">Alpha v2</h1>")
     );
     assert_eq!(payload["threadAnchors"], json!([]));
 
@@ -4246,6 +4364,54 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
     }
 }
 
+fn all_commentable_blocks_markdown(heading: &str) -> String {
+    r#"---
+title: Demo
+---
+# __HEADING__
+## Level two
+### Level three
+#### Level four
+##### Level five
+###### Not commentable
+
+Paragraph.
+
+> Quote
+>
+> - nested item
+> - nested code:
+>
+>   ```text
+>   nested
+>   ```
+
+- top item
+  - nested item
+- [x] task item
+
+| a | b |
+| - | - |
+| c | d |
+
+```rust
+fn main() {}
+```
+
+```mermaid
+graph TD
+A---B
+```
+
+Reference.[^note]
+
+Later.
+
+[^note]: Footnote detail.
+"#
+    .replacen("__HEADING__", heading, 1)
+}
+
 fn response_body(response: &str) -> &str {
     response
         .split_once("\r\n\r\n")
@@ -4255,6 +4421,47 @@ fn response_body(response: &str) -> &str {
 
 fn response_json(response: &str) -> Value {
     serde_json::from_str(response_body(response)).expect("response body should be JSON")
+}
+
+fn stamped_indices(html: &str) -> Vec<u64> {
+    html.split("data-anchor-idx=\"")
+        .skip(1)
+        .map(|suffix| {
+            suffix
+                .split_once('"')
+                .expect("anchor stamp should have a closing quote")
+                .0
+                .parse()
+                .expect("anchor stamp should be numeric")
+        })
+        .collect()
+}
+
+fn block_indices(response: &Value) -> Vec<u64> {
+    response["blocks"]
+        .as_array()
+        .expect("blocks array")
+        .iter()
+        .map(|block| block["index"].as_u64().expect("numeric block index"))
+        .collect()
+}
+
+fn sse_data_json(event: &str) -> Value {
+    let data = event
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("SSE event data");
+    serde_json::from_str(data).expect("SSE data should be JSON")
+}
+
+fn rendered_files_json(body: &str) -> Value {
+    let open = "window.__DISCUSS_RENDERED_FILES__ = ";
+    let start = body.find(open).expect("rendered-files script") + open.len();
+    let end = body[start..]
+        .find(";\n</script>")
+        .map(|offset| start + offset)
+        .expect("rendered-files assignment terminator");
+    serde_json::from_str(&body[start..end]).expect("rendered-files assignment should be JSON")
 }
 
 fn doc_content(body: &str) -> &str {

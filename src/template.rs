@@ -352,6 +352,16 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_does_not_resegment_markdown_anchors() {
+        let page = render_page("<p data-anchor-idx=\"1\">Doc</p>", "{}", "[]");
+
+        assert!(!page.contains("COMMENTABLE_SELECTOR"));
+        assert!(!page.contains("assignAnchorIndices"));
+        assert!(!page.contains("setAttribute('data-anchor-idx'"));
+        assert!(page.contains("<p data-anchor-idx=\"1\">Doc</p>"));
+    }
+
+    #[test]
     fn bundled_template_has_accessible_collapsible_file_sidebar() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 

@@ -780,8 +780,10 @@
   #doc-content details.front-matter[open] > summary {
     border-bottom: 1px solid var(--line);
   }
-  #doc-content details.front-matter > pre {
+  #doc-content details.front-matter > .pre-wrap {
     margin: 0;
+  }
+  #doc-content details.front-matter > .pre-wrap > pre {
     border-radius: 0 0 4px 4px;
   }
   #doc-content details.collapsible-section {
@@ -2256,7 +2258,6 @@
       if (typeof closeNewThreadEditor === 'function') closeNewThreadEditor();
       doc.innerHTML = payload.renderedHtml;
       wrapCollapsibleSectionsDom();
-      assignAnchorIndices();
       buildHeadingMinimap();
     }
 
@@ -3096,45 +3097,6 @@
     });
   }
 
-  // ---------- Assign stable anchor indices to commentable elements ----------
-  // Any element matching this selector inside #doc-content becomes commentable.
-  // <pre> is commented-on via a generated .pre-wrap wrapper because <pre>'s
-  // own overflow-x: auto clips the absolutely-positioned gutter marker.
-  // <table> gets a generated .table-wrap wrapper for the same reason:
-  // position: relative on table elements is unreliable across engines.
-  // The server mirrors this segmentation in src/blocks.rs for the
-  // GET /api/files/{fileId}/blocks endpoint; keep the two in sync.
-  const COMMENTABLE_SELECTOR = 'h1, h2, h3, h4, h5, p, li, blockquote, .pre-wrap, .table-wrap, .quote, .decision, .callout, .context';
-  function assignAnchorIndices() {
-    const doc = document.getElementById('doc-content');
-    if (!doc || doc.querySelector(':scope > .image-review')) return;
-    // Wrap any <pre> that isn't already wrapped so the marker can live
-    // outside the <pre>'s overflow:auto clipping region.
-    doc.querySelectorAll('pre').forEach(pre => {
-      if (pre.parentElement && pre.parentElement.classList.contains('pre-wrap')) return;
-      const wrap = document.createElement('div');
-      wrap.className = 'pre-wrap';
-      pre.parentElement.insertBefore(wrap, pre);
-      wrap.appendChild(pre);
-    });
-    // Wrap tables the same way so each table is one commentable anchor.
-    doc.querySelectorAll('table').forEach(table => {
-      if (table.parentElement && table.parentElement.classList.contains('table-wrap')) return;
-      const wrap = document.createElement('div');
-      wrap.className = 'table-wrap';
-      table.parentElement.insertBefore(wrap, table);
-      wrap.appendChild(table);
-    });
-    const nodes = Array.from(doc.querySelectorAll(COMMENTABLE_SELECTOR));
-    // If an element is nested inside another commentable (e.g. <li> inside a
-    // <blockquote>), prefer the outermost ancestor so clicks don't ambiguate.
-    const outermost = nodes.filter(n => !nodes.some(other => other !== n && other.contains(n)));
-    outermost.forEach((el, i) => {
-      el.setAttribute('data-anchor-idx', String(i + 1));
-    });
-  }
-  assignAnchorIndices();
-
   // ---------- File sidebar (multi-file sessions) ----------
   // Browser storage here holds a UI preference only (collapsed vs expanded),
   // mirroring the theme pref pattern. Review state never touches storage.
@@ -3435,7 +3397,6 @@
       return;
     }
     wrapCollapsibleSectionsDom();
-    assignAnchorIndices();
     buildHeadingMinimap();
     highlightCodeBlocks();
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
@@ -3608,17 +3569,11 @@
   try {
     prepopulated = JSON.parse(document.getElementById('prepopulated-threads').textContent.trim() || '[]');
   } catch { prepopulated = []; }
-  // Resolve anchorSelector → anchorIdx at load time
+  // Resolve anchorSelector only when it selects a server-stamped anchor.
   prepopulated.forEach(t => {
     if (!t.anchorIdx && t.anchorSelector) {
       const el = document.querySelector(`#doc-content ${t.anchorSelector}`);
-      if (el) {
-        // If it didn't already get one, assign it now
-        if (!el.hasAttribute('data-anchor-idx')) {
-          const existingMax = Array.from(document.querySelectorAll('#doc-content [data-anchor-idx]'))
-            .reduce((m, n) => Math.max(m, parseInt(n.getAttribute('data-anchor-idx'))), 0);
-          el.setAttribute('data-anchor-idx', String(existingMax + 1));
-        }
+      if (el && el.hasAttribute('data-anchor-idx')) {
         t.anchorIdx = parseInt(el.getAttribute('data-anchor-idx'));
       }
     }

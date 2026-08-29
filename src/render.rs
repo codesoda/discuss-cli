@@ -1,16 +1,21 @@
-use comrak::{Options, markdown_to_html};
+//! Pure markdown rendering and its shared commentable-block plan.
+
+use std::collections::HashMap;
+use std::fmt::{self, Write};
+
+use comrak::html::{ChildRendering, Context, format_document_with_formatter, format_node_default};
+use comrak::nodes::{AstNode, NodeValue};
+use comrak::options::Plugins;
+use comrak::{Arena, Options, parse_document};
+
+const SNIPPET_MAX_BYTES: usize = 300;
+const ANCHOR_MARKER_PREFIX: &str = "<!--discuss-anchor-";
 
 pub fn render(markdown: &str) -> String {
-    if let Some((frontmatter, body)) = split_frontmatter(markdown) {
-        let mut out = render_frontmatter_block(frontmatter);
-        out.push_str(&markdown_to_html(body, &render_options()));
-        out
-    } else {
-        markdown_to_html(markdown, &render_options())
-    }
+    render_markdown(markdown).html
 }
 
-pub(crate) fn render_options() -> Options<'static> {
+fn render_options() -> Options<'static> {
     let mut options = Options::default();
     options.extension.table = true;
     options.extension.strikethrough = true;
@@ -20,7 +25,7 @@ pub(crate) fn render_options() -> Options<'static> {
     options
 }
 
-pub(crate) fn split_frontmatter(input: &str) -> Option<(&str, &str)> {
+fn split_frontmatter(input: &str) -> Option<(&str, &str)> {
     let first_newline = input.find('\n')?;
     if input[..first_newline].trim_end() != "---" {
         return None;
@@ -39,9 +44,281 @@ pub(crate) fn split_frontmatter(input: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn render_frontmatter_block(yaml: &str) -> String {
+pub(crate) struct RenderedBlock {
+    pub(crate) index: usize,
+    pub(crate) snippet: String,
+    pub(crate) breadcrumb: String,
+}
+
+pub(crate) struct RenderedMarkdown {
+    pub(crate) html: String,
+    pub(crate) blocks: Vec<RenderedBlock>,
+}
+
+#[derive(Clone, Copy)]
+enum AnchorTarget {
+    Element(&'static str),
+    PreWrapper,
+    TableWrapper,
+}
+
+struct PlannedBlock {
+    node_id: Option<usize>,
+    target: AnchorTarget,
+    snippet: String,
+    breadcrumb: String,
+}
+
+#[derive(Clone, Copy)]
+struct RenderAnchor {
+    index: usize,
+    target: AnchorTarget,
+}
+
+struct RenderContext {
+    anchors: HashMap<usize, RenderAnchor>,
+}
+
+/// Parses markdown once, plans its outermost commentable blocks, and renders
+/// stamps from that same plan.
+pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
+    let mut planned = Vec::new();
+    let mut footnotes = Vec::new();
+    let mut heading_stack: Vec<(u8, String)> = Vec::new();
+
+    let (frontmatter, body) = if let Some((frontmatter, body)) = split_frontmatter(markdown) {
+        planned.push(PlannedBlock {
+            node_id: None,
+            target: AnchorTarget::PreWrapper,
+            snippet: truncate_snippet(frontmatter.trim()),
+            breadcrumb: String::new(),
+        });
+        (Some(frontmatter), body)
+    } else {
+        (None, markdown)
+    };
+
+    let options = render_options();
+    let arena = Arena::new();
+    let root = parse_document(&arena, body, &options);
+
+    for node in root.children() {
+        let node_key = node_id(node);
+        match &node.data.borrow().value {
+            NodeValue::Heading(heading) => {
+                // h6 is deliberately neither commentable nor part of the
+                // breadcrumb hierarchy.
+                if heading.level > 5 {
+                    continue;
+                }
+                let text = plain_text(node);
+                heading_stack.retain(|(level, _)| *level < heading.level);
+                heading_stack.push((heading.level, text.clone()));
+                planned.push(PlannedBlock {
+                    node_id: Some(node_key),
+                    target: AnchorTarget::Element(match heading.level {
+                        1 => "<h1",
+                        2 => "<h2",
+                        3 => "<h3",
+                        4 => "<h4",
+                        5 => "<h5",
+                        _ => unreachable!(),
+                    }),
+                    snippet: truncate_snippet(&text),
+                    breadcrumb: breadcrumb(&heading_stack),
+                });
+            }
+            NodeValue::Paragraph => planned.push(planned_node(
+                node,
+                node_key,
+                AnchorTarget::Element("<p"),
+                &heading_stack,
+            )),
+            NodeValue::BlockQuote => planned.push(planned_node(
+                node,
+                node_key,
+                AnchorTarget::Element("<blockquote"),
+                &heading_stack,
+            )),
+            NodeValue::Table(_) => planned.push(planned_node(
+                node,
+                node_key,
+                AnchorTarget::TableWrapper,
+                &heading_stack,
+            )),
+            NodeValue::CodeBlock(code_block) => planned.push(PlannedBlock {
+                node_id: Some(node_key),
+                target: AnchorTarget::PreWrapper,
+                snippet: truncate_snippet(code_block.literal.trim_end()),
+                breadcrumb: breadcrumb(&heading_stack),
+            }),
+            NodeValue::List(_) => {
+                // Only direct children of a root list are outermost anchors.
+                for item in node.children() {
+                    if matches!(
+                        item.data.borrow().value,
+                        NodeValue::Item(_) | NodeValue::TaskItem(_)
+                    ) {
+                        planned.push(planned_node(
+                            item,
+                            node_id(item),
+                            AnchorTarget::Element("<li"),
+                            &heading_stack,
+                        ));
+                    }
+                }
+            }
+            NodeValue::FootnoteDefinition(_) => {
+                // Comrak renders referenced definitions as trailing list items.
+                // Keep them after every ordinary body block.
+                footnotes.push(planned_node(
+                    node,
+                    node_key,
+                    AnchorTarget::Element("<li"),
+                    &heading_stack,
+                ));
+            }
+            // Thematic breaks and raw HTML blocks are not commentable.
+            _ => {}
+        }
+    }
+    planned.extend(footnotes);
+
+    let mut anchors = HashMap::new();
+    let blocks = planned
+        .iter()
+        .enumerate()
+        .map(|(offset, block)| {
+            let index = offset + 1;
+            if let Some(node_id) = block.node_id {
+                anchors.insert(
+                    node_id,
+                    RenderAnchor {
+                        index,
+                        target: block.target,
+                    },
+                );
+            }
+            RenderedBlock {
+                index,
+                snippet: block.snippet.clone(),
+                breadcrumb: block.breadcrumb.clone(),
+            }
+        })
+        .collect();
+
+    let mut body_html = String::new();
+    format_document_with_formatter(
+        root,
+        &options,
+        &mut body_html,
+        &Plugins::default(),
+        stamped_formatter,
+        RenderContext { anchors },
+    )
+    .expect("writing rendered markdown to a String cannot fail");
+    inject_element_stamps(&mut body_html, &planned);
+
+    let mut html = frontmatter
+        .map(|yaml| render_frontmatter_block(yaml, 1))
+        .unwrap_or_default();
+    html.push_str(&body_html);
+    RenderedMarkdown { html, blocks }
+}
+
+fn planned_node<'a>(
+    node: &'a AstNode<'a>,
+    node_id: usize,
+    target: AnchorTarget,
+    heading_stack: &[(u8, String)],
+) -> PlannedBlock {
+    PlannedBlock {
+        node_id: Some(node_id),
+        target,
+        snippet: truncate_snippet(&plain_text(node)),
+        breadcrumb: breadcrumb(heading_stack),
+    }
+}
+
+fn node_id(node: &AstNode<'_>) -> usize {
+    node as *const AstNode<'_> as usize
+}
+
+fn stamped_formatter<'a>(
+    context: &mut Context<RenderContext>,
+    node: &'a AstNode<'a>,
+    entering: bool,
+) -> Result<ChildRendering, fmt::Error> {
+    let anchor = context.user.anchors.get(&node_id(node)).copied();
+
+    if entering && let Some(anchor) = anchor {
+        match anchor.target {
+            AnchorTarget::PreWrapper => {
+                write!(
+                    context,
+                    "<div class=\"pre-wrap\" data-anchor-idx=\"{}\">",
+                    anchor.index
+                )?;
+            }
+            AnchorTarget::TableWrapper => {
+                write!(
+                    context,
+                    "<div class=\"table-wrap\" data-anchor-idx=\"{}\">",
+                    anchor.index
+                )?;
+            }
+            AnchorTarget::Element(_) => {}
+        }
+    }
+
+    let children = format_node_default(context, node, entering)?;
+
+    if entering
+        && let Some(RenderAnchor {
+            index,
+            target: AnchorTarget::Element(_),
+        }) = anchor
+    {
+        write!(context, "{ANCHOR_MARKER_PREFIX}{index}-->")?;
+    }
+
+    if !entering
+        && matches!(
+            anchor.map(|anchor| anchor.target),
+            Some(AnchorTarget::PreWrapper | AnchorTarget::TableWrapper)
+        )
+    {
+        context.write_str("</div>\n")?;
+    }
+
+    Ok(children)
+}
+
+fn inject_element_stamps(html: &mut String, planned: &[PlannedBlock]) {
+    for (offset, block) in planned.iter().enumerate() {
+        let AnchorTarget::Element(tag) = block.target else {
+            continue;
+        };
+        let index = offset + 1;
+        let marker = format!("{ANCHOR_MARKER_PREFIX}{index}-->");
+        let marker_start = html
+            .find(&marker)
+            .expect("planned anchor marker should be rendered");
+        let marker_end = marker_start + marker.len();
+        let tag_start = html[..marker_start]
+            .rfind(tag)
+            .expect("planned anchor element should be rendered");
+        html.replace_range(marker_start..marker_end, "");
+        html.insert_str(
+            tag_start + tag.len(),
+            &format!(" data-anchor-idx=\"{index}\""),
+        );
+    }
+}
+
+fn render_frontmatter_block(yaml: &str, index: usize) -> String {
     format!(
-        "<details class=\"front-matter\"><summary>Front Matter</summary><pre><code class=\"language-yaml\">{}</code></pre></details>\n",
+        "<details class=\"front-matter\"><summary>Front Matter</summary><div class=\"pre-wrap\" data-anchor-idx=\"{index}\"><pre><code class=\"language-yaml\">{}</code></pre></div></details>\n",
         escape_html(yaml)
     )
 }
@@ -57,6 +334,51 @@ fn escape_html(input: &str) -> String {
         }
     }
     out
+}
+
+fn breadcrumb(heading_stack: &[(u8, String)]) -> String {
+    heading_stack
+        .iter()
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join(" › ")
+}
+
+fn plain_text<'a>(node: &'a AstNode<'a>) -> String {
+    let mut out = String::new();
+    collect_plain_text(node, &mut out);
+    out.trim().to_string()
+}
+
+fn collect_plain_text<'a>(node: &'a AstNode<'a>, out: &mut String) {
+    match &node.data.borrow().value {
+        NodeValue::Text(text) => out.push_str(text),
+        NodeValue::Code(code) => out.push_str(&code.literal),
+        NodeValue::SoftBreak | NodeValue::LineBreak => out.push(' '),
+        _ => {
+            for child in node.children() {
+                // Separate nested blocks (paragraphs, nested list items) with
+                // a space so they don't run together in the snippet.
+                if child.data.borrow().value.block() && !out.is_empty() && !out.ends_with(' ') {
+                    out.push(' ');
+                }
+                collect_plain_text(child, out);
+            }
+        }
+    }
+}
+
+fn truncate_snippet(text: &str) -> String {
+    let mut snippet = text.to_string();
+    if snippet.len() <= SNIPPET_MAX_BYTES {
+        return snippet;
+    }
+    let mut boundary = SNIPPET_MAX_BYTES;
+    while !snippet.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    snippet.truncate(boundary);
+    snippet
 }
 
 #[cfg(test)]
@@ -87,11 +409,11 @@ mod tests {
         assert_contains_all(
             &html,
             &[
-                "<h1>One</h1>",
-                "<h2>Two</h2>",
-                "<h3>Three</h3>",
-                "<h4>Four</h4>",
-                "<h5>Five</h5>",
+                "<h1 data-anchor-idx=\"1\">One</h1>",
+                "<h2 data-anchor-idx=\"2\">Two</h2>",
+                "<h3 data-anchor-idx=\"3\">Three</h3>",
+                "<h4 data-anchor-idx=\"4\">Four</h4>",
+                "<h5 data-anchor-idx=\"5\">Five</h5>",
             ],
         );
     }
@@ -118,15 +440,15 @@ fn main() {}
             &html,
             &[
                 "<ul>",
-                "<li>unordered</li>",
+                "<li data-anchor-idx=\"1\">unordered</li>",
                 "<ol>",
-                "<li>ordered</li>",
-                "<blockquote>",
+                "<li data-anchor-idx=\"3\">ordered</li>",
+                "<blockquote data-anchor-idx=\"5\">",
                 "<p>quoted</p>",
                 "<pre><code class=\"language-rust\">fn main() {}",
             ],
         );
-        assert!(!html.contains("<div"));
+        assert_eq!(html.matches("<div class=\"pre-wrap\"").count(), 1);
     }
 
     #[test]
@@ -179,7 +501,7 @@ A---B
 
         assert_eq!(
             html,
-            "<pre><code class=\"language-mermaid\">graph TD\nA---B\n</code></pre>\n"
+            "<div class=\"pre-wrap\" data-anchor-idx=\"1\">\n<pre><code class=\"language-mermaid\">graph TD\nA---B\n</code></pre>\n</div>\n"
         );
     }
 
@@ -194,8 +516,8 @@ A---B
                 "<summary>Front Matter</summary>",
                 "<pre><code class=\"language-yaml\">",
                 "title: Demo\nauthor: Chris\n",
-                "</code></pre></details>",
-                "<h1>Hello</h1>",
+                "</code></pre></div></details>",
+                "<h1 data-anchor-idx=\"2\">Hello</h1>",
             ],
         );
     }
@@ -232,8 +554,8 @@ A---B
             &html,
             &[
                 "<details class=\"front-matter\">",
-                "<h1>Heading</h1>",
-                "<p>para</p>",
+                "<h1 data-anchor-idx=\"2\">Heading</h1>",
+                "<p data-anchor-idx=\"3\">para</p>",
             ],
         );
     }
@@ -247,7 +569,7 @@ A---B
             &[
                 "<details class=\"front-matter\">",
                 "<pre><code class=\"language-yaml\"></code></pre>",
-                "<h1>Title</h1>",
+                "<h1 data-anchor-idx=\"2\">Title</h1>",
             ],
         );
     }
@@ -257,5 +579,114 @@ A---B
         let markdown = "# Title\n\n- [x] item\n\n| a | b |\n| - | - |\n| c | d |\n";
 
         assert_eq!(render(markdown), render(markdown));
+    }
+
+    fn stamped_indices(html: &str) -> Vec<usize> {
+        html.split("data-anchor-idx=\"")
+            .skip(1)
+            .map(|suffix| {
+                suffix
+                    .split_once('"')
+                    .expect("anchor stamp should have a closing quote")
+                    .0
+                    .parse()
+                    .expect("anchor stamp should be numeric")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rendered_stamps_and_block_indices_share_one_outermost_plan() {
+        let markdown = r#"---
+title: Demo
+---
+# Heading
+###### Not commentable
+
+Paragraph.
+
+> Quote
+>
+> - nested item
+> - nested item with code:
+>
+>   ```text
+>   nested
+>   ```
+
+- top item
+  - nested item
+- [x] task item
+
+| a | b |
+| - | - |
+| c | d |
+
+```rust
+fn main() {}
+```
+
+Reference.[^note]
+
+Later.
+
+[^note]: Footnote detail.
+"#;
+
+        let rendered = render_markdown(markdown);
+        let expected: Vec<usize> = (1..=rendered.blocks.len()).collect();
+
+        assert_eq!(
+            rendered
+                .blocks
+                .iter()
+                .map(|block| block.snippet.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "title: Demo",
+                "Heading",
+                "Paragraph.",
+                "Quote nested item nested item with code:",
+                "top item nested item",
+                "task item",
+                "a b c d",
+                "fn main() {}",
+                "Reference.",
+                "Later.",
+                "Footnote detail.",
+            ]
+        );
+        assert_eq!(stamped_indices(&rendered.html), expected);
+        assert!(rendered.html.contains(
+            "<div class=\"pre-wrap\" data-anchor-idx=\"1\"><pre><code class=\"language-yaml\">"
+        ));
+        assert!(
+            rendered
+                .html
+                .contains("<h1 data-anchor-idx=\"2\">Heading</h1>")
+        );
+        assert!(rendered.html.contains("<blockquote data-anchor-idx=\"4\">"));
+        assert!(rendered.html.contains("<li data-anchor-idx=\"5\">top item"));
+        assert!(
+            rendered
+                .html
+                .contains("<div class=\"table-wrap\" data-anchor-idx=\"7\">")
+        );
+        assert!(
+            rendered
+                .html
+                .contains("<li data-anchor-idx=\"11\" id=\"fn-note\">")
+        );
+        assert_eq!(
+            rendered.html.matches("<div class=\"table-wrap\"").count(),
+            1
+        );
+        assert_eq!(rendered.html.matches("class=\"pre-wrap\"").count(), 2);
+        assert!(rendered.html.contains("<section class=\"footnotes"));
+        assert!(!rendered.html.contains("###### Not commentable"));
+        assert_eq!(
+            rendered.html.matches("data-anchor-idx=").count(),
+            rendered.blocks.len()
+        );
     }
 }
