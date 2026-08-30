@@ -1055,6 +1055,12 @@
     outline: 1px dashed var(--accent-dashed);
     outline-offset: 2px;
   }
+  /* A row is the precise hover target inside a table. Do not also paint the
+     retained whole-table anchor when the pointer is over an anchored row. */
+  #doc-content .table-wrap[data-anchor-idx]:has(tr[data-anchor-idx]:hover) {
+    background: transparent;
+    outline: none;
+  }
   #doc-content [data-anchor-idx].focused {
     background: var(--accent-soft);
     outline: 1px solid var(--accent);
@@ -3560,8 +3566,18 @@
       }
       node = node.parentElement;
     }
-    // De-duplicate consecutive entries
-    return path.filter((v, i) => i === 0 || v !== path[i - 1]).join(' › ');
+    // De-duplicate consecutive entries, then identify precise table rows.
+    const deduped = path.filter((v, i) => i === 0 || v !== path[i - 1]);
+    if (anchorEl && anchorEl.tagName === 'TR') {
+      const section = anchorEl.parentElement;
+      if (section && section.tagName === 'THEAD') {
+        deduped.push('Table header');
+      } else if (section) {
+        const row = Array.from(section.children).filter(el => el.tagName === 'TR').indexOf(anchorEl) + 1;
+        deduped.push(`Table row ${row}`);
+      }
+    }
+    return deduped.join(' › ');
   }
 
   // ---------- Prepopulated threads ----------
@@ -4322,6 +4338,35 @@
       });
   }
 
+  function markerStackForAnchor(anchor) {
+    if (anchor.tagName !== 'TR') {
+      let stack = anchor.querySelector(':scope > .thread-marker-stack');
+      if (!stack) {
+        stack = document.createElement('div');
+        stack.className = 'thread-marker-stack';
+        anchor.appendChild(stack);
+      }
+      return stack;
+    }
+
+    // Rows live inside the horizontally scrolling .table-scroll. Keep their
+    // markers on the stationary wrapper and align them vertically to the row.
+    const wrapper = anchor.closest('.table-wrap');
+    if (!wrapper) return null;
+    const idx = anchor.getAttribute('data-anchor-idx');
+    let stack = wrapper.querySelector(`:scope > .thread-marker-stack[data-row-anchor-idx="${idx}"]`);
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'thread-marker-stack';
+      stack.setAttribute('data-row-anchor-idx', idx);
+      wrapper.appendChild(stack);
+    }
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const rowRect = anchor.getBoundingClientRect();
+    stack.style.top = (rowRect.top - wrapperRect.top + 1) + 'px';
+    return stack;
+  }
+
   function renderMarkers() {
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
@@ -4394,7 +4439,12 @@
           stack.appendChild(marker);
         }
       });
-      if (stack) anchor.appendChild(stack);
+      if (stack) {
+        const host = markerStackForAnchor(anchor);
+        if (host) {
+          while (stack.firstChild) host.appendChild(stack.firstChild);
+        }
+      }
     });
 
     // Render new-thread draft markers (teal, dashed, "…"). These live
@@ -4457,13 +4507,8 @@
         marker.style.top = top + 'px';
         anchor.appendChild(marker);
       } else {
-        let stack = anchor.querySelector('.thread-marker-stack');
-        if (!stack) {
-          stack = document.createElement('div');
-          stack.className = 'thread-marker-stack';
-          anchor.appendChild(stack);
-        }
-        stack.appendChild(marker);
+        const stack = markerStackForAnchor(anchor);
+        if (stack) stack.appendChild(marker);
       }
     });
 

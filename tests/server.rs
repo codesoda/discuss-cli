@@ -2939,7 +2939,7 @@ async fn markdown_stamp_delivery_matches_blocks_api_for_every_supported_block_ki
     wait_for_server(addr).await;
 
     let initial_blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
-    let expected_indices: Vec<u64> = (1..=16).collect();
+    let expected_indices: Vec<u64> = (1..=18).collect();
     assert_eq!(block_indices(&initial_blocks), expected_indices);
 
     let root = get_root(addr).await;
@@ -3070,7 +3070,7 @@ async fn get_api_file_blocks_returns_segmentation_with_source_version() {
 }
 
 #[tokio::test]
-async fn get_api_file_blocks_counts_tables_as_single_blocks() {
+async fn get_api_file_blocks_includes_whole_table_and_row_anchors() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process()
         .with_markdown_source("# Plan\n\nintro\n\n| a | b |\n| - | - |\n| c | d |\n\nafter\n");
@@ -3084,14 +3084,15 @@ async fn get_api_file_blocks_counts_tables_as_single_blocks() {
     let response = get_path(addr, "/api/files/f-1/blocks").await;
     assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
     let body = response_json(&response);
-    // The table is one block, matching the browser's .table-wrap anchor.
     assert_eq!(
         body["blocks"],
         json!([
             { "index": 1, "snippet": "Plan", "breadcrumb": "Plan" },
             { "index": 2, "snippet": "intro", "breadcrumb": "Plan" },
             { "index": 3, "snippet": "a b c d", "breadcrumb": "Plan" },
-            { "index": 4, "snippet": "after", "breadcrumb": "Plan" }
+            { "index": 4, "snippet": "a b", "breadcrumb": "Plan › Table header" },
+            { "index": 5, "snippet": "c d", "breadcrumb": "Plan › Table row 1" },
+            { "index": 6, "snippet": "after", "breadcrumb": "Plan" }
         ])
     );
 

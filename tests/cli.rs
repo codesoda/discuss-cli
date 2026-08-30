@@ -198,7 +198,9 @@ fn cli_serves_server_stamped_markdown_anchors_matching_blocks_api() {
     let html = doc_content(response_body(&root_response));
     assert!(html.contains("<h1 data-anchor-idx=\"2\">Plan</h1>"));
     assert!(html.contains("class=\"table-wrap\" data-anchor-idx=\"4\""));
-    assert!(html.contains("class=\"pre-wrap\" data-anchor-idx=\"5\""));
+    assert!(html.contains("<tr data-anchor-idx=\"5\">"));
+    assert!(html.contains("<tr data-anchor-idx=\"6\">"));
+    assert!(html.contains("class=\"pre-wrap\" data-anchor-idx=\"7\""));
 
     let blocks_url = started["payload"]["endpoints"]["blocksTemplate"]
         .as_str()
@@ -217,7 +219,7 @@ fn cli_serves_server_stamped_markdown_anchors_matching_blocks_api() {
         .map(|block| block["index"].as_u64().expect("numeric block index"))
         .collect::<Vec<_>>();
     assert_eq!(stamped_indices(html), block_indices);
-    assert_eq!(block_indices, (1..=7).collect::<Vec<_>>());
+    assert_eq!(block_indices, (1..=9).collect::<Vec<_>>());
 
     let done_url = started["payload"]["endpoints"]["done"]
         .as_str()
