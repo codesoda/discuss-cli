@@ -4349,8 +4349,8 @@
       return stack;
     }
 
-    // Rows live inside the horizontally scrolling .table-scroll. Keep their
-    // markers on the stationary wrapper and align them vertically to the row.
+    // Keep row markers out of the table's layout and on its outer wrapper,
+    // aligned vertically to the row.
     const wrapper = anchor.closest('.table-wrap');
     if (!wrapper) return null;
     const idx = anchor.getAttribute('data-anchor-idx');
