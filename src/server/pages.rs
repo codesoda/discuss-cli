@@ -167,7 +167,7 @@ pub(super) async fn get_api_version() -> Response {
     let status = tokio::task::spawn_blocking(update::version_status)
         .await
         .unwrap_or_else(|_| VersionStatus::current_only());
-    if status.latest.is_some() {
+    if status.latest.is_some() && (!status.update_available || !status.releases.is_empty()) {
         let _ = VERSION_STATUS_CACHE.set(status.clone());
     }
 

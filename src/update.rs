@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
-use reqwest::header::{HeaderMap, LOCATION};
+use reqwest::header::{HeaderMap, LOCATION, USER_AGENT};
 use reqwest::redirect::Policy;
 use semver::Version;
 use serde::Serialize;
@@ -44,10 +44,18 @@ pub fn check() -> Result<String> {
 /// release lookup fails (offline, rate limited) so the UI can degrade quietly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReleaseNotes {
+    pub version: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionStatus {
     pub current: String,
     pub latest: Option<String>,
     pub update_available: bool,
+    pub releases: Vec<ReleaseNotes>,
 }
 
 impl VersionStatus {
@@ -59,7 +67,13 @@ impl VersionStatus {
 /// Non-fatal version lookup backing `GET /api/version`; never errors so a
 /// failed release check cannot break the review page.
 pub fn version_status() -> VersionStatus {
-    build_version_status(env!("CARGO_PKG_VERSION"), latest_release().ok())
+    let current = env!("CARGO_PKG_VERSION");
+    let latest = latest_release().ok();
+    let mut status = build_version_status(current, latest);
+    if status.update_available {
+        status.releases = release_notes_since(current).unwrap_or_default();
+    }
+    status
 }
 
 fn build_version_status(current: &str, latest: Option<LatestRelease>) -> VersionStatus {
@@ -74,7 +88,86 @@ fn build_version_status(current: &str, latest: Option<LatestRelease>) -> Version
         current: current.to_string(),
         latest: latest.map(|release| release.version.to_string()),
         update_available,
+        releases: Vec::new(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    body: Option<String>,
+    draft: bool,
+    prerelease: bool,
+}
+
+fn release_notes_since(current: &str) -> Result<Vec<ReleaseNotes>> {
+    let current = parse_version(current, "the current package version")?;
+    let url = github_releases_api_url()?;
+    let client = download_client()?;
+    let response = client
+        .get(&url)
+        .header(
+            USER_AGENT,
+            concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .map_err(|source| {
+            update_check_error(format!(
+                "could not reach {url} within {} seconds: {source}",
+                UPDATE_TIMEOUT.as_secs()
+            ))
+        })?;
+    if !response.status().is_success() {
+        return Err(update_check_error(format!(
+            "GitHub returned HTTP {} for {url}",
+            response.status().as_u16()
+        )));
+    }
+    let body = response.text().map_err(|source| {
+        update_check_error(format!(
+            "could not read release history from {url}: {source}"
+        ))
+    })?;
+    let releases: Vec<GithubRelease> = serde_json::from_str(&body).map_err(|source| {
+        update_check_error(format!(
+            "could not parse release history from {url}: {source}"
+        ))
+    })?;
+
+    Ok(release_notes_after(&current, releases))
+}
+
+fn github_releases_api_url() -> Result<String> {
+    let repository = env!("CARGO_PKG_REPOSITORY");
+    let path = repository
+        .strip_prefix("https://github.com/")
+        .ok_or_else(|| {
+            update_check_error(format!("unsupported GitHub repository URL {repository}"))
+        })?
+        .trim_end_matches('/');
+    Ok(format!(
+        "https://api.github.com/repos/{path}/releases?per_page=100"
+    ))
+}
+
+fn release_notes_after(current: &Version, releases: Vec<GithubRelease>) -> Vec<ReleaseNotes> {
+    releases
+        .into_iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter_map(|release| {
+            let version = Version::parse(
+                release
+                    .tag_name
+                    .strip_prefix('v')
+                    .unwrap_or(&release.tag_name),
+            )
+            .ok()?;
+            (version > *current).then(|| ReleaseNotes {
+                version: version.to_string(),
+                notes: release.body.unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 pub fn install(yes: bool) -> Result<String> {
@@ -569,6 +662,47 @@ mod tests {
         let unknown = build_version_status("0.1.0", None);
         assert_eq!(unknown.latest, None);
         assert!(!unknown.update_available);
+    }
+
+    #[test]
+    fn release_notes_include_every_stable_release_after_current() {
+        let release = |tag: &str, notes: &str, draft: bool, prerelease: bool| GithubRelease {
+            tag_name: tag.to_string(),
+            body: Some(notes.to_string()),
+            draft,
+            prerelease,
+        };
+        let current = Version::parse("0.8.0").expect("valid version");
+
+        let notes = release_notes_after(
+            &current,
+            vec![
+                release("v0.10.0", "rows", false, false),
+                release("v0.9.1", "demo", false, false),
+                release("v0.9.0", "agents", false, false),
+                release("v0.8.0", "current", false, false),
+                release("v0.11.0-beta.1", "preview", false, true),
+                release("v0.12.0", "draft", true, false),
+            ],
+        );
+
+        assert_eq!(
+            notes,
+            vec![
+                ReleaseNotes {
+                    version: "0.10.0".to_string(),
+                    notes: "rows".to_string(),
+                },
+                ReleaseNotes {
+                    version: "0.9.1".to_string(),
+                    notes: "demo".to_string(),
+                },
+                ReleaseNotes {
+                    version: "0.9.0".to_string(),
+                    notes: "agents".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

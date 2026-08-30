@@ -203,7 +203,9 @@
     gap: 16px;
   }
   header h1 { margin: 0; font-size: 16px; font-weight: 600; }
-  header .header-version { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  header .header-version { position: relative; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  header .header-version .version-update > summary { list-style: none; }
+  header .header-version .version-update > summary::-webkit-details-marker { display: none; }
   header .header-version .update-copy {
     font: inherit;
     font-size: 12px;
@@ -216,6 +218,40 @@
   }
   header .header-version .update-copy:hover { background: var(--accent-hover); }
   header .header-version .update-copy.copied { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  header .header-version .version-notes {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    width: min(520px, calc(100vw - 32px));
+    max-height: min(560px, calc(100vh - var(--header-h) - 24px));
+    overflow-y: auto;
+    padding: 14px;
+    white-space: normal;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    z-index: 120;
+  }
+  header .header-version .version-notes h2 { margin: 0 0 10px; font-size: 15px; }
+  header .header-version .version-notes h3 { margin: 14px 0 4px; font-size: 13px; }
+  header .header-version .version-notes pre {
+    margin: 0;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+  header .header-version .version-notes .copy-update-command {
+    margin-top: 14px;
+    padding: 6px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--accent);
+    background: transparent;
+    cursor: pointer;
+  }
   header .meta { color: var(--muted); font-size: 13px; }
   header .thread-summary { position: relative; }
   header .thread-summary-popover {
@@ -2303,9 +2339,9 @@
 
   // ---------- Version badge ----------
   // Shows the running discuss version next to the header title. A background
-  // check against /api/version (which resolves the latest GitHub release
-  // server-side) upgrades the badge into a one-click copy of the update
-  // command when a newer version exists. Failures leave the badge hidden.
+  // check against /api/version (which resolves GitHub releases server-side)
+  // upgrades the badge into a What's new popover with every stable release
+  // since the running version. Failures leave the badge hidden.
   const UPDATE_COMMAND = 'discuss update -y';
 
   function initVersionBadge() {
@@ -2317,26 +2353,45 @@
         if (!info || !info.current) return;
         el.hidden = false;
         if (info.updateAvailable && info.latest) {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'update-copy';
-          button.textContent = `v${info.current} — update available (v${info.latest})`;
-          button.title = `Click to copy \`${UPDATE_COMMAND}\` for a terminal or agent`;
-          button.addEventListener('click', () => {
+          const details = document.createElement('details');
+          details.className = 'version-update';
+          const summary = document.createElement('summary');
+          summary.className = 'update-copy';
+          summary.textContent = `v${info.current} — update available (v${info.latest})`;
+          summary.title = 'Show changes available in newer versions';
+          const popover = document.createElement('div');
+          popover.className = 'version-notes';
+          const heading = document.createElement('h2');
+          heading.textContent = `What’s new since v${info.current}`;
+          popover.appendChild(heading);
+          (info.releases || []).forEach(release => {
+            const version = document.createElement('h3');
+            version.textContent = `v${release.version}`;
+            const notes = document.createElement('pre');
+            notes.textContent = release.notes || 'No release notes provided.';
+            popover.append(version, notes);
+          });
+          if (!info.releases || info.releases.length === 0) {
+            const unavailable = document.createElement('pre');
+            unavailable.textContent = 'Release notes are temporarily unavailable.';
+            popover.appendChild(unavailable);
+          }
+          const copyButton = document.createElement('button');
+          copyButton.type = 'button';
+          copyButton.className = 'copy-update-command';
+          copyButton.textContent = `Copy \`${UPDATE_COMMAND}\``;
+          copyButton.addEventListener('click', () => {
             copyTextToClipboard(UPDATE_COMMAND).then(() => {
-              const label = button.textContent;
-              button.classList.add('copied');
-              button.textContent = `Copied \`${UPDATE_COMMAND}\` ✓`;
-              setTimeout(() => {
-                button.classList.remove('copied');
-                button.textContent = label;
-              }, 2000);
+              copyButton.textContent = 'Copied ✓';
+              setTimeout(() => { copyButton.textContent = `Copy \`${UPDATE_COMMAND}\``; }, 2000);
             }).catch(() => {
-              button.textContent = `Copy failed — run \`${UPDATE_COMMAND}\``;
+              copyButton.textContent = `Copy failed — run \`${UPDATE_COMMAND}\``;
             });
           });
+          popover.appendChild(copyButton);
+          details.append(summary, popover);
           el.textContent = '';
-          el.appendChild(button);
+          el.appendChild(details);
         } else {
           el.textContent = `v${info.current}`;
           el.title = 'discuss is up to date';

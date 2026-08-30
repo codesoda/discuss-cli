@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_template_shows_version_badge_with_update_copy() {
+    fn bundled_template_shows_version_history_and_update_copy() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
 
         assert!(page.contains("<h1>Discuss</h1>"));
@@ -586,6 +586,8 @@ mod tests {
         assert!(page.contains("id=\"header-version\""));
         assert!(page.contains("fetch('/api/version'"));
         assert!(page.contains("const UPDATE_COMMAND = 'discuss update -y';"));
+        assert!(page.contains("What’s new since v${info.current}"));
+        assert!(page.contains("(info.releases || []).forEach"));
         assert!(page.contains("copyTextToClipboard(UPDATE_COMMAND)"));
     }
 }
