@@ -140,12 +140,32 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                 AnchorTarget::Element("<blockquote"),
                 &heading_stack,
             )),
-            NodeValue::Table(_) => planned.push(planned_node(
-                node,
-                node_key,
-                AnchorTarget::TableWrapper,
-                &heading_stack,
-            )),
+            NodeValue::Table(_) => {
+                // Keep the table-level anchor first so existing table threads
+                // continue to resolve, then add one precise anchor per row.
+                planned.push(planned_node(
+                    node,
+                    node_key,
+                    AnchorTarget::TableWrapper,
+                    &heading_stack,
+                ));
+                for (row_offset, row) in node.children().enumerate() {
+                    let is_header = matches!(row.data.borrow().value, NodeValue::TableRow(true));
+                    let row_label = if is_header {
+                        "Table header".to_string()
+                    } else {
+                        format!("Table row {row_offset}")
+                    };
+                    let mut row_breadcrumb = heading_stack.clone();
+                    row_breadcrumb.push((6, row_label));
+                    planned.push(planned_node(
+                        row,
+                        node_id(row),
+                        AnchorTarget::Element("<tr"),
+                        &row_breadcrumb,
+                    ));
+                }
+            }
             NodeValue::CodeBlock(code_block) => planned.push(PlannedBlock {
                 node_id: Some(node_key),
                 target: AnchorTarget::PreWrapper,
@@ -650,6 +670,8 @@ Later.
                 "top item nested item",
                 "task item",
                 "a b c d",
+                "a b",
+                "c d",
                 "fn main() {}",
                 "Reference.",
                 "Later.",
@@ -672,10 +694,12 @@ Later.
                 .html
                 .contains("<div class=\"table-wrap\" data-anchor-idx=\"7\">")
         );
+        assert!(rendered.html.contains("<tr data-anchor-idx=\"8\">"));
+        assert!(rendered.html.contains("<tr data-anchor-idx=\"9\">"));
         assert!(
             rendered
                 .html
-                .contains("<li data-anchor-idx=\"11\" id=\"fn-note\">")
+                .contains("<li data-anchor-idx=\"13\" id=\"fn-note\">")
         );
         assert_eq!(
             rendered.html.matches("<div class=\"table-wrap\"").count(),

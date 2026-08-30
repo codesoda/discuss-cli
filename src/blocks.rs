@@ -91,22 +91,28 @@ mod tests {
     }
 
     #[test]
-    fn tables_are_single_blocks_and_thematic_breaks_are_skipped() {
+    fn tables_keep_a_whole_table_block_and_add_row_blocks() {
         let blocks = snippets("before\n\n| a | b |\n| - | - |\n| c | d |\n\n---\n\nafter\n");
 
-        assert_eq!(blocks, vec!["before", "a b c d", "after"]);
+        assert_eq!(blocks, vec!["before", "a b c d", "a b", "c d", "after"]);
     }
 
     #[test]
-    fn tables_get_heading_breadcrumb_and_document_order_index() {
-        let blocks = markdown_blocks("# Plan\n\nintro\n\n| a |\n| - |\n| b |\n\nafter\n");
+    fn table_rows_get_identifying_breadcrumbs_and_document_order_indices() {
+        let blocks = markdown_blocks("# Plan\n\nintro\n\n| a |\n| - |\n| b |\n| c |\n\nafter\n");
 
         assert_eq!(
             blocks.iter().map(|b| b.index).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4]
+            vec![1, 2, 3, 4, 5, 6, 7]
         );
-        assert_eq!(blocks[2].snippet, "a b");
+        assert_eq!(blocks[2].snippet, "a b c");
         assert_eq!(blocks[2].breadcrumb, "Plan");
+        assert_eq!(blocks[3].snippet, "a");
+        assert_eq!(blocks[3].breadcrumb, "Plan › Table header");
+        assert_eq!(blocks[4].snippet, "b");
+        assert_eq!(blocks[4].breadcrumb, "Plan › Table row 1");
+        assert_eq!(blocks[5].snippet, "c");
+        assert_eq!(blocks[5].breadcrumb, "Plan › Table row 2");
     }
 
     #[test]
