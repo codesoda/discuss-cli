@@ -59,7 +59,7 @@ Same outcome as the curl path. This path builds the binary from source with `car
 
 ### Staying current
 
-Run `discuss update --check` to check for a newer release. Run `discuss update -y` to install it without a prompt. The browser header also shows a version badge. When a newer release exists, the badge becomes a button that copies `discuss update -y`.
+Run `discuss update --check` to check for a newer release. Run `discuss update -y` to install it without a prompt. The browser header also shows a version badge. When a newer release exists, open the badge to see the release notes for every version since the one currently running and copy `discuss update -y`.
 
 ## Quick Start
 
@@ -218,7 +218,7 @@ Agents should use the exact URLs in `session.started.payload.endpoints` rather t
 |--------|------|---------|
 | `GET` | `/api/state` | Current snapshot: threads, replies, takes, drafts, files, verdictConfig, sourceVersion |
 | `GET` | `/api/events` | SSE event stream (browser UI) |
-| `GET` | `/api/version` | Cached, non-fatal update check against the latest GitHub release |
+| `GET` | `/api/version` | Cached, non-fatal update check with release notes for every newer stable GitHub release |
 | `GET` | `/api/files/{fileId}/raw` | Raw bytes for an image file |
 | `GET` | `/files/{fileId}` | Served HTML prototype with inspector/base injection |
 | `GET` | `/files/{fileId}/assets/{*path}` | Sandboxed relative prototype asset |

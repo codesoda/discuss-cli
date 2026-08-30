@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-30
+
+### Added
+
+- **Row-level table comments** — markdown tables retain their whole-table anchor for compatibility and now add a server-stamped anchor for each header/body row, so clicking a cell or selecting text targets that specific row. Row threads use row-limited snippets and identifying breadcrumbs, while their markers stay aligned in the table wrapper gutter instead of entering the table layout. A dependency-free Chrome DevTools Protocol smoke test covers row selection, persistence, and marker placement. Closes [#45](https://github.com/codesoda/discuss-cli/issues/45).
+
+- **What’s new version history** — when the header detects an available update, its version badge now opens a popover containing the GitHub release notes for every stable version newer than the running binary, plus the existing copyable `discuss update -y` command. Release-history lookup is non-fatal and uses the same process-lifetime cache as the latest-version check.
+
+### Changed
+
+- **Server-stamped markdown anchors** — commentable block indices are now planned and stamped into rendered HTML by the same server-side AST pass that serves `GET /api/files/{fileId}/blocks`. The browser consumes those stamps instead of independently re-segmenting the DOM, eliminating drift between browser and agent anchors and providing the single source of truth used by row-level table anchors. Closes [#43](https://github.com/codesoda/discuss-cli/issues/43).
+
 ## [0.9.1] - 2026-08-28
 
 ### Added
