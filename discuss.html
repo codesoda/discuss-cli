@@ -323,7 +323,7 @@
     font-size: 12px;
     font-weight: 600;
   }
-  body.inspecting #inspect-banner { display: block; }
+  body.html-file:not(.inspecting):not(.review-complete) #inspect-banner { display: block; }
   header .header-icon-link {
     display: inline-flex;
     align-items: center;
@@ -1672,7 +1672,7 @@
     <div class="thread-summary-popover" id="thread-summary-popover" role="region" aria-label="Threads" hidden></div>
   </span>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
-  <button class="toggle" id="inspect-toggle" title="Inspect prototype elements (I)" aria-pressed="false">Inspect</button>
+  <button class="toggle" id="inspect-toggle" title="Interact with the prototype (I)" aria-pressed="false">Interact</button>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
       <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
@@ -1705,7 +1705,7 @@
 <div class="done-banner" id="done-banner" role="status" aria-live="polite">
   You can close this tab.
 </div>
-<div id="inspect-banner" role="status">Inspecting — click an element to comment</div>
+<div id="inspect-banner" role="status">Interact mode — clicks drive the prototype · press I to comment</div>
 
 <div class="verdict-modal" id="verdict-modal" hidden>
   <div class="verdict-dialog" role="dialog" aria-modal="true" aria-labelledby="verdict-prompt">
@@ -3323,8 +3323,11 @@
     document.body.classList.toggle('inspecting', inspectOn);
     const button = document.getElementById('inspect-toggle');
     if (button) {
-      button.classList.toggle('on', inspectOn);
-      button.setAttribute('aria-pressed', inspectOn ? 'true' : 'false');
+      // The button shows the special mode: pressed means the prototype is
+      // interactive and clicks pass through instead of commenting.
+      const interacting = isHtmlFile() && !inspectOn;
+      button.classList.toggle('on', interacting);
+      button.setAttribute('aria-pressed', interacting ? 'true' : 'false');
     }
     postToPrototype('discuss:set-inspect', { on: inspectOn });
   }
@@ -3341,8 +3344,9 @@
     document.body.classList.toggle('html-file', isHtmlFile());
     if (!isHtmlFile()) setInspectMode(false);
     else {
-      // HTML review starts ready to select: requiring a separate toggle made
-      // the prototype's own borders look like inactive selection affordances.
+      // HTML review defaults to commenting and stays armed across saves;
+      // the Interact toggle is the special mode that hands clicks to the
+      // prototype.
       setInspectMode(true);
       syncHtmlAnchors();
     }
@@ -3391,7 +3395,6 @@
       postToPrototype('discuss:set-inspect', { on: inspectOn });
       syncHtmlAnchors();
     } else if (message.type === 'discuss:element-selected') {
-      setInspectMode(false);
       openHtmlThreadEditor(message);
     } else if (message.type === 'discuss:marker-clicked') {
       const thread = document.querySelector(`.thread[data-thread-id="${CSS.escape(String(message.threadId))}"]`);

@@ -20,7 +20,7 @@ Engineers share most non-code work as markdown: PRDs, design docs, RFCs, post-mo
 - **Multi-file sessions** — `discuss a.md b.md c.md` reviews several files in one session with a file sidebar.
 - **Image review** — `discuss mockup.png` renders the image. Drop numbered pins to anchor threads to coordinates.
 - **First-class diff review** — `discuss diff` opens the staged git diff with per-hunk syntax highlighting and line-anchored threads. It combines with the file list: `discuss plan.md diff HEAD~1..HEAD`.
-- **HTML prototype review** — `discuss prototype.html` renders the local prototype and its relative assets in a sandboxed iframe. Inspect mode anchors threads to DOM elements with resilient selector fallbacks.
+- **HTML prototype review** — `discuss prototype.html` renders the local prototype and its relative assets in a sandboxed iframe. Clicking an element anchors a thread to it with resilient selector fallbacks; Interact mode hands clicks back to the prototype.
 - **Rich rendering** — Prism highlights tagged code fences (e.g. ` ```rust `, ` ```diff-typescript `). ` ```mermaid ` fences render as diagrams. YAML frontmatter renders as a collapsed, threadable block. See [Prism's supported languages](https://prismjs.com/#supported-languages).
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. The UI renders them distinctly so you can tell who said what.
 - **Agent pre-annotations** — an agent that edited the doc can open `kind: "agent"` threads before you start reading. Each one marks a change and explains it.
@@ -123,7 +123,7 @@ Two limits apply in this first version. `POST /api/source` is not supported for 
 discuss ./prototype.html
 ```
 
-The prototype runs in a same-origin iframe sandboxed with `allow-scripts allow-same-origin`. Click **Inspect** (or press `I`), hover to outline an element, then click it to open a thread. Saved threads render as numbered in-frame markers. Opening a thread scrolls the prototype back to its element. Selectors use stable ids and data attributes when available. Structural fallbacks come next, then text similarity as a final reattachment fallback.
+The prototype runs in a same-origin iframe sandboxed with `allow-scripts allow-same-origin`. Commenting is the default: hover to outline an element, then click it to open a thread. To drive the prototype itself — walk a flow, press its buttons — click **Interact** (or press `I`); press it again to return to commenting. Saved threads render as numbered in-frame markers. Opening a thread scrolls the prototype back to its element. Selectors use stable ids and data attributes when available. Structural fallbacks come next, then text similarity as a final reattachment fallback.
 
 Relative CSS, JavaScript, images, and fonts resolve from the HTML file's directory. Asset paths are canonicalized and cannot escape that directory. Root-absolute URLs such as `/img/logo.png` are not rewritten; use relative URLs. Served copies have CSP meta tags removed so the injected inspector can run. Closed shadow-root internals cannot be selected in v1; anchor the host instead. Live file watching/reload is not included, and `POST /api/source` is not supported for HTML files.
 
