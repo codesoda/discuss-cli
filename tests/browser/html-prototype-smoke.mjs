@@ -155,6 +155,7 @@ if (!editorSurvivedResolverEcho) {
 }
 await click(await center('.html-thread-editor .cancel'));
 await waitFor(`!document.querySelector('.html-thread-editor')`, 'heading editor close');
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after cancel');
 
 // Scroll through the actual iframe viewport, then select a lower CTA with real pointer input.
 const frameCenter = await center('.prototype-frame');
@@ -163,8 +164,7 @@ await send('Input.dispatchMouseEvent', {
   type: 'mouseWheel', ...frameCenter, deltaX: 0, deltaY: 620,
 });
 await new Promise(resolve => setTimeout(resolve, 250));
-await click(inspectButton);
-await waitFor(`document.body.classList.contains('inspecting')`, 'Inspect mode after iframe scroll');
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after iframe scroll');
 const ctaPoint = await framePoint('[data-test="buy-team"]');
 if (ctaPoint.y < 54 || ctaPoint.y > 760) throw new Error(`CTA did not scroll into view: ${JSON.stringify(ctaPoint)}`);
 await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...ctaPoint });
@@ -198,6 +198,18 @@ const saved = apiState.threads?.[0];
 if (!saved || saved.elementAnchor?.selector !== '#pricing [data-test="buy-team"]') {
   throw new Error(`Server did not persist the expected anchor: ${JSON.stringify(saved)}`);
 }
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after save');
+
+// The Interact toggle is the special mode: it hands clicks to the prototype
+// and restores its cursor, and a second press returns to commenting.
+await click(inspectButton);
+await waitFor(`!document.body.classList.contains('inspecting')`, 'Interact mode on toggle press');
+await waitFor(
+  `document.querySelector('.prototype-frame').contentDocument.documentElement.style.cursor !== 'crosshair'`,
+  'inspector crosshair cursor released in Interact mode',
+);
+await click(inspectButton);
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode after leaving Interact');
 
 // Close the card, then use the in-frame marker's real hit target to reopen it.
 await click(await center('.element-thread .thread-close'));
