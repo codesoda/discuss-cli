@@ -17,11 +17,14 @@ pub enum EventKind {
     ReplyAdded,
     PromptSuggestDone,
     SourceUpdated,
+    PrImported,
+    PrSummaryRequested,
+    PrPublishRequested,
     SessionDone,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 12] = [
         Self::SessionStarted,
         Self::ThreadCreated,
         Self::ThreadDeleted,
@@ -30,6 +33,9 @@ impl EventKind {
         Self::ReplyAdded,
         Self::PromptSuggestDone,
         Self::SourceUpdated,
+        Self::PrImported,
+        Self::PrSummaryRequested,
+        Self::PrPublishRequested,
         Self::SessionDone,
     ];
 
@@ -43,6 +49,9 @@ impl EventKind {
             Self::ReplyAdded => "reply.added",
             Self::PromptSuggestDone => "prompt.suggest_done",
             Self::SourceUpdated => "source.updated",
+            Self::PrImported => "pr.imported",
+            Self::PrSummaryRequested => "pr.summary.requested",
+            Self::PrPublishRequested => "pr.publish.requested",
             Self::SessionDone => "session.done",
         }
     }
@@ -79,6 +88,9 @@ impl<'de> Deserialize<'de> for EventKind {
             "reply.added" => Ok(Self::ReplyAdded),
             "prompt.suggest_done" => Ok(Self::PromptSuggestDone),
             "source.updated" => Ok(Self::SourceUpdated),
+            "pr.imported" => Ok(Self::PrImported),
+            "pr.summary.requested" => Ok(Self::PrSummaryRequested),
+            "pr.publish.requested" => Ok(Self::PrPublishRequested),
             "session.done" => Ok(Self::SessionDone),
             _ => Err(de::Error::unknown_variant(
                 &raw,
@@ -91,6 +103,9 @@ impl<'de> Deserialize<'de> for EventKind {
                     "reply.added",
                     "prompt.suggest_done",
                     "source.updated",
+                    "pr.imported",
+                    "pr.summary.requested",
+                    "pr.publish.requested",
                     "session.done",
                 ],
             )),
@@ -199,6 +214,9 @@ mod tests {
             (EventKind::ReplyAdded, "reply.added"),
             (EventKind::PromptSuggestDone, "prompt.suggest_done"),
             (EventKind::SourceUpdated, "source.updated"),
+            (EventKind::PrImported, "pr.imported"),
+            (EventKind::PrSummaryRequested, "pr.summary.requested"),
+            (EventKind::PrPublishRequested, "pr.publish.requested"),
             (EventKind::SessionDone, "session.done"),
         ];
 
@@ -226,6 +244,9 @@ mod tests {
             EventKind::ReplyAdded,
             EventKind::PromptSuggestDone,
             EventKind::SourceUpdated,
+            EventKind::PrImported,
+            EventKind::PrSummaryRequested,
+            EventKind::PrPublishRequested,
             EventKind::SessionDone,
         ];
 

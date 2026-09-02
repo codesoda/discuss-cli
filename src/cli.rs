@@ -88,6 +88,17 @@ the diff together in one session."
     Diff(DiffArgs),
 
     #[command(
+        about = "Review a GitHub pull request privately before publishing.",
+        long_about = "Review a GitHub pull request privately before publishing.\n\n\
+Accepts a full https://github.com/OWNER/REPO/pull/NUMBER URL only. discuss starts a\n\
+local session and prints machine-readable instructions for the active agent, which uses\n\
+the authenticated gh CLI to import the PR. Nothing is posted to GitHub until the reviewer\n\
+selects items, previews the exact GFM payload, and confirms publication.\n\n\
+Top-level flags must come first: `discuss --no-open pr https://github.com/acme/app/pull/123`."
+    )]
+    Pr(PrArgs),
+
+    #[command(
         about = "Open a self-contained demo review session with bundled example files.",
         long_about = "Open a self-contained demo review session with bundled example files.\n\n\
 Every file is embedded in the binary: a feature-tour GIF, two revised markdown documents\n\
@@ -100,6 +111,15 @@ runs; code fences lose highlighting and per-line diff comments.\n\n\
 Top-level flags must come first: `discuss --port 4000 --no-open demo`."
     )]
     Demo,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PrArgs {
+    #[arg(
+        value_name = "FULL_GITHUB_PR_URL",
+        help = "Full GitHub pull request URL: https://github.com/OWNER/REPO/pull/NUMBER"
+    )]
+    pub url: String,
 }
 
 #[derive(Debug, clap::Args)]
@@ -376,6 +396,53 @@ mod tests {
             .expect_err("port 0 should be rejected");
 
         assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn parses_pr_subcommand_with_full_url() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+        ])
+        .expect("PR command should parse");
+
+        let Some(Commands::Pr(pr_args)) = args.command else {
+            panic!("expected pr subcommand");
+        };
+        assert_eq!(
+            pr_args.url,
+            "https://github.com/codesoda/discuss-cli/pull/51"
+        );
+    }
+
+    #[test]
+    fn pr_subcommand_requires_url() {
+        let error = Args::try_parse_from(["discuss", "pr"])
+            .expect_err("PR command without URL should fail");
+
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn pr_help_documents_private_first_agent_workflow() {
+        let mut command = Args::command();
+        let pr = command
+            .find_subcommand_mut("pr")
+            .expect("pr subcommand should exist");
+        let help = pr.render_long_help().to_string();
+
+        for expected in [
+            "full https://github.com/OWNER/REPO/pull/NUMBER URL only",
+            "authenticated gh CLI",
+            "Nothing is posted to GitHub",
+            "previews the exact GFM payload",
+        ] {
+            assert!(
+                help.contains(expected),
+                "expected pr help to contain {expected:?}\n{help}"
+            );
+        }
     }
 
     #[test]

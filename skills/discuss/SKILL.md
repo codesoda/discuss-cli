@@ -1,12 +1,12 @@
 ---
 name: discuss
-description: Launch the discuss CLI on markdown, diff, image, HTML prototypes, or a live HTTP/S website (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
+description: Launch the discuss CLI on markdown, diff, image, HTML prototypes, a live HTTP/S website, or a private-first GitHub PR review (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting takes and handling PR import/publication events.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
 # discuss — Interactive review session
 
-Open markdown, diffs, images, HTML prototypes, or a running HTTP/S website in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown, diffs, images, HTML prototypes, a running HTTP/S website, or a private-first GitHub PR in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
 The source can be a file on disk, a sole HTTP/S URL, or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
@@ -61,6 +61,30 @@ discuss plan.md diff          # markdown file(s) + diff in one session
 - `session.started` gains `mode` (`"markdown"` / `"diff"` / `"mixed"`) and `git_args` so you know what's under review.
 - Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
 - Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
+
+### Private-first GitHub PR mode
+
+Pass exactly one full public-GitHub PR URL to the `pr` subcommand:
+
+```
+discuss pr https://github.com/OWNER/REPO/pull/NUMBER
+```
+
+Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. PR mode is an agent-mediated protocol, not a direct GitHub client: Discuss owns only local state and the loopback UI/API. It never asks for or stores a token.
+
+On `session.started` with `mode: "pr"`:
+
+1. Retain the exact `prUrl`, `prSessionSecret`, protected PR endpoint URLs, and `agentInstructions`. Never print or persist the secret.
+2. Follow those instructions literally with the already-authenticated `gh` CLI. Verify auth, fetch metadata and all three discussion classes, fetch GraphQL review-thread state, then use an authenticated temporary filtered clone plus the immutable pull ref to generate one aggregate `git diff --unified=10` **exactly once**. Split only that result into one `diff --git` block per changed path.
+3. Build the schema-v1 overview/import bundle, preserving GitHub IDs, authors, timestamps, URLs, root review-comment IDs, commit SHAs, paths, sides, and line data. POST it to the reported import endpoint with the bearer secret. Retain the concrete overview/diff file IDs returned by the response and echoed in `pr.imported`. Do not post a token or any review content to GitHub.
+4. Verify the temporary clone's base/head commits against fetched metadata. Record `contextLines: 10` and `contextSource: "git-unified-10"`; never run `gh pr diff`, refetch per file, or generate a second diff.
+5. Continue the ordinary take loop for local `thread.created` and `reply.added` events. Everything remains private, including your takes.
+6. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations and POST it to the event's callback with the bearer secret. Do not select items or destinations for the reviewer.
+7. Ignore edit, preview, cancel, and Go back operations; they authorize nothing. Act only on one `pr.publish.requested` event, which is emitted after the reviewer presses **OK** on the exact GFM confirmation screen.
+8. Recheck the PR head SHA before publishing. If stale, publish nothing and report `stale_pr_head`. Otherwise pipe `payload.review.githubRequest` unchanged into the grouped `gh api .../reviews --input -` call, and each reply entry's `githubRequest` unchanged into its root-comment reply call. Keep `operationId`/`commentOperations` only for result bookkeeping; never send those fields to GitHub. Never interpolate bodies into shell flags, invent/approximate a destination silently, convert failures into standalone PR comments, or retry automatically.
+9. POST the structured publication result to the supplied callback. On failure, wait for a reviewer-driven retry and honor completed/unknown operation IDs to prevent duplicates. On success, stop only after `session.done`.
+
+The browser's include controls default off. Binary/no-hunk/outdated/ambiguous items stay unpublished with a reason. Standalone issue/PR comments are deliberately out of scope; use the provided GitHub links as the escape hatch.
 
 ### HTML prototype mode
 
@@ -160,7 +184,7 @@ The monitor treats each stdout line from its command as an event notification de
 
 **The command string must start with `discuss`** — commands beginning with `discuss` are pre-approved and start immediately; any prefix (`cd … && discuss`, `VAR=x discuss`, `git … | discuss`) requires human approval before the monitor can start. Never prefix with `cd`: the monitor already runs in the session's working directory, so launch from the right cwd and pass repo-relative or absolute paths instead. When piping content in, prefer the heredoc form (`discuss - <<'EOF' … EOF`, which starts with `discuss`) over an upstream-command pipe.
 
-**File or live-URL mode** (Claude Code):
+**File, live-URL, or PR mode** (Claude Code):
 
 ```
 Monitor(

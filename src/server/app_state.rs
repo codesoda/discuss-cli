@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use crate::Config;
 use crate::events::EventEmitter;
 use crate::history;
+use crate::pr::{GithubPrUrl, PrPhase, PrReviewState};
 use crate::sse::EventBus;
 use crate::state::{File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id};
 use crate::verdict::VerdictConfig;
@@ -35,6 +36,7 @@ pub struct AppState {
     idle_timeout_secs: Arc<AtomicU64>,
     pub(super) verdict_config: Arc<Option<VerdictConfig>>,
     live_frame_url: Arc<Option<String>>,
+    pub(crate) pr_review: Option<Arc<std::sync::RwLock<PrReviewState>>>,
     next_thread_number: Arc<AtomicU64>,
     next_agent_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
@@ -63,6 +65,7 @@ impl AppState {
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
             verdict_config: Arc::new(None),
             live_frame_url: Arc::new(None),
+            pr_review: None,
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_agent_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
@@ -207,6 +210,16 @@ impl AppState {
             .map(crate::state::FileMeta::from)
             .collect();
         snapshot.verdict_config = self.verdict_config.as_ref().clone();
+        snapshot.pr_session = self
+            .pr_review
+            .as_ref()
+            .map(|state| {
+                state
+                    .read()
+                    .map(|state| state.snapshot())
+                    .map_err(|_| "PR state lock poisoned while reading state".to_string())
+            })
+            .transpose()?;
         Ok(snapshot)
     }
 
@@ -235,6 +248,32 @@ impl AppState {
     pub fn with_live_frame_url(mut self, live_frame_url: impl Into<String>) -> Self {
         self.live_frame_url = Arc::new(Some(live_frame_url.into()));
         self
+    }
+
+    pub fn with_pr_session(mut self, identity: GithubPrUrl, secret: String) -> Self {
+        self.pr_review = Some(Arc::new(std::sync::RwLock::new(PrReviewState::new(
+            identity, secret,
+        ))));
+        self
+    }
+
+    pub fn is_pr_session(&self) -> bool {
+        self.pr_review.is_some()
+    }
+
+    pub(crate) fn set_pr_base_url(&self, base_url: String) {
+        if let Some(pr_review) = &self.pr_review
+            && let Ok(mut state) = pr_review.write()
+        {
+            state.api_base_url = Some(base_url);
+        }
+    }
+
+    pub(super) fn pr_mutations_locked(&self) -> bool {
+        self.pr_review
+            .as_ref()
+            .and_then(|state| state.read().ok().map(|state| state.phase))
+            .is_some_and(|phase| matches!(phase, PrPhase::Publishing | PrPhase::Published))
     }
 
     pub(super) fn live_frame_url(&self) -> Option<&str> {

@@ -442,6 +442,7 @@ dependencies = [
  "futures-util",
  "is-terminal",
  "open",
+ "rand",
  "reqwest",
  "self-replace",
  "semver",

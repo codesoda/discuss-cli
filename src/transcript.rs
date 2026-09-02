@@ -15,11 +15,18 @@ pub struct Transcript {
     pub threads: Vec<TranscriptThread>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_session: Option<crate::pr::PrSessionSnapshot>,
 }
 
 impl Transcript {
     pub fn with_verdict(mut self, verdict: Verdict) -> Self {
         self.verdict = Some(verdict);
+        self
+    }
+
+    pub fn with_pr_session(mut self, pr_session: crate::pr::PrSessionSnapshot) -> Self {
+        self.pr_session = Some(pr_session);
         self
     }
 }
@@ -104,6 +111,7 @@ fn build_transcript_inner(state: &State, files: &[FileMeta]) -> Transcript {
         files: files.to_vec(),
         threads,
         verdict: None,
+        pr_session: None,
     }
 }
 

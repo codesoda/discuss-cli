@@ -37,6 +37,8 @@ pub struct StateSnapshot {
     pub files: Vec<FileMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_config: Option<VerdictConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_session: Option<crate::pr::PrSessionSnapshot>,
 }
 
 impl State {
@@ -163,6 +165,7 @@ impl State {
             source_version: self.source_version,
             files: Vec::new(),
             verdict_config: None,
+            pr_session: None,
         }
     }
 }

@@ -43,6 +43,13 @@ pub(super) async fn post_api_done(
     AxumState(app_state): AxumState<AppState>,
     body: Bytes,
 ) -> Response {
+    if app_state.is_pr_session() {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "pr_publication_required",
+            "PR sessions finish only after confirmed publication succeeds",
+        );
+    }
     let emitted_at = Utc::now();
     let verdict = match validate_done_verdict(&app_state, &body, emitted_at) {
         Ok(verdict) => verdict,

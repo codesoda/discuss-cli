@@ -123,6 +123,7 @@
     --accent-dashed-strong: rgba(11, 95, 255, 0.5);
     --teal: #0d9488;
     --grip: rgba(0, 0, 0, 0.2);
+    --modal-backdrop: rgba(255, 255, 255, 0.32);
     --highlight-active: rgba(255, 236, 139, 0.55);
     --header-h: 54px;
     --left-w: 60%;
@@ -176,6 +177,7 @@
     --accent-dashed-strong: rgba(90, 155, 255, 0.6);
     --teal: #3fbfae;
     --grip: rgba(255, 255, 255, 0.28);
+    --modal-backdrop: rgba(40, 40, 40, 0.32);
     /* Dimmer and warmer than the light tint: at 55% the light yellow washes out
        to a pale olive that --ink can no longer sit on legibly (2.7:1). */
     --highlight-active: rgba(240, 200, 96, 0.22);
@@ -533,6 +535,116 @@
     color: var(--ink);
   }
   .verdict-error .mutation-error { margin-top: 12px; }
+
+  .pr-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    max-width: min(42vw, 620px);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pr-header[hidden] { display: none; }
+  .pr-header a { color: var(--accent); text-decoration: none; }
+  .pr-header a:hover { text-decoration: underline; }
+  .pr-header-main, .pr-header-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-header-main { color: var(--ink); font-weight: 600; }
+  .pr-header-detail { max-width: 340px; }
+  .pr-header-separator { color: var(--line-strong); }
+
+  .pr-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 190;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--modal-backdrop);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .pr-modal[hidden] { display: none; }
+  .pr-dialog {
+    width: min(820px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.20);
+    padding: 20px;
+  }
+  .pr-dialog h2 { margin: 0; font-size: 19px; }
+  .pr-dialog h3 { margin: 18px 0 8px; font-size: 14px; }
+  .pr-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+  .pr-phase-label { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .pr-status { min-height: 20px; margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+  .pr-status.busy::before { content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 8px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: pr-spin 0.75s linear infinite; vertical-align: -2px; }
+  @keyframes pr-spin { to { transform: rotate(360deg); } }
+  .pr-error .mutation-error { margin-top: 12px; }
+  .pr-field-label { display: block; margin: 16px 0 6px; font-size: 13px; font-weight: 600; }
+  .pr-summary, .pr-item-text {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .pr-summary { min-height: 108px; }
+  .pr-item-text { min-height: 84px; }
+  .pr-summary:focus, .pr-item-text:focus { outline: none; border-color: var(--accent); }
+  .pr-actions-choice { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0 2px; }
+  .pr-actions-choice label, .pr-item-include { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .pr-items { display: grid; gap: 12px; }
+  .pr-item { padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .pr-item.unpublishable { opacity: 0.82; }
+  .pr-item-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 8px; }
+  .pr-destination { font-size: 13px; font-weight: 650; }
+  .pr-destination-context { margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; word-break: break-word; }
+  .pr-approximate, .pr-unpublishable { margin: 8px 0; padding: 7px 9px; border-radius: 5px; font-size: 12px; }
+  .pr-approximate { background: var(--quote); border: 1px solid var(--quote-border); }
+  .pr-unpublishable { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-ink); }
+  .pr-modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .pr-button {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .pr-button:hover { background: var(--accent-hover); }
+  .pr-button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .pr-button:disabled, .pr-dialog input:disabled, .pr-dialog textarea:disabled { opacity: 0.65; cursor: default; }
+  .pr-preview-raw { margin: 12px 0 0; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--pre-bg); font: 12px/1.55 var(--mono); }
+  .pr-preview-rendered { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .pr-preview-rendered-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .pr-preview-rendered-content { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+  .pr-preview-rendered-content h1, .pr-preview-rendered-content h2, .pr-preview-rendered-content h3 { margin: 16px 0 8px; }
+  .pr-preview-rendered-content p, .pr-preview-rendered-content ul, .pr-preview-rendered-content ol { margin: 8px 0; }
+  .pr-preview-rendered-content ul, .pr-preview-rendered-content ol { padding-left: 24px; }
+  .pr-preview-rendered-content a { color: var(--accent); }
+  .pr-preview-rendered-content code { padding: 1px 4px; border-radius: 3px; background: var(--pre-bg); font-family: var(--mono); }
+  .pr-preview-rendered-content pre { overflow: auto; padding: 10px; border-radius: 6px; background: var(--pre-bg); }
+  .pr-preview-rendered-content pre code { padding: 0; background: transparent; }
+  .pr-preview-rendered-content blockquote { margin: 10px 0; padding: 1px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+  .pr-preview-rendered-content table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
+  .pr-preview-rendered-content th, .pr-preview-rendered-content td { padding: 6px 10px; border: 1px solid var(--line); }
+  .pr-publication-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-weight: 400; }
+  .pr-publication-links a { color: inherit; text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) {
+    .pr-status.busy::before { animation: none; border-top-color: var(--line-strong); }
+  }
   body.review-complete .workspace { pointer-events: none; opacity: 0.72; }
 
   .workspace {
@@ -1666,6 +1778,7 @@
   <h1>Discuss</h1>
   <span class="header-version" id="header-version" hidden></span>
   <div class="meta" id="meta-status">Loading…</div>
+  <div class="pr-header" id="pr-header" aria-live="polite" hidden></div>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
@@ -1718,6 +1831,21 @@
     <div class="verdict-validation" id="verdict-validation" aria-live="polite"></div>
     <div class="verdict-actions" id="verdict-actions"></div>
     <div class="verdict-error" id="verdict-error"></div>
+  </div>
+</div>
+
+<div class="pr-modal" id="pr-modal" hidden>
+  <div class="pr-dialog" id="pr-dialog" role="dialog" aria-modal="true" aria-labelledby="pr-dialog-title" aria-describedby="pr-dialog-status" tabindex="-1">
+    <div class="pr-dialog-heading">
+      <div>
+        <h2 id="pr-dialog-title">Publish GitHub review</h2>
+        <p class="pr-phase-label" id="pr-dialog-phase"></p>
+      </div>
+    </div>
+    <div id="pr-dialog-body"></div>
+    <div class="pr-status" id="pr-dialog-status" role="status" aria-live="polite"></div>
+    <div class="pr-error" id="pr-dialog-error" role="alert" aria-live="assertive"></div>
+    <div class="pr-modal-actions" id="pr-dialog-actions"></div>
   </div>
 </div>
 
@@ -1900,6 +2028,7 @@
       sourceVersion: 0,
       files: [],
       verdictConfig: null,
+      prSession: null,
     };
   }
   function normalizeState(raw) {
@@ -1917,7 +2046,24 @@
     state.sourceVersion = Number.isFinite(sourceVersion) && sourceVersion >= 0 ? sourceVersion : 0;
     state.files = normalizeFilesList(raw.files);
     state.verdictConfig = normalizeVerdictConfig(raw.verdictConfig);
+    state.prSession = normalizePrSession(raw.prSession);
     return state;
+  }
+  function normalizePrSession(rawSession) {
+    if (!rawSession || typeof rawSession !== 'object' || typeof rawSession.url !== 'string') return null;
+    const phases = ['loading', 'reviewing', 'preparing', 'editing', 'confirming', 'publishing', 'failed', 'published'];
+    return {
+      phase: phases.includes(rawSession.phase) ? rawSession.phase : 'loading',
+      url: rawSession.url,
+      pr: rawSession.pr && typeof rawSession.pr === 'object' ? { ...rawSession.pr } : null,
+      files: Array.isArray(rawSession.files) ? rawSession.files.map(file => ({ ...file })) : [],
+      draft: rawSession.draft && typeof rawSession.draft === 'object'
+        ? JSON.parse(JSON.stringify(rawSession.draft))
+        : null,
+      publicationResult: rawSession.publicationResult && typeof rawSession.publicationResult === 'object'
+        ? JSON.parse(JSON.stringify(rawSession.publicationResult))
+        : null,
+    };
   }
   function normalizeVerdictConfig(rawConfig) {
     if (!rawConfig || typeof rawConfig !== 'object' || !Array.isArray(rawConfig.options)) return null;
@@ -2104,12 +2250,14 @@
   async function hydrateState() {
     if (stateSeed) {
       currentState = normalizeState(stateSeed);
+      syncPrepopulatedFromState(currentState);
       return;
     }
     try {
       const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(`GET /api/state returned ${response.status}`);
       currentState = normalizeState(await response.json());
+      syncPrepopulatedFromState(currentState);
     } catch (error) {
       console.error('Failed to hydrate discussion state:', error);
       currentState = emptyDiscussionState();
@@ -2120,6 +2268,7 @@
   }
   function setCurrentState(s) {
     currentState = normalizeState(s);
+    syncPrepopulatedFromState(currentState);
     return currentState;
   }
   function cloneState(s) {
@@ -2145,7 +2294,11 @@
       const message = data && data.error && data.error.message
         ? data.error.message
         : `${method} ${path} returned ${response.status}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      error.code = data && data.error ? data.error.code : null;
+      error.responseData = data;
+      throw error;
     }
     return data;
   }
@@ -2176,10 +2329,54 @@
     'draft.cleared',
     'source.updated',
     'anchors.resolved',
+    'pr.imported',
+    'pr.draft.ready',
+    'pr.publication.failed',
+    'pr.publication.succeeded',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
   let eventReconnectTimer = null;
+  let prImportReloaded = false;
+  let prReconcileInFlight = false;
+
+  async function reconcilePrSessionFromServer() {
+    const localSession = loadState().prSession;
+    if (!localSession || prReconcileInFlight || reviewComplete) return;
+    prReconcileInFlight = true;
+    try {
+      const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
+      if (!response.ok) return;
+      const remoteState = normalizeState(await response.json());
+      const remote = remoteState.prSession;
+      if (!remote) return;
+      if (localSession.phase === 'loading' && remote.phase !== 'loading') {
+        // Imported files are server-rendered into the page shell, so state
+        // reconciliation alone cannot install them safely.
+        window.location.reload();
+        return;
+      }
+      loadState().prSession = remote;
+      renderPrHeader();
+      updateFinishReviewButtonLabel();
+      if (prModalState.view === 'preparing' && remote.phase === 'editing' && remote.draft) {
+        adoptPrDraft(remote.draft);
+        renderPrEditView();
+      } else if (prModalState.view === 'publishing' && remote.phase === 'failed') {
+        if (remote.draft) adoptPrDraft(remote.draft);
+        prModalState.confirmation = null;
+        renderPrPublicationFailure(remote.publicationResult || {});
+      } else if (remote.phase === 'published') {
+        applyPrPublicationSucceededEvent({ result: remote.publicationResult || {} });
+      }
+      // Never replace controls in an editing/confirming modal: they may hold
+      // newer unsaved text than the server snapshot.
+    } catch (error) {
+      console.warn('Failed to reconcile PR session after SSE reconnect:', error);
+    } finally {
+      prReconcileInFlight = false;
+    }
+  }
 
   function startEventStream() {
     if (reviewComplete) return;
@@ -2191,6 +2388,7 @@
 
     const source = new EventSource('/api/events');
     eventSource = source;
+    source.onopen = () => { reconcilePrSessionFromServer(); };
     SSE_EVENT_KINDS.forEach(kind => {
       source.addEventListener(kind, (event) => {
         const payload = parseEventPayload(kind, event);
@@ -2255,6 +2453,21 @@
         break;
       case 'anchors.resolved':
         applyAnchorsResolvedEvent(payload);
+        break;
+      case 'pr.imported':
+        if (!prImportReloaded && loadState().prSession?.phase === 'loading') {
+          prImportReloaded = true;
+          window.location.reload();
+        }
+        break;
+      case 'pr.draft.ready':
+        applyPrDraftReadyEvent(payload);
+        break;
+      case 'pr.publication.failed':
+        applyPrPublicationFailedEvent(payload);
+        break;
+      case 'pr.publication.succeeded':
+        applyPrPublicationSucceededEvent(payload);
         break;
     }
   }
@@ -2469,7 +2682,30 @@
     const banner = document.getElementById('done-banner');
     if (!banner) return;
     banner.classList.remove('with-feedback');
-    if (verdictSummary && verdictSummary.label) {
+    if (verdictSummary && verdictSummary.prResult) {
+      banner.textContent = '';
+      banner.classList.add('with-feedback');
+      const summary = document.createElement('span');
+      summary.textContent = `GitHub review published — ${prActionLabel(verdictSummary.action)} ✓`;
+      banner.appendChild(summary);
+      const links = document.createElement('div');
+      links.className = 'pr-publication-links';
+      const result = verdictSummary.prResult;
+      const publishedLinks = [];
+      if (result.review && safePreviewUrl(result.review.url)) publishedLinks.push(['Open published review', result.review.url]);
+      (Array.isArray(result.replies) ? result.replies : []).forEach((reply, index) => {
+        if (reply && safePreviewUrl(reply.url)) publishedLinks.push([`Open reply ${index + 1}`, reply.url]);
+      });
+      publishedLinks.forEach(([label, url]) => {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = label;
+        links.appendChild(link);
+      });
+      if (publishedLinks.length) banner.appendChild(links);
+    } else if (verdictSummary && verdictSummary.label) {
       banner.textContent = '';
       const summary = document.createElement('span');
       summary.textContent = `Review finished — ${verdictSummary.label} ✓`;
@@ -2512,7 +2748,7 @@
       eventSource = null;
     }
     if (newThreadEditor) closeNewThreadEditor();
-    document.querySelectorAll('button, textarea').forEach(control => {
+    document.querySelectorAll('button, textarea, input, select').forEach(control => {
       control.disabled = true;
     });
     const btn = document.getElementById('finish-review');
@@ -2533,6 +2769,17 @@
   function updateFinishReviewButtonLabel() {
     const btn = document.getElementById('finish-review');
     if (!btn || reviewComplete) return;
+    const prSession = loadState().prSession;
+    if (prSession) {
+      const loading = prSession.phase === 'loading';
+      btn.disabled = loading;
+      btn.textContent = loading ? 'Importing PR…' : 'Finish review…';
+      btn.title = loading
+        ? 'Waiting for the pull request import to complete'
+        : 'Prepare and publish this review to GitHub';
+      return;
+    }
+    btn.disabled = false;
     btn.textContent = loadState().verdictConfig ? 'Finish review…' : 'Finish review';
   }
 
@@ -3675,6 +3922,39 @@
   try {
     prepopulated = JSON.parse(document.getElementById('prepopulated-threads').textContent.trim() || '[]');
   } catch { prepopulated = []; }
+  const scriptPrepopulatedIds = new Set(prepopulated.map(thread => String(thread.id)));
+
+  function githubUrlFromBreadcrumb(breadcrumb) {
+    const match = String(breadcrumb || '').match(/https:\/\/github\.com\/[^\s]+/);
+    return match ? match[0] : '';
+  }
+
+  function serverPrepopulatedThread(thread) {
+    if (!thread || thread.kind !== 'prepopulated' || !thread.id) return null;
+    const anchorIdx = parseInt(thread.anchorStart, 10);
+    if (!Number.isFinite(anchorIdx)) return null;
+    return {
+      id: String(thread.id),
+      fileId: threadFileId(thread),
+      anchorIdx,
+      lineRange: normalizeLineRange(thread.lineRange),
+      userComment: thread.text || thread.snippet || '',
+      breadcrumb: thread.breadcrumb || '',
+      subtitle: thread.breadcrumb || '',
+      githubUrl: githubUrlFromBreadcrumb(thread.breadcrumb),
+      pending: false,
+    };
+  }
+
+  function syncPrepopulatedFromState(state) {
+    if (!Array.isArray(prepopulated)) return;
+    const scripted = prepopulated.filter(thread => scriptPrepopulatedIds.has(String(thread.id)));
+    const imported = (Array.isArray(state?.threads) ? state.threads : [])
+      .map(serverPrepopulatedThread)
+      .filter(thread => thread && !scriptPrepopulatedIds.has(thread.id));
+    prepopulated = scripted.concat(imported);
+  }
+
   // Resolve anchorSelector only when it selects a server-stamped anchor.
   prepopulated.forEach(t => {
     if (!t.anchorIdx && t.anchorSelector) {
@@ -3718,6 +3998,10 @@
     el.setAttribute('data-thread-id', t.id);
     el.setAttribute('data-anchor-start', t.anchorIdx);
     el.setAttribute('data-anchor-end', t.anchorIdx);
+    if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
+      el.setAttribute('data-line-start', t.lineRange.start);
+      el.setAttribute('data-line-end', t.lineRange.end);
+    }
 
     const hasTake = typeof t.take === 'string' && t.take.trim().length > 0;
     const hasDecision = typeof t.decision === 'string' && t.decision.trim().length > 0;
@@ -3728,17 +4012,23 @@
          ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision">${escapeHtml(t.decision)}</div>` : ''}`;
 
     const headIndex = t.index != null ? `Comment ${t.index}` : 'Comment';
+    const lineLabel = t.lineRange
+      ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
+      : '';
+    const githubLink = t.githubUrl
+      ? `<a href="${escapeHtml(t.githubUrl)}" target="_blank" rel="noopener noreferrer">View on GitHub</a>`
+      : '';
     el.innerHTML = `
       <div class="thread-head">
         <span>${escapeHtml(headIndex)}${t.pending ? ' · INITIAL TAKE' : ''}</span>
         <span>
-          <span class="thread-anchor">#${t.anchorIdx}</span>
+          <span class="thread-anchor">#${t.anchorIdx}${escapeHtml(lineLabel)}</span>
           <button class="thread-nav thread-nav-prev" title="Previous thread" aria-label="Previous thread">‹</button>
           <button class="thread-nav thread-nav-next" title="Next thread" aria-label="Next thread">›</button>
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
-      ${t.subtitle ? `<div class="thread-sub">${escapeHtml(t.subtitle)}</div>` : ''}
+      ${t.subtitle ? `<div class="thread-sub">${escapeHtml(t.subtitle)}${githubLink ? ` · ${githubLink}` : ''}</div>` : githubLink}
       <div class="thread-body">
         ${t.userComment ? `<div class="thread-quote">${escapeHtml(t.userComment)}</div>` : ''}
         ${takeBlock}
@@ -4511,7 +4801,7 @@
         marker.setAttribute('data-thread-id', tid);
         marker.textContent = resolved ? '✓' : (data && data.index != null ? data.index : '•');
         const userThread = userThreadById.get(tid);
-        const lineRange = userThread && userThread.lineRange;
+        const lineRange = (userThread && userThread.lineRange) || (data && data.lineRange);
         const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
         if (row) {
           // Position the marker next to its anchored line in the gutter.
@@ -4618,7 +4908,12 @@
         span.classList.remove('has-thread-line', 'thread-resolved-line');
       });
     const userThreads = Array.isArray(state.userThreads) ? state.userThreads : [];
-    userThreads.forEach(thread => {
+    const lineThreads = userThreads.concat(prepopulated.map(thread => ({
+      id: thread.id,
+      anchorStart: thread.anchorIdx,
+      lineRange: thread.lineRange,
+    })));
+    lineThreads.forEach(thread => {
       if (!thread.lineRange) return;
       const anchorEl = getAnchorElByIdx(thread.anchorStart);
       if (!anchorEl) return;
@@ -5466,6 +5761,7 @@
   document.addEventListener('click', (e) => {
     if (e.target.closest('#finish-review')) return;
     if (e.target.closest('#verdict-modal')) return;
+    if (e.target.closest('#pr-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('#inspect-toggle')) return;
     if (e.target.closest('#thread-summary-wrap')) return;
@@ -5515,6 +5811,13 @@
   // Escape closes
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (isPrModalOpen()) {
+        e.preventDefault();
+        if (prModalState.view === 'publishing' || prModalState.busy) return;
+        if (prModalState.view === 'confirming') goBackToPrEdit();
+        else cancelPrToReview();
+        return;
+      }
       if (isVerdictModalOpen()) { closeVerdictModal(); return; }
       if (newThreadEditor) { closeNewThreadEditor(); return; }
       if (!showAllBtn.classList.contains('on')) closeAllThreads();
@@ -5568,6 +5871,666 @@
     }
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+  });
+
+  // ---------- Pull request publication ----------
+  const prModalState = {
+    view: null,
+    draft: null,
+    confirmation: null,
+    busy: false,
+    prepareAccepted: false,
+    lastFocus: null,
+  };
+
+  function prActionLabel(action) {
+    return ({
+      approve: 'Approve',
+      requestChanges: 'Request changes',
+      commentOnly: 'Comment only',
+    })[action] || 'Comment only';
+  }
+
+  function renderPrHeader() {
+    const header = document.getElementById('pr-header');
+    const session = loadState().prSession;
+    if (!header) return;
+    header.textContent = '';
+    header.hidden = !session;
+    if (!session) return;
+
+    const main = document.createElement('a');
+    main.className = 'pr-header-main';
+    main.href = session.pr?.url || session.url;
+    main.target = '_blank';
+    main.rel = 'noopener noreferrer';
+    main.textContent = session.pr
+      ? `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`
+      : session.url;
+    header.appendChild(main);
+
+    if (!session.pr) {
+      const loading = document.createElement('span');
+      loading.className = 'pr-header-detail';
+      loading.textContent = 'Importing pull request…';
+      header.appendChild(loading);
+      return;
+    }
+
+    const detail = document.createElement('span');
+    detail.className = 'pr-header-detail';
+    detail.textContent = `${session.pr.title} · @${session.pr.author} · ${session.pr.baseRef} → ${session.pr.headRef}`;
+    detail.title = detail.textContent;
+    const separator = document.createElement('span');
+    separator.className = 'pr-header-separator';
+    separator.textContent = '·';
+    const files = document.createElement('a');
+    files.href = `${session.pr.url || session.url}/files`;
+    files.target = '_blank';
+    files.rel = 'noopener noreferrer';
+    files.textContent = 'Files on GitHub';
+    header.append(detail, separator, files);
+  }
+
+  function setPrSessionPhase(phase, fields = {}) {
+    const session = loadState().prSession;
+    if (!session) return;
+    session.phase = phase;
+    Object.assign(session, fields);
+    renderPrHeader();
+    updateFinishReviewButtonLabel();
+  }
+
+  function isPrModalOpen() {
+    const modal = document.getElementById('pr-modal');
+    return !!modal && !modal.hidden;
+  }
+
+  function showPrModal(view) {
+    const modal = document.getElementById('pr-modal');
+    if (!modal) return;
+    if (modal.hidden) prModalState.lastFocus = document.activeElement;
+    prModalState.view = view;
+    modal.hidden = false;
+    requestAnimationFrame(() => {
+      const focusTarget = modal.querySelector('textarea:not(:disabled), input:not(:disabled), button:not(:disabled)');
+      (focusTarget || document.getElementById('pr-dialog'))?.focus();
+    });
+  }
+
+  function hidePrModal({ restoreFocus = true } = {}) {
+    if (prModalState.busy || prModalState.view === 'publishing') return;
+    const modal = document.getElementById('pr-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    prModalState.view = null;
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    if (restoreFocus) (prModalState.lastFocus || document.getElementById('finish-review'))?.focus?.();
+  }
+
+  function resetPrModalChrome(phaseLabel) {
+    const body = document.getElementById('pr-dialog-body');
+    const actions = document.getElementById('pr-dialog-actions');
+    const status = document.getElementById('pr-dialog-status');
+    const phase = document.getElementById('pr-dialog-phase');
+    if (body) body.textContent = '';
+    if (actions) actions.textContent = '';
+    if (status) {
+      status.textContent = '';
+      status.classList.remove('busy');
+    }
+    if (phase) phase.textContent = phaseLabel || '';
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    return { body, actions, status };
+  }
+
+  function prButton(label, onClick, { primary = false, disabled = false } = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `pr-button${primary ? ' primary' : ''}`;
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function setPrBusy(busy, message = '') {
+    prModalState.busy = busy;
+    const modal = document.getElementById('pr-modal');
+    modal?.querySelectorAll('button, input, textarea, select').forEach(control => {
+      control.disabled = busy || control.dataset.permanentlyDisabled === 'true';
+    });
+    const status = document.getElementById('pr-dialog-status');
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle('busy', busy && !!message);
+    }
+  }
+
+  function adoptPrDraft(draft) {
+    if (!draft || typeof draft !== 'object') return;
+    prModalState.draft = JSON.parse(JSON.stringify(draft));
+    setPrSessionPhase(draft.summaryPending ? 'preparing' : 'editing', { draft: prModalState.draft });
+  }
+
+  function renderPrPreparing(message = 'Generating an AI review summary. Your review remains open while this finishes…') {
+    const { body, actions, status } = resetPrModalChrome('Preparing draft');
+    const note = document.createElement('p');
+    note.textContent = 'Discuss is collecting your review threads and preparing a server-owned publication draft.';
+    body?.appendChild(note);
+    if (status) {
+      status.textContent = message;
+      status.classList.add('busy');
+    }
+    actions?.appendChild(prButton('Cancel', cancelPrToReview));
+    showPrModal('preparing');
+    setPrBusy(false, message);
+    status?.classList.add('busy');
+  }
+
+  async function preparePrDraft() {
+    if (prModalState.busy) return;
+    prModalState.prepareAccepted = false;
+    renderPrPreparing('Starting draft preparation…');
+    setPrBusy(true, 'Starting draft preparation…');
+    try {
+      const response = await apiJson('/api/pr/prepare', { body: {} });
+      const responseDraft = response?.draft || response;
+      const eventDraft = prModalState.draft;
+      const readyEventArrived = eventDraft
+        && eventDraft.draftId === responseDraft?.draftId
+        && !eventDraft.summaryPending
+        && Number(eventDraft.revision) >= Number(responseDraft?.revision);
+      prModalState.prepareAccepted = true;
+      // The SSE handler has already rendered the newer ready draft. Do not
+      // redraw it here and erase typing that began while this request settled.
+      if (readyEventArrived) return;
+      const draft = responseDraft;
+      adoptPrDraft(draft);
+      if (draft && !draft.summaryPending) renderPrEditView();
+      else renderPrPreparing();
+    } catch (error) {
+      console.error('Failed to prepare PR draft:', error);
+      setPrBusy(false, 'Draft preparation could not start. Your review is unchanged.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't prepare draft — retry?", preparePrDraft);
+    }
+  }
+
+  function prDestinationDescription(destination) {
+    if (!destination || destination.kind === 'none') {
+      return { label: 'Will not publish', context: destination?.reason || 'No GitHub destination is available.' };
+    }
+    if (destination.kind === 'existingReviewThread') {
+      return { label: 'Reply to existing review thread', context: `GitHub root comment #${destination.rootCommentId}` };
+    }
+    const side = String(destination.side || '').toUpperCase();
+    return {
+      label: 'New review comment',
+      context: `${destination.path} · ${side} line ${destination.line}`,
+    };
+  }
+
+  function renderPrEditView() {
+    const draft = prModalState.draft;
+    if (!draft) {
+      loadPrDraftForEditing();
+      return;
+    }
+    const { body, actions } = resetPrModalChrome(`Draft revision ${draft.revision}`);
+
+    const actionHeading = document.createElement('h3');
+    actionHeading.id = 'pr-action-heading';
+    actionHeading.textContent = 'Review action';
+    const choices = document.createElement('div');
+    choices.className = 'pr-actions-choice';
+    choices.setAttribute('role', 'radiogroup');
+    choices.setAttribute('aria-labelledby', actionHeading.id);
+    [
+      ['approve', 'Approve'],
+      ['requestChanges', 'Request changes'],
+      ['commentOnly', 'Comment only'],
+    ].forEach(([value, labelText]) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'pr-review-action';
+      input.value = value;
+      input.checked = draft.action === value;
+      label.append(input, document.createTextNode(labelText));
+      choices.appendChild(label);
+    });
+
+    const summaryLabel = document.createElement('label');
+    summaryLabel.className = 'pr-field-label';
+    summaryLabel.htmlFor = 'pr-review-summary';
+    summaryLabel.textContent = 'AI-generated review summary';
+    const summary = document.createElement('textarea');
+    summary.className = 'pr-summary';
+    summary.id = 'pr-review-summary';
+    summary.value = draft.summary || '';
+    summary.disabled = draft.reviewCompleted === true;
+    if (summary.disabled) {
+      summary.dataset.permanentlyDisabled = 'true';
+      summary.title = 'Already published as part of the grouped review';
+    }
+    choices.querySelectorAll('input').forEach(input => {
+      input.disabled = draft.reviewCompleted === true;
+      if (input.disabled) input.dataset.permanentlyDisabled = 'true';
+    });
+
+    const itemsHeading = document.createElement('h3');
+    itemsHeading.textContent = `Review comments (${Array.isArray(draft.items) ? draft.items.length : 0})`;
+    const items = document.createElement('div');
+    items.className = 'pr-items';
+    (Array.isArray(draft.items) ? draft.items : []).forEach((item, index) => {
+      const card = document.createElement('section');
+      card.className = `pr-item${item.publishable ? '' : ' unpublishable'}`;
+      card.dataset.itemId = item.id;
+      const head = document.createElement('div');
+      head.className = 'pr-item-head';
+      const destination = prDestinationDescription(item.destination);
+      const destinationWrap = document.createElement('div');
+      const destinationLabel = document.createElement('div');
+      destinationLabel.className = 'pr-destination';
+      destinationLabel.textContent = destination.label;
+      const context = document.createElement('div');
+      context.className = 'pr-destination-context';
+      context.textContent = destination.context;
+      destinationWrap.append(destinationLabel, context);
+
+      const includeLabel = document.createElement('label');
+      includeLabel.className = 'pr-item-include';
+      const include = document.createElement('input');
+      include.type = 'checkbox';
+      include.className = 'pr-item-include-checkbox';
+      include.checked = item.include === true;
+      include.disabled = item.publishable === false || item.completed === true;
+      if (include.disabled) include.dataset.permanentlyDisabled = 'true';
+      include.setAttribute('aria-label', `Include comment ${index + 1} in GitHub review`);
+      includeLabel.append(include, document.createTextNode('Include'));
+      head.append(destinationWrap, includeLabel);
+      card.appendChild(head);
+
+      if (item.destination?.kind === 'newInlineComment' && item.destination.approximate) {
+        const warning = document.createElement('div');
+        warning.className = 'pr-approximate';
+        warning.textContent = 'Approximate target: verify the path, side, line, and context note in the comment before publishing.';
+        card.appendChild(warning);
+      }
+      if (item.completed) {
+        const published = document.createElement('div');
+        published.className = 'pr-approximate';
+        published.textContent = 'Already published — this destination and text are locked to prevent duplicate comments.';
+        card.appendChild(published);
+      }
+      if (!item.publishable) {
+        const reason = document.createElement('div');
+        reason.className = 'pr-unpublishable';
+        reason.textContent = `Will not publish: ${item.destination?.reason || 'no valid GitHub destination'}`;
+        card.appendChild(reason);
+      }
+
+      const textLabel = document.createElement('label');
+      textLabel.className = 'pr-field-label';
+      textLabel.htmlFor = `pr-item-text-${index}`;
+      textLabel.textContent = `Comment ${index + 1}`;
+      const text = document.createElement('textarea');
+      text.className = 'pr-item-text';
+      text.id = `pr-item-text-${index}`;
+      text.value = item.text || '';
+      text.disabled = item.completed === true;
+      if (text.disabled) text.dataset.permanentlyDisabled = 'true';
+      card.append(textLabel, text);
+      items.appendChild(card);
+    });
+    body?.append(actionHeading, choices, summaryLabel, summary, itemsHeading, items);
+    actions?.append(
+      prButton('Cancel', cancelPrToReview),
+      prButton('Preview', saveAndConfirmPrDraft, { primary: true })
+    );
+    showPrModal('editing');
+    setPrBusy(false);
+  }
+
+  function collectPrDraftEdits() {
+    const draft = prModalState.draft;
+    const action = document.querySelector('input[name="pr-review-action"]:checked')?.value || draft.action;
+    const summary = document.getElementById('pr-review-summary')?.value || '';
+    const itemCards = Array.from(document.querySelectorAll('#pr-dialog-body .pr-item'));
+    return {
+      draftId: draft.draftId,
+      revision: draft.revision,
+      action,
+      summary,
+      items: itemCards.map(card => ({
+        itemId: card.dataset.itemId,
+        include: card.querySelector('.pr-item-include-checkbox')?.checked === true,
+        text: card.querySelector('.pr-item-text')?.value || '',
+      })),
+    };
+  }
+
+  async function recoverPrDraftAfterAmbiguousSave(edits) {
+    try {
+      const stateResponse = await apiJson('/api/state', { method: 'GET' });
+      const remoteSession = normalizePrSession(stateResponse?.prSession);
+      if (remoteSession?.phase === 'confirming') {
+        await apiJson('/api/pr/cancel', { body: { mode: 'confirm' } });
+      }
+      const draft = await apiJson('/api/pr/draft', { method: 'GET' });
+      const updates = new Map((edits.items || []).map(item => [item.itemId, item]));
+      draft.action = edits.action;
+      draft.summary = edits.summary;
+      (draft.items || []).forEach(item => {
+        const update = updates.get(item.id);
+        if (!update || item.completed) return;
+        item.include = update.include;
+        item.text = update.text;
+      });
+      adoptPrDraft(draft);
+      renderPrEditView();
+      const status = document.getElementById('pr-dialog-status');
+      if (status) status.textContent = 'Recovered the server draft and your local edits. Preview again when ready.';
+      return true;
+    } catch (recoveryError) {
+      console.warn('Could not reconcile ambiguous PR draft response:', recoveryError);
+      return false;
+    }
+  }
+
+  async function saveAndConfirmPrDraft() {
+    if (prModalState.busy || !prModalState.draft) return;
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    const edits = collectPrDraftEdits();
+    setPrBusy(true, 'Saving every draft item…');
+    try {
+      const updated = await apiJson('/api/pr/draft', { body: edits });
+      adoptPrDraft(updated);
+      setPrBusy(true, 'Building exact GitHub preview…');
+      const confirmation = await apiJson('/api/pr/confirm', {
+        body: { draftId: updated.draftId, revision: updated.revision },
+      });
+      prModalState.confirmation = confirmation;
+      setPrSessionPhase('confirming');
+      renderPrConfirmationView();
+    } catch (error) {
+      console.error('Failed to preview PR draft:', error);
+      const ambiguous = !error.status || error.code === 'stale_draft' || error.code === 'invalid_pr_phase';
+      if (ambiguous && await recoverPrDraftAfterAmbiguousSave(edits)) return;
+      setPrBusy(false, 'Preview was not created. Your edits are still here.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't create preview — retry?", saveAndConfirmPrDraft);
+    }
+  }
+
+  function safePreviewUrl(value) {
+    const trimmed = String(value || '').trim();
+    return /^(https?:\/\/|mailto:|#|\/(?!\/))/i.test(trimmed) ? trimmed : '';
+  }
+
+  function setSafePreviewHtml(container, html) {
+    const template = document.createElement('template');
+    template.innerHTML = typeof html === 'string' ? html : '';
+    // Preserve the inert visual state of GFM task-list checkboxes, then strip
+    // every active control and remote-loading image. A private preview must
+    // not contact a URL embedded in an unpublished draft.
+    template.content.querySelectorAll('input[type="checkbox"][disabled]').forEach(node => {
+      node.replaceWith(document.createTextNode(node.checked ? '☑' : '☐'));
+    });
+    template.content.querySelectorAll('script, iframe, object, embed, img, form, input, button, textarea, select, style, link, meta').forEach(node => node.remove());
+    template.content.querySelectorAll('*').forEach(node => {
+      Array.from(node.attributes).forEach(attribute => {
+        const name = attribute.name.toLowerCase();
+        if (name.startsWith('on')) node.removeAttribute(attribute.name);
+        if ((name === 'href' || name === 'src' || name === 'xlink:href') && !safePreviewUrl(attribute.value)) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+    container.replaceChildren(template.content);
+  }
+
+  function renderPrConfirmationView() {
+    const confirmation = prModalState.confirmation;
+    if (!confirmation) {
+      renderPrConfirmationRecovery();
+      return;
+    }
+    const { body, actions } = resetPrModalChrome(`Confirm draft revision ${confirmation.revision}`);
+    const heading = document.createElement('h3');
+    heading.textContent = 'Exact GitHub-flavored Markdown';
+    const raw = document.createElement('pre');
+    raw.className = 'pr-preview-raw';
+    raw.id = 'pr-preview-gfm';
+    raw.textContent = confirmation.previewGfm || '';
+    const rendered = document.createElement('section');
+    rendered.className = 'pr-preview-rendered';
+    const renderedLabel = document.createElement('div');
+    renderedLabel.className = 'pr-preview-rendered-label';
+    renderedLabel.textContent = 'Secondary rendered preview';
+    const renderedContent = document.createElement('div');
+    renderedContent.className = 'pr-preview-rendered-content';
+    setSafePreviewHtml(renderedContent, confirmation.previewHtml);
+    rendered.append(renderedLabel, renderedContent);
+    body?.append(heading, raw, rendered);
+    actions?.append(
+      prButton('Cancel', cancelPrToReview),
+      prButton('Go back', goBackToPrEdit),
+      prButton('OK — Publish', publishConfirmedPrDraft, { primary: true })
+    );
+    showPrModal('confirming');
+    setPrBusy(false);
+  }
+
+  function renderPrConfirmationRecovery() {
+    const { body, actions, status } = resetPrModalChrome('Confirmation interrupted');
+    const note = document.createElement('p');
+    note.textContent = 'The exact preview is not available after this page reload. Go back to the saved draft and create it again.';
+    body?.appendChild(note);
+    if (status) status.textContent = 'Nothing will publish until you create a new preview and press OK.';
+    actions?.append(
+      prButton('Cancel review publication', cancelPrToReview),
+      prButton('Go back to edit', goBackToPrEdit, { primary: true })
+    );
+    showPrModal('confirming');
+  }
+
+  async function loadPrDraftForEditing() {
+    if (prModalState.busy) return;
+    const { body } = resetPrModalChrome('Loading saved draft');
+    const note = document.createElement('p');
+    note.textContent = 'Loading the server-owned publication draft…';
+    body?.appendChild(note);
+    showPrModal('editing');
+    setPrBusy(true, 'Loading saved draft…');
+    try {
+      const draft = await apiJson('/api/pr/draft', { method: 'GET' });
+      adoptPrDraft(draft);
+      renderPrEditView();
+    } catch (error) {
+      console.error('Failed to load PR draft:', error);
+      setPrBusy(false, 'The saved draft could not be loaded.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't load draft — retry?", loadPrDraftForEditing);
+    }
+  }
+
+  async function goBackToPrEdit() {
+    if (prModalState.busy) return;
+    setPrBusy(true, 'Returning to draft…');
+    try {
+      await apiJson('/api/pr/cancel', { body: { mode: 'confirm' } });
+      prModalState.confirmation = null;
+      setPrSessionPhase('editing');
+      renderPrEditView();
+    } catch (error) {
+      console.error('Failed to return to PR draft:', error);
+      setPrBusy(false, 'Could not return to the draft.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't return to draft — retry?", goBackToPrEdit);
+    }
+  }
+
+  async function cancelPrToReview() {
+    if (prModalState.busy || prModalState.view === 'publishing') return;
+    if (prModalState.view === 'preparing' && !prModalState.prepareAccepted) {
+      hidePrModal();
+      return;
+    }
+    setPrBusy(true, 'Returning to review…');
+    try {
+      await apiJson('/api/pr/cancel', { body: { mode: 'review' } });
+      prModalState.confirmation = null;
+      prModalState.prepareAccepted = false;
+      setPrSessionPhase('reviewing');
+      prModalState.busy = false;
+      hidePrModal();
+    } catch (error) {
+      console.error('Failed to cancel PR publication:', error);
+      setPrBusy(false, 'Could not return to review. Your draft remains saved.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't cancel publication — retry?", cancelPrToReview);
+    }
+  }
+
+  function renderPrPublishing() {
+    const { body, status } = resetPrModalChrome('Publishing');
+    const note = document.createElement('p');
+    note.textContent = 'Publishing the exact confirmed review and selected comments to GitHub.';
+    body?.appendChild(note);
+    showPrModal('publishing');
+    setPrBusy(true, 'Publishing… Keep this tab open.');
+    if (status) status.classList.add('busy');
+  }
+
+  async function publishConfirmedPrDraft() {
+    const confirmation = prModalState.confirmation;
+    if (prModalState.busy || !confirmation) return;
+    renderPrPublishing();
+    try {
+      await apiJson('/api/pr/publish', {
+        body: {
+          draftId: confirmation.draftId,
+          revision: confirmation.revision,
+          digest: confirmation.digest,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to start PR publication:', error);
+      renderPrPublicationFailure({ error: { message: error.message || 'Publication could not start.' } });
+    }
+  }
+
+  function renderPrPublicationFailure(result) {
+    setPrSessionPhase('failed', { publicationResult: result });
+    const { body, actions, status } = resetPrModalChrome('Publication failed');
+    const heading = document.createElement('h3');
+    heading.textContent = 'GitHub did not accept the complete publication.';
+    const error = document.createElement('p');
+    const code = result?.error?.code ? ` (${result.error.code})` : '';
+    error.textContent = `${result?.error?.message || 'An unknown publication error occurred.'}${code}`;
+    body?.append(heading, error);
+    const unknownOutcomes = Array.isArray(result?.unknownOperations) ? result.unknownOperations : [];
+    if (status) {
+      status.textContent = unknownOutcomes.length
+        ? 'Retry is blocked until the agent reconciles the unknown GitHub operation outcomes. Your draft remains saved.'
+        : 'Your action, summary, comment text, and include choices remain in the saved draft.';
+    }
+    if (prModalState.confirmation && !unknownOutcomes.length) {
+      actions?.appendChild(prButton('Retry exact publication', publishConfirmedPrDraft, { primary: true }));
+    }
+    actions?.append(
+      prButton('Edit draft', goBackToPrEdit),
+      prButton('Cancel', cancelPrToReview)
+    );
+    showPrModal('failed');
+    setPrBusy(false);
+  }
+
+  function applyPrDraftReadyEvent(payload) {
+    if (!payload?.draft || reviewComplete || prModalState.view !== 'preparing') return;
+    adoptPrDraft(payload.draft);
+    prModalState.prepareAccepted = true;
+    renderPrEditView();
+  }
+
+  function applyPrPublicationFailedEvent(payload) {
+    if (reviewComplete) return;
+    if (payload?.draft) adoptPrDraft(payload.draft);
+    renderPrPublicationFailure(payload?.result || {});
+  }
+
+  function applyPrPublicationSucceededEvent(payload) {
+    if (reviewComplete) return;
+    const result = payload?.result || {};
+    setPrSessionPhase('published', { publicationResult: result });
+    prModalState.busy = false;
+    const modal = document.getElementById('pr-modal');
+    if (modal) modal.hidden = true;
+    markReviewComplete({
+      prResult: result,
+      action: prModalState.draft?.action || loadState().prSession?.draft?.action,
+    });
+  }
+
+  function resumePrSessionUi() {
+    const session = loadState().prSession;
+    if (!session) return;
+    prModalState.draft = session.draft ? JSON.parse(JSON.stringify(session.draft)) : null;
+    renderPrHeader();
+    updateFinishReviewButtonLabel();
+    switch (session.phase) {
+      case 'preparing':
+        prModalState.prepareAccepted = true;
+        renderPrPreparing();
+        break;
+      case 'editing':
+        renderPrEditView();
+        break;
+      case 'confirming':
+        renderPrConfirmationRecovery();
+        break;
+      case 'publishing':
+        renderPrPublishing();
+        break;
+      case 'failed':
+        renderPrPublicationFailure(session.publicationResult || {});
+        break;
+      case 'published':
+        applyPrPublicationSucceededEvent({ result: session.publicationResult || {} });
+        break;
+    }
+  }
+
+  function prModalFocusableControls() {
+    const modal = document.getElementById('pr-modal');
+    if (!modal || modal.hidden) return [];
+    return Array.from(modal.querySelectorAll('textarea, input, select, button, a[href], [tabindex]'))
+      .filter(control => !control.disabled && control.getAttribute('tabindex') !== '-1' && !control.hidden);
+  }
+
+  document.getElementById('pr-modal')?.addEventListener('click', event => {
+    if (event.target !== event.currentTarget || prModalState.view === 'publishing') return;
+    if (prModalState.view === 'confirming') goBackToPrEdit();
+    else cancelPrToReview();
+  });
+  document.getElementById('pr-modal')?.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const controls = prModalFocusableControls();
+    if (!controls.length) {
+      event.preventDefault();
+      document.getElementById('pr-dialog')?.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   // ---------- Done ----------
@@ -5796,6 +6759,14 @@
     const btn = document.getElementById('finish-review');
     const doneControl = document.getElementById('done-control');
     if (reviewComplete || !btn) return;
+    const prSession = loadState().prSession;
+    if (prSession) {
+      clearMutationError(doneControl);
+      if (prSession.phase === 'loading') return;
+      if (prSession.phase === 'reviewing') preparePrDraft();
+      else resumePrSessionUi();
+      return;
+    }
     const verdictConfig = loadState().verdictConfig;
     if (verdictConfig) {
       clearMutationError(doneControl);
@@ -6014,10 +6985,12 @@
     if (isHtmlFile()) stashHtmlFrame(activeFileId);
     activateFileUi();
     updateFinishReviewButtonLabel();
+    renderPrHeader();
     initFileSidebar();
     if (!isHtmlFile()) prepareActiveFileDocument();
     renderAllThreads();
     scheduleReposition();
+    resumePrSessionUi();
     startEventStream();
     startHeartbeat();
     setTimeout(scheduleReposition, 600);

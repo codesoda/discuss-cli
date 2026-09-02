@@ -23,6 +23,7 @@ pub mod exit;
 pub mod history;
 pub mod launch;
 pub mod logging;
+pub mod pr;
 pub mod proxy;
 pub mod render;
 pub mod server;
@@ -82,6 +83,20 @@ where
         std::process::exit(exit::EXIT_CONFIG_ERROR);
     }
 
+    if matches!(&command, Some(cli::Commands::Pr(_))) {
+        if !files.is_empty() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept positional files".to_string(),
+            });
+        }
+        if verdict_options.is_some() || verdict_prompt.is_some() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept --verdict-options or --verdict-prompt"
+                    .to_string(),
+            });
+        }
+    }
+
     let config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
@@ -114,6 +129,10 @@ where
         Some(cli::Commands::Diff(diff_args)) => {
             run_review_session(files, Some(diff_args), verdict_config, &config, shutdown).await
         }
+        Some(cli::Commands::Pr(pr_args)) => {
+            let identity = pr::GithubPrUrl::parse(&pr_args.url)?;
+            run_pr_session(identity, &config, shutdown).await
+        }
         Some(cli::Commands::Demo) => {
             if !files.is_empty() {
                 return Err(DiscussError::ConfigError {
@@ -131,6 +150,99 @@ where
             } else {
                 run_review_session(files, None, verdict_config, &config, shutdown).await
             }
+        }
+    }
+}
+
+async fn run_pr_session<F>(identity: pr::GithubPrUrl, config: &Config, shutdown: F) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let source = Source {
+        files: vec![File {
+            id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
+            path: "pr-overview.md".to_string(),
+            kind: FileKind::Markdown,
+            content:
+                "# Loading pull request\n\nWaiting for the active agent to import GitHub PR data.\n"
+                    .to_string(),
+        }],
+    };
+    let secret = random_hex_secret();
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_pr_session(identity.clone(), secret.clone())
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let emitter = app_state.emitter.clone();
+    let ready_state = app_state.clone();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port.unwrap_or(0)));
+    server::serve_with_ready(
+        addr,
+        app_state,
+        shutdown,
+        pr_session_ready_callback(emitter, ready_state, identity, secret, config.auto_open),
+    )
+    .await
+}
+
+fn random_hex_secret() -> String {
+    let bytes = rand::random::<[u8; 32]>();
+    let mut secret = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(secret, "{byte:02x}");
+    }
+    secret
+}
+
+fn pr_session_ready_callback(
+    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    app_state: AppState,
+    identity: pr::GithubPrUrl,
+    secret: String,
+    auto_open: bool,
+) -> impl FnOnce(SocketAddr) {
+    move |listening_addr| {
+        let url = launch::loopback_url(listening_addr);
+        app_state.set_pr_base_url(url.clone());
+        let started_at = Utc::now();
+        let import_url = format!("{url}/api/pr/import");
+        let mut endpoints = launch::session_endpoints(&url);
+        endpoints["prImport"] = serde_json::json!(import_url);
+        endpoints["prSummary"] = serde_json::json!(format!("{url}/api/pr/summary"));
+        endpoints["prPublicationResult"] =
+            serde_json::json!(format!("{url}/api/pr/publication-result"));
+        let instructions = pr::agent_instructions()
+            .replace("<IMPORT_ENDPOINT>", &import_url)
+            .replace("<SESSION_SECRET>", &secret);
+        let payload = serde_json::json!({
+            "url": url,
+            "apiBaseUrl": url,
+            "endpoints": endpoints,
+            "agentInstructions": instructions,
+            "mode": "pr",
+            "prUrl": identity.canonical_url(),
+            "prSessionSecret": secret,
+            "source_file": "pr-overview.md",
+            "files_count": 1,
+            "started_at": started_at.to_rfc3339(),
+        });
+        if let Err(error) = emitter.emit(&Event {
+            kind: EventKind::SessionStarted,
+            at: started_at,
+            payload,
+        }) {
+            tracing::warn!(%url, error = %error, "failed to emit PR session.started event");
+        }
+        let launcher = launch::SystemBrowserLauncher;
+        if let Err(error) =
+            launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
+        {
+            tracing::warn!(%url, error = %error, "failed to write listening URL to stderr");
         }
     }
 }

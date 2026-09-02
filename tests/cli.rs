@@ -177,6 +177,116 @@ fn cli_emits_single_session_started_event_after_listening() {
 }
 
 #[test]
+fn cli_pr_emits_private_session_contract_as_first_event() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let pr_url = "https://github.com/codesoda/discuss-cli/pull/51";
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .args([
+            "--no-open",
+            "--no-save",
+            "--port",
+            &port.to_string(),
+            "pr",
+            pr_url,
+        ])
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn PR discuss session");
+    let stdout = read_all_lines(child.stdout.take().expect("stdout pipe"));
+    let first: Value = serde_json::from_str(
+        &stdout
+            .recv_timeout(STARTUP_TIMEOUT)
+            .expect("PR startup event")
+            .expect("read PR startup event"),
+    )
+    .expect("startup should be JSON");
+
+    assert_eq!(first["kind"], "session.started");
+    assert_eq!(first["payload"]["mode"], "pr");
+    assert_eq!(first["payload"]["prUrl"], pr_url);
+    assert_eq!(first["payload"]["source_file"], "pr-overview.md");
+    assert_eq!(first["payload"]["files_count"], 1);
+    let base_url = format!("http://127.0.0.1:{port}");
+    assert_eq!(
+        first["payload"]["endpoints"]["prImport"],
+        format!("{base_url}/api/pr/import")
+    );
+    assert_eq!(
+        first["payload"]["endpoints"]["prSummary"],
+        format!("{base_url}/api/pr/summary")
+    );
+    assert_eq!(
+        first["payload"]["endpoints"]["prPublicationResult"],
+        format!("{base_url}/api/pr/publication-result")
+    );
+    let secret = first["payload"]["prSessionSecret"]
+        .as_str()
+        .expect("startup secret");
+    assert_eq!(secret.len(), 64);
+    assert!(
+        secret
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    let instructions = first["payload"]["agentInstructions"]
+        .as_str()
+        .expect("PR agent instructions");
+    assert!(instructions.contains(&format!("Authorization: Bearer {secret}")));
+    assert!(instructions.contains(&format!("{base_url}/api/pr/import")));
+    assert!(!instructions.contains("<SESSION_SECRET>"));
+    assert!(!instructions.contains("<IMPORT_ENDPOINT>"));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn cli_pr_rejects_invalid_url_files_and_verdict_flags() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let file = temp_dir.path().join("review.md");
+    fs::write(&file, "# Review\n").expect("write fixture");
+    let cases: Vec<Vec<String>> = vec![
+        vec!["pr".into(), "http://github.com/acme/repo/pull/1".into()],
+        vec![
+            file.display().to_string(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+        vec![
+            "--verdict-options".into(),
+            "yes,no".into(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+        vec![
+            "--verdict-prompt".into(),
+            "Choose".into(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+    ];
+    for args in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+            .args(&args)
+            .env("HOME", &home_dir)
+            .env_remove("DISCUSS_LOG")
+            .output()
+            .expect("run invalid PR command");
+        assert_eq!(output.status.code(), Some(2), "args: {args:?}");
+        assert!(output.stdout.is_empty(), "args: {args:?}");
+    }
+}
+
+#[test]
 fn cli_live_url_binds_adjacent_loopback_proxy_reports_contract_and_shuts_down_both() {
     let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream fixture");
     let upstream_url = format!(
