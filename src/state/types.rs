@@ -92,6 +92,10 @@ pub struct ElementAnchor {
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessible_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
     pub outer_html: String,
 }
 
@@ -455,10 +459,14 @@ mod tests {
             fallbacks: vec!["body > section:nth-child(2) > button".to_string()],
             tag: "button".to_string(),
             text_digest: Some("Buy now".to_string()),
+            accessible_name: Some("Buy now".to_string()),
+            route: Some("/pricing".to_string()),
             outer_html: "<button>Buy now</button>".to_string(),
         };
         let value = serde_json::to_value(&anchor).expect("serialize element anchor");
         assert_eq!(value["textDigest"], "Buy now");
+        assert_eq!(value["accessibleName"], "Buy now");
+        assert_eq!(value["route"], "/pricing");
         assert_eq!(value["outerHtml"], "<button>Buy now</button>");
         assert!(value.get("text_digest").is_none());
         assert_eq!(

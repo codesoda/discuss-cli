@@ -227,6 +227,18 @@ pub(super) async fn post_api_threads(
                         "elementAnchor selector, tag, and outerHtml must not be empty",
                     );
                 }
+                if app_state.is_live()
+                    && !anchor
+                        .route
+                        .as_deref()
+                        .is_some_and(|route| route.starts_with('/'))
+                {
+                    return api_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "validation_error",
+                        "elementAnchor route is required for live website files",
+                    );
+                }
                 if request.line_range.is_some() {
                     return api_error_response(
                         StatusCode::BAD_REQUEST,
@@ -253,6 +265,12 @@ pub(super) async fn post_api_threads(
                 truncate_utf8(&mut anchor.outer_html, 2 * 1024);
                 if let Some(text_digest) = &mut anchor.text_digest {
                     truncate_utf8(text_digest, 500);
+                }
+                if let Some(accessible_name) = &mut anchor.accessible_name {
+                    truncate_utf8(accessible_name, 500);
+                }
+                if let Some(route) = &mut anchor.route {
+                    truncate_utf8(route, 2 * 1024);
                 }
                 anchor.fallbacks.truncate(16);
                 for fallback in &mut anchor.fallbacks {

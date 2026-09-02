@@ -311,6 +311,10 @@ mod tests {
         assert!(page.contains("discuss:set-inspect"));
         assert!(page.contains("discuss:element-selected"));
         assert!(page.contains("discuss:resolve-anchors"));
+        assert!(page.contains("function prototypeOrigin(frame)"));
+        assert!(page.contains("event.source !== frame.contentWindow || event.origin !== origin"));
+        assert!(page.contains("discuss:route-changed"));
+        assert!(page.contains("discuss:external-navigation"));
         assert!(page.contains("function openHtmlThreadEditor(selection)"));
         assert!(page.contains("${escapeHtml(rangeLabel)}"));
         assert!(page.contains("elementAnchor"));

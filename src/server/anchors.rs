@@ -23,6 +23,8 @@ pub(super) struct ResolveAnchorsRequest {
     file_id: Option<FileId>,
     #[serde(default)]
     detached_thread_ids: Vec<ThreadId>,
+    #[serde(default)]
+    route: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +32,8 @@ pub(super) struct ResolveAnchorsRequest {
 pub(super) struct ResolveAnchorsResponse {
     file_id: FileId,
     detached_thread_ids: Vec<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    route: Option<String>,
 }
 
 pub(super) async fn post_api_anchors_resolve(
@@ -57,7 +61,20 @@ pub(super) async fn post_api_anchors_resolve(
             "element anchor resolution is only valid for HTML files",
         );
     }
+    if app_state.is_live()
+        && !request
+            .route
+            .as_deref()
+            .is_some_and(|route| route.starts_with('/'))
+    {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "route is required when resolving live website anchors",
+        );
+    }
 
+    let route = request.route;
     let detached: HashSet<ThreadId> = request.detached_thread_ids.into_iter().collect();
     let detached_thread_ids = {
         let Ok(mut state) = app_state.state.write() else {
@@ -70,7 +87,17 @@ pub(super) async fn post_api_anchors_resolve(
         let anchored_threads = state
             .get_threads()
             .into_iter()
-            .filter(|thread| thread.file_id == file_id && thread.element_anchor.is_some())
+            .filter(|thread| {
+                thread.file_id == file_id
+                    && thread.element_anchor.is_some()
+                    && route.as_deref().is_none_or(|route| {
+                        thread
+                            .element_anchor
+                            .as_ref()
+                            .and_then(|anchor| anchor.route.as_deref())
+                            == Some(route)
+                    })
+            })
             .collect::<Vec<_>>();
         let known: HashSet<&ThreadId> = anchored_threads.iter().map(|thread| &thread.id).collect();
         if let Some(unknown) = detached.iter().find(|thread_id| !known.contains(thread_id)) {
@@ -99,6 +126,7 @@ pub(super) async fn post_api_anchors_resolve(
     let response = ResolveAnchorsResponse {
         file_id,
         detached_thread_ids,
+        route,
     };
     let event_payload = match serde_json::to_value(&response) {
         Ok(payload) => payload,

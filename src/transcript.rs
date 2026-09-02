@@ -375,6 +375,8 @@ mod tests {
             fallbacks: vec!["body > button".to_string()],
             tag: "button".to_string(),
             text_digest: Some("Buy".to_string()),
+            accessible_name: Some("Buy".to_string()),
+            route: Some("/pricing".to_string()),
             outer_html: "<button id=\"buy\">Buy</button>".to_string(),
         });
         let mut state = State::default();
@@ -383,6 +385,11 @@ mod tests {
         let value = serde_json::to_value(build_transcript(&state)).expect("serialize transcript");
         assert_eq!(value["threads"][0]["elementAnchor"]["selector"], "#buy");
         assert_eq!(value["threads"][0]["elementAnchor"]["textDigest"], "Buy");
+        assert_eq!(
+            value["threads"][0]["elementAnchor"]["accessibleName"],
+            "Buy"
+        );
+        assert_eq!(value["threads"][0]["elementAnchor"]["route"], "/pricing");
     }
 
     #[test]

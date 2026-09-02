@@ -244,6 +244,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .route("/assets/discuss-inspect.js", get(get_discuss_inspect_js))
+        .route_layer(middleware::from_fn(reject_cross_origin_mutations))
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             reject_during_shutdown,
@@ -289,6 +290,39 @@ pub(super) fn resolve_file_id(
             }
         }
     }
+}
+
+async fn reject_cross_origin_mutations(request: Request<Body>, next: Next) -> Response {
+    let method = request.method();
+    if matches!(
+        *method,
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    ) {
+        return next.run(request).await;
+    }
+
+    let headers = request.headers();
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    let browser_request = headers.contains_key("sec-fetch-site");
+    let expected_origin = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| format!("http://{host}"));
+    let allowed = match origin {
+        Some(origin) => expected_origin.as_deref() == Some(origin),
+        None => !browser_request,
+    };
+    if !allowed {
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "cross_origin_request",
+            "browser mutations must originate from the Discuss UI origin",
+        );
+    }
+
+    next.run(request).await
 }
 
 async fn reject_during_shutdown(

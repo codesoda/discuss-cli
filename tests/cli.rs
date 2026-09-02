@@ -177,6 +177,103 @@ fn cli_emits_single_session_started_event_after_listening() {
 }
 
 #[test]
+fn cli_live_url_binds_adjacent_loopback_proxy_reports_contract_and_shuts_down_both() {
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream fixture");
+    let upstream_url = format!(
+        "http://127.0.0.1:{}/start?from=test#section",
+        upstream.local_addr().expect("upstream addr").port()
+    );
+    let api_port = free_adjacent_ports();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--no-save")
+        .arg("--port")
+        .arg(api_port.to_string())
+        .arg(&upstream_url)
+        .current_dir(temp_dir.path())
+        .env("HOME", &home_dir)
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn live discuss session");
+    let stdout = read_all_lines(child.stdout.take().expect("stdout pipe"));
+    let stderr = read_all_lines(child.stderr.take().expect("stderr pipe"));
+    let started: Value = serde_json::from_str(
+        &stdout
+            .recv_timeout(STARTUP_TIMEOUT)
+            .expect("live startup event")
+            .expect("read live startup event"),
+    )
+    .expect("live startup JSON");
+    let api_url = format!("http://127.0.0.1:{api_port}");
+    let proxy_url = format!("http://127.0.0.1:{}", api_port + 1);
+    assert_eq!(started["payload"]["mode"], "live");
+    assert_eq!(started["payload"]["upstreamUrl"], upstream_url);
+    assert_eq!(started["payload"]["apiBaseUrl"], api_url);
+    assert_eq!(started["payload"]["proxyUrl"], proxy_url);
+    assert_endpoint_contract(&started["payload"], &api_url);
+    assert_eq!(
+        stderr.recv_timeout(STARTUP_TIMEOUT).unwrap().unwrap(),
+        format!("review UI/API: {api_url}")
+    );
+
+    let root = http_request_url(&api_url, "GET", None);
+    assert!(root.starts_with("HTTP/1.1 200"), "{root}");
+    assert!(
+        response_body(&root).contains(&format!("src=\\\"{proxy_url}/start?from=test#section\\\""))
+            || response_body(&root)
+                .contains(&format!("src=\"{proxy_url}/start?from=test#section\""))
+    );
+
+    let done_url = started["payload"]["endpoints"]["done"]
+        .as_str()
+        .expect("done endpoint");
+    let done = http_request_url(done_url, "POST", None);
+    assert!(done.starts_with("HTTP/1.1 200"), "{done}");
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, api_port)).is_err());
+    assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, api_port + 1)).is_err());
+}
+
+#[test]
+fn cli_live_url_fails_before_readiness_when_adjacent_proxy_port_is_occupied() {
+    let (api_port, proxy_listener) = occupied_proxy_pair();
+    let proxy_port = api_port + 1;
+    let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream fixture");
+    let upstream_url = format!("http://127.0.0.1:{}", upstream.local_addr().unwrap().port());
+    let temp_dir = tempdir().expect("tempdir");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .arg("--no-open")
+        .arg("--port")
+        .arg(api_port.to_string())
+        .arg(upstream_url)
+        .env("HOME", home_dir)
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("run live collision case");
+    drop(proxy_listener);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        output.stdout.is_empty(),
+        "startup event must not be emitted"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!("port {proxy_port}")));
+    assert!(
+        TcpListener::bind((Ipv4Addr::LOCALHOST, api_port)).is_ok(),
+        "partial API bind must be released"
+    );
+}
+
+#[test]
 fn cli_serves_server_stamped_markdown_anchors_matching_blocks_api() {
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
@@ -589,6 +686,32 @@ struct RunningSession {
     child: Option<Child>,
     stdout: mpsc::Receiver<io::Result<String>>,
     stderr: mpsc::Receiver<io::Result<String>>,
+}
+
+fn occupied_proxy_pair() -> (u16, TcpListener) {
+    let start = 32_000 + (std::process::id() as u16 % 8_000);
+    for api_port in start..42_000 {
+        if let Ok(api_probe) = TcpListener::bind((Ipv4Addr::LOCALHOST, api_port))
+            && let Ok(proxy_listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, api_port + 1))
+        {
+            drop(api_probe);
+            return (api_port, proxy_listener);
+        }
+    }
+    panic!("could not reserve adjacent proxy collision ports");
+}
+
+fn free_adjacent_ports() -> u16 {
+    let start = 20_000 + (std::process::id() as u16 % 8_000);
+    for first in start..30_000 {
+        if let Ok(first_listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, first))
+            && let Ok(second_listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, first + 1))
+        {
+            drop((first_listener, second_listener));
+            return first;
+        }
+    }
+    panic!("could not find adjacent loopback ports");
 }
 
 fn spawn_dynamic_session(cwd: &Path, home: &Path, markdown: &Path) -> RunningSession {

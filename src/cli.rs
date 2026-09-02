@@ -17,7 +17,7 @@ LLM ref: https://github.com/codesoda/discuss-cli/blob/main/llms.txt";
 #[command(
     name = "discuss",
     version,
-    about = "Launch a live bidirectional markdown review session.",
+    about = "Launch a live bidirectional document or website review session.",
     subcommand_precedence_over_arg = true,
     after_help = HELP_FOOTER,
     after_long_help = HELP_FOOTER
@@ -59,8 +59,8 @@ pub struct Args {
     pub verdict_prompt: Option<String>,
 
     #[arg(
-        value_name = "FILE",
-        help = "One or more files to review together. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin. Multiple paths open a single session with a file sidebar."
+        value_name = "FILE_OR_URL",
+        help = "One or more files to review together, or one HTTP/S URL for live website review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin."
     )]
     pub files: Vec<PathBuf>,
 

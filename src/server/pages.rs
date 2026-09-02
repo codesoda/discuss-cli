@@ -48,7 +48,11 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .iter()
         .map(|file| RenderedFile {
             id: file.id.clone(),
-            html: render_file_html_with_version(file, app_state.raw_file_version(&file.id)),
+            html: render_file_html_with_version(
+                file,
+                app_state.raw_file_version(&file.id),
+                app_state.live_frame_url(),
+            ),
         })
         .collect();
     let rendered_files_json = serde_json::to_string(&rendered_files)
@@ -77,10 +81,14 @@ pub(super) struct RenderedFile {
 /// renderer directly, diff files through a synthesized markdown document,
 /// and images through the stable raw-file route with a pin overlay.
 pub(super) fn render_file_html(file: &File) -> String {
-    render_file_html_with_version(file, None)
+    render_file_html_with_version(file, None, None)
 }
 
-fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> String {
+fn render_file_html_with_version(
+    file: &File,
+    raw_version: Option<&str>,
+    live_frame_url: Option<&str>,
+) -> String {
     match file.kind {
         FileKind::Markdown => render::render(&file.content),
         FileKind::Diff => render::render(&crate::diff::diff_content_to_markdown(
@@ -100,9 +108,16 @@ fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> Stri
         FileKind::Html => {
             let file_id = escape_html_attribute(&file.id.0);
             let title = escape_html_attribute(&file.path);
-            format!(
-                "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
-            )
+            if let Some(frame_url) = live_frame_url {
+                let frame_url = escape_html_attribute(frame_url);
+                format!(
+                    "<div class=\"html-review live-review\" data-file-id=\"{file_id}\"><div class=\"live-route\"><span>Live route</span><code class=\"live-route-value\">{frame_url}</code></div><iframe class=\"prototype-frame\" data-live-review src=\"{frame_url}\" title=\"Live website: {title}\" sandbox=\"allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads\"></iframe></div>"
+                )
+            } else {
+                format!(
+                    "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
+                )
+            }
         }
     }
 }
