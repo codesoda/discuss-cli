@@ -425,6 +425,51 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_groups_files_into_collapsible_folder_tree() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("function buildFileTree(files)"));
+        assert!(page.contains("function appendFileTree(container, node)"));
+        assert!(page.contains("details.className = 'file-folder'"));
+        assert!(page.contains("details.open = true"));
+        assert!(page.contains("children.className = 'file-folder-children'"));
+        assert!(page.contains("summary.setAttribute('aria-label', summary.dataset.a11yBase)"));
+        assert!(page.contains("if (parent.matches('details.file-folder')) parent.open = true"));
+        assert!(page.contains("body.files-collapsed .file-folder > summary { display: none; }"));
+        assert!(page.contains("display: contents !important"));
+    }
+
+    #[test]
+    fn bundled_template_has_self_contained_github_diff_colors() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        for token in [
+            "--diff-file-header-bg",
+            "--diff-hunk-bg",
+            "--diff-hunk-ink",
+            "--diff-add-bg",
+            "--diff-add-ink",
+            "--diff-delete-bg",
+            "--diff-delete-ink",
+        ] {
+            assert!(
+                page.matches(token).count() >= 3,
+                "missing themed diff token {token}"
+            );
+        }
+        assert!(
+            page.contains("document.body.classList.toggle('diff-file', fileKind() === 'diff')")
+        );
+        assert!(page.contains("body.diff-file #doc-content > h3"));
+        assert!(page.contains(".token.coord"));
+        assert!(page.contains(".token.inserted-sign"));
+        assert!(page.contains(".token.deleted-sign"));
+        assert!(page.contains("function applyPlainDiffColors(code)"));
+        assert!(page.contains("line.startsWith('@@') ? 'diff-line-hunk'"));
+        assert!(page.contains("applyPlainDiffColors(env.element);"));
+    }
+
+    #[test]
     fn file_sidebar_collapse_pref_defaults_to_expanded_and_persists_ui_pref_only() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 

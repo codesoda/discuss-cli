@@ -103,7 +103,7 @@ In stdin mode, `session.started` reports `source_file: "<stdin>"`. History archi
 discuss plan.md design.md notes.md
 ```
 
-All files open in one session with a left sidebar for switching. Threads, drafts, and resolutions are scoped per file. Sidebar badges show open-thread counts so you miss nothing. The transcript groups threads by file in CLI order. Duplicate paths fail loudly. `-` (stdin) can appear once anywhere in the list. History archives for multi-file sessions land under `<history-dir>/multi-<N>-files/`.
+All files open in one session with a left sidebar for switching. Repository-relative paths are grouped into an expandable folder tree; each folder can be collapsed independently, and selecting a file automatically reopens its ancestors. Threads, drafts, and resolutions are scoped per file. File and folder badges show open-thread counts so you miss nothing. The compact collapsed rail remains a flat icon view. The transcript groups threads by file in CLI order. Duplicate paths fail loudly. `-` (stdin) can appear once anywhere in the list. History archives for multi-file sessions land under `<history-dir>/multi-<N>-files/`.
 
 `.diff` / `.patch` files in the list render as diff review sections automatically.
 
@@ -153,7 +153,7 @@ discuss diff main...feature     # branch comparison
 discuss plan.md diff            # plan + staged diff in one session
 ```
 
-Each changed file gets its own entry in the sidebar. Each hunk renders as a fenced `diff-<lang>` block, so Prism highlights both the diff and the underlying language. Line-anchored threads land directly on added or removed lines. Threads on code blocks carry a `lineRange {start, end}` field. `session.started` gains `mode` (`markdown` / `diff` / `mixed`) and `git_args` so agents know what they are reviewing.
+Each changed file gets its own entry in the expandable folder tree. Each hunk renders as a fenced `diff-<lang>` block with GitHub-like file-header, hunk, addition, deletion, and context colors. A local prefix-based fallback preserves diff coloring when Prism's language grammar is unavailable. Line-anchored threads land directly on added or removed lines. Threads on code blocks carry a `lineRange {start, end}` field. `session.started` gains `mode` (`markdown` / `diff` / `mixed`) and `git_args` so agents know what they are reviewing.
 
 Diff output is capped at 5 MB to keep the browser responsive. Override with `--max-diff-bytes <N>` (0 disables), `max_diff_bytes` in `discuss.config.toml`, or `DISCUSS_MAX_DIFF_BYTES`.
 

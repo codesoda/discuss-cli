@@ -125,6 +125,13 @@
     --grip: rgba(0, 0, 0, 0.2);
     --modal-backdrop: rgba(255, 255, 255, 0.32);
     --highlight-active: rgba(255, 236, 139, 0.55);
+    --diff-file-header-bg: #f6f8fa;
+    --diff-hunk-bg: #ddf4ff;
+    --diff-hunk-ink: #0550ae;
+    --diff-add-bg: #dafbe1;
+    --diff-add-ink: #116329;
+    --diff-delete-bg: #ffebe9;
+    --diff-delete-ink: #82071e;
     --header-h: 54px;
     --left-w: 60%;
     --divider-w: 6px;
@@ -181,6 +188,13 @@
     /* Dimmer and warmer than the light tint: at 55% the light yellow washes out
        to a pale olive that --ink can no longer sit on legibly (2.7:1). */
     --highlight-active: rgba(240, 200, 96, 0.22);
+    --diff-file-header-bg: #161b22;
+    --diff-hunk-bg: #121d2f;
+    --diff-hunk-ink: #a5d6ff;
+    --diff-add-bg: #12261e;
+    --diff-add-ink: #7ee787;
+    --diff-delete-bg: #2d1519;
+    --diff-delete-ink: #ffa198;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -730,7 +744,54 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .file-item .file-dir { opacity: 0.55; }
+  .file-tree { display: grid; gap: 1px; }
+  .file-folder { margin: 0; }
+  .file-folder > summary {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 30px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    list-style: none;
+    user-select: none;
+  }
+  .file-folder > summary::-webkit-details-marker { display: none; }
+  .file-folder > summary:hover { background: var(--pre-bg); }
+  .file-folder-chevron, .file-folder-icon {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: var(--muted);
+  }
+  .file-folder-chevron { transition: transform 0.12s ease; }
+  .file-folder[open] > summary .file-folder-chevron { transform: rotate(90deg); }
+  .file-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-folder-count {
+    flex: 0 0 auto;
+    min-width: 17px;
+    height: 17px;
+    margin-left: auto;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--marker-pink);
+    color: var(--card);
+    font-size: 10px;
+    line-height: 17px;
+    text-align: center;
+  }
+  .file-folder-count.zero { display: none; }
+  .file-folder-children {
+    display: grid;
+    gap: 1px;
+    margin-left: 12px;
+    padding-left: 7px;
+    border-left: 1px solid var(--line);
+  }
   .file-item .file-kind {
     flex: 0 0 auto;
     font-size: 10px;
@@ -797,6 +858,11 @@
   body.files-collapsed .file-sidebar-title { display: none; }
   body.files-collapsed .file-sidebar-toggle svg { transform: rotate(180deg); }
   body.files-collapsed .file-item { justify-content: center; padding: 9px 0; }
+  body.files-collapsed .file-folder > summary { display: none; }
+  body.files-collapsed .file-folder-children,
+  body.files-collapsed .file-folder:not([open]) > .file-folder-children {
+    display: contents !important;
+  }
   body.files-collapsed .file-item .file-name,
   body.files-collapsed .file-item .file-kind { display: none; }
   body.files-collapsed .file-item .file-count {
@@ -891,6 +957,60 @@
      left padding under the same id-scope when line-numbers is on. */
   #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
+  body.diff-file #doc-content > h3 {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px 6px 0 0;
+    background: var(--diff-file-header-bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  body.diff-file #doc-content > h3 + p {
+    margin: 0;
+    padding: 6px 12px;
+    border-right: 1px solid var(--line-strong);
+    border-bottom: 1px solid var(--line-strong);
+    border-left: 1px solid var(--line-strong);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  body.diff-file #doc-content .pre-wrap {
+    margin: 10px 0 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  body.diff-file #doc-content .pre-wrap pre { border-radius: 0; }
+  #doc-content pre[class*="language-diff"] .token.coord,
+  #doc-content code[class*="language-diff"] .token.coord {
+    display: block;
+    background: var(--diff-hunk-bg);
+    color: var(--diff-hunk-ink);
+  }
+  #doc-content pre[class*="language-diff"] .token.inserted-sign,
+  #doc-content pre[class*="language-diff"] .token.inserted:not(.prefix),
+  #doc-content code[class*="language-diff"] .token.inserted-sign,
+  #doc-content code[class*="language-diff"] .token.inserted:not(.prefix) {
+    display: block;
+    background: var(--diff-add-bg);
+    color: var(--diff-add-ink);
+  }
+  #doc-content pre[class*="language-diff"] .token.deleted-sign,
+  #doc-content pre[class*="language-diff"] .token.deleted:not(.prefix),
+  #doc-content code[class*="language-diff"] .token.deleted-sign,
+  #doc-content code[class*="language-diff"] .token.deleted:not(.prefix) {
+    display: block;
+    background: var(--diff-delete-bg);
+    color: var(--diff-delete-ink);
+  }
+  #doc-content .diff-line { display: inline-block; min-width: 100%; }
+  #doc-content .diff-line-hunk { background: var(--diff-hunk-bg); color: var(--diff-hunk-ink); }
+  #doc-content .diff-line-add { background: var(--diff-add-bg); color: var(--diff-add-ink); }
+  #doc-content .diff-line-delete { background: var(--diff-delete-bg); color: var(--diff-delete-ink); }
+  #doc-content .diff-line-context { color: var(--ink); }
   #doc-content pre.mermaid-block {
     background: transparent;
     padding: 8px 0;
@@ -3461,6 +3581,92 @@
     svg.innerHTML = paths;
     return svg;
   }
+  function createFileSidebarItem(file, displayName) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'file-item';
+    item.setAttribute('data-file-id', file.id);
+    item.title = file.path;
+    item.appendChild(fileKindIcon(file.kind));
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = displayName;
+    item.appendChild(name);
+    const path = String(file.path || '');
+    // aria-label replaces the button's content wholesale for assistive tech,
+    // so retain the complete path even when the visual tree shows a basename.
+    item.dataset.a11yBase =
+      file.kind && file.kind !== 'markdown' ? `${path}, ${file.kind}` : path;
+    item.setAttribute('aria-label', item.dataset.a11yBase);
+    if (file.kind !== 'markdown') {
+      const tag = document.createElement('span');
+      tag.className = 'file-kind';
+      tag.textContent = file.kind;
+      item.appendChild(tag);
+    }
+    const count = document.createElement('span');
+    count.className = 'file-count zero';
+    item.appendChild(count);
+    item.addEventListener('click', () => switchToFile(file.id));
+    return item;
+  }
+
+  function buildFileTree(files) {
+    const root = { name: '', path: '', files: [], folders: new Map() };
+    files.forEach(file => {
+      const path = String(file.path || '');
+      // Absolute local paths stay as one root item. Repository-relative paths
+      // become a folder tree like GitHub's changed-files navigation.
+      const parts = path.startsWith('/') ? [path] : path.split('/').filter(Boolean);
+      if (!parts.length) parts.push(path || '(unnamed)');
+      let node = root;
+      parts.slice(0, -1).forEach(part => {
+        if (!node.folders.has(part)) {
+          const folderPath = node.path ? `${node.path}/${part}` : part;
+          node.folders.set(part, { name: part, path: folderPath, files: [], folders: new Map() });
+        }
+        node = node.folders.get(part);
+      });
+      node.files.push({ file, name: parts[parts.length - 1] });
+    });
+    return root;
+  }
+
+  function appendFileTree(container, node) {
+    node.files
+      .sort((left, right) => {
+        if (left.file.id === 'pr-overview') return -1;
+        if (right.file.id === 'pr-overview') return 1;
+        return left.name.localeCompare(right.name);
+      })
+      .forEach(entry => container.appendChild(createFileSidebarItem(entry.file, entry.name)));
+
+    [...node.folders.values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .forEach(folder => {
+        const details = document.createElement('details');
+        details.className = 'file-folder';
+        details.open = true;
+        details.dataset.folderPath = folder.path;
+        const summary = document.createElement('summary');
+        summary.dataset.a11yBase = `Folder ${folder.path}`;
+        summary.setAttribute('aria-label', summary.dataset.a11yBase);
+        summary.title = folder.path;
+        summary.innerHTML = '<svg class="file-folder-chevron" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3.5L10.5 8 6 12.5"/></svg><svg class="file-folder-icon" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 4.5h5l1.2 1.5h6.8v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/><path d="M1.5 4.5v-1a1 1 0 0 1 1-1h3L6.7 4"/></svg>';
+        const label = document.createElement('span');
+        label.className = 'file-folder-name';
+        label.textContent = folder.name;
+        const count = document.createElement('span');
+        count.className = 'file-folder-count zero';
+        summary.append(label, count);
+        const children = document.createElement('div');
+        children.className = 'file-folder-children';
+        appendFileTree(children, folder);
+        details.append(summary, children);
+        container.appendChild(details);
+      });
+  }
+
   function initFileSidebar() {
     const nav = document.getElementById('file-sidebar');
     if (!nav) return;
@@ -3486,57 +3692,15 @@
       const collapsed = !document.body.classList.contains('files-collapsed');
       applyFilesCollapsed(collapsed, toggle);
       setFilesCollapsedPref(collapsed);
-      // No resize event fires on a class toggle. Only pane-right's width
-      // changes (pane-left keeps its own --left-w share of the grid), so the
-      // open thread cards are the one thing positioned in pixels that has to
-      // be re-laid-out; gutter markers, the heading minimap, and image pins
-      // re-anchor on their own from --files-w / percentage offsets.
       scheduleReposition();
     });
     header.appendChild(toggle);
     nav.appendChild(header);
-    // Missing/unreadable pref means expanded: the first-run default.
     applyFilesCollapsed(isFilesCollapsed(), toggle);
-    discussFiles.forEach(file => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'file-item';
-      item.setAttribute('data-file-id', file.id);
-      item.title = file.path;
-      item.appendChild(fileKindIcon(file.kind));
-      const name = document.createElement('span');
-      name.className = 'file-name';
-      const path = String(file.path || '');
-      // aria-label replaces the button's content wholesale for assistive tech,
-      // so the accessible name has to carry everything the visual item shows.
-      // The kind belongs here in particular: the icon is aria-hidden and the
-      // .file-kind tag is display:none in the collapsed rail, so without this
-      // a screen-reader user gets no kind signal at all. updateFileSidebar
-      // appends the open-thread count to this base.
-      item.dataset.a11yBase =
-        file.kind && file.kind !== 'markdown' ? `${path}, ${file.kind}` : path;
-      item.setAttribute('aria-label', item.dataset.a11yBase);
-      const slash = path.lastIndexOf('/');
-      if (slash >= 0) {
-        const dir = document.createElement('span');
-        dir.className = 'file-dir';
-        dir.textContent = path.slice(0, slash + 1);
-        name.appendChild(dir);
-      }
-      name.appendChild(document.createTextNode(slash >= 0 ? path.slice(slash + 1) : path));
-      item.appendChild(name);
-      if (file.kind !== 'markdown') {
-        const tag = document.createElement('span');
-        tag.className = 'file-kind';
-        tag.textContent = file.kind;
-        item.appendChild(tag);
-      }
-      const count = document.createElement('span');
-      count.className = 'file-count zero';
-      item.appendChild(count);
-      item.addEventListener('click', () => switchToFile(file.id));
-      nav.appendChild(item);
-    });
+    const tree = document.createElement('div');
+    tree.className = 'file-tree';
+    appendFileTree(tree, buildFileTree(discussFiles));
+    nav.appendChild(tree);
     updateFileSidebar();
   }
 
@@ -3561,7 +3725,15 @@
     });
     nav.querySelectorAll('.file-item').forEach(item => {
       const id = item.getAttribute('data-file-id');
-      item.classList.toggle('active', id === activeFileId);
+      const active = id === activeFileId;
+      item.classList.toggle('active', active);
+      if (active) {
+        let parent = item.parentElement;
+        while (parent && parent !== nav) {
+          if (parent.matches('details.file-folder')) parent.open = true;
+          parent = parent.parentElement;
+        }
+      }
       const open = openByFile.get(id) || 0;
       const badge = item.querySelector('.file-count');
       if (badge) {
@@ -3576,6 +3748,23 @@
         'aria-label',
         open > 0 ? `${base}, ${open} open thread${open === 1 ? '' : 's'}` : base
       );
+    });
+    nav.querySelectorAll('details.file-folder').forEach(folder => {
+      const open = [...folder.querySelectorAll('.file-item')]
+        .reduce((total, item) => total + (openByFile.get(item.dataset.fileId) || 0), 0);
+      const badge = folder.querySelector(':scope > summary .file-folder-count');
+      if (badge) {
+        badge.textContent = open > 0 ? String(open) : '';
+        badge.classList.toggle('zero', open === 0);
+      }
+      const summary = folder.querySelector(':scope > summary');
+      if (summary) {
+        const base = summary.dataset.a11yBase || 'Folder';
+        summary.setAttribute(
+          'aria-label',
+          open > 0 ? `${base}, ${open} open thread${open === 1 ? '' : 's'}` : base
+        );
+      }
     });
   }
 
@@ -3600,6 +3789,7 @@
 
   function activateFileUi() {
     document.body.classList.toggle('html-file', isHtmlFile());
+    document.body.classList.toggle('diff-file', fileKind() === 'diff');
     if (!isHtmlFile()) setInspectMode(false);
     else {
       // HTML review starts ready to select: requiring a separate toggle made
@@ -6952,13 +7142,37 @@
     const code = pre.querySelector(':scope > code');
     return !!(code && code.classList.contains('language-mermaid'));
   }
+  function applyPlainDiffColors(code) {
+    if (!code || ![...code.classList].some(name => name === 'language-diff' || name.startsWith('language-diff-'))) return;
+    if (code.querySelector('.token.inserted-sign, .token.inserted, .token.deleted-sign, .token.deleted, .token.coord')) return;
+    const lines = code.textContent.split('\n');
+    code.textContent = '';
+    lines.forEach((line, index) => {
+      const span = document.createElement('span');
+      span.className = 'diff-line ' + (
+        line.startsWith('@@') ? 'diff-line-hunk'
+          : line.startsWith('+') && !line.startsWith('+++') ? 'diff-line-add'
+            : line.startsWith('-') && !line.startsWith('---') ? 'diff-line-delete'
+              : 'diff-line-context'
+      );
+      span.textContent = line;
+      code.appendChild(span);
+      if (index < lines.length - 1) code.appendChild(document.createTextNode('\n'));
+    });
+  }
   function highlightCodeBlocks() {
-    if (!window.Prism) return;
     document.querySelectorAll('#doc-content pre').forEach(pre => {
       if (isMermaidPre(pre)) return;
-      pre.classList.add('line-numbers');
       const code = pre.querySelector(':scope > code');
-      if (code) Prism.highlightElement(code);
+      if (!window.Prism) {
+        applyPlainDiffColors(code);
+        return;
+      }
+      pre.classList.add('line-numbers');
+      if (code) {
+        Prism.highlightElement(code);
+        applyPlainDiffColors(code);
+      }
     });
   }
   function attachPrismCompleteHook() {
@@ -6970,7 +7184,9 @@
       const docContent = document.getElementById('doc-content');
       if (!docContent || !docContent.contains(env.element)) return;
       // Re-attach line-range gutter bars once the line-numbers plugin has
-      // produced the per-line spans inside this <pre>.
+      // produced the per-line spans inside this <pre>. If a diff grammar is
+      // unavailable, deterministic prefix classes still provide local colors.
+      applyPlainDiffColors(env.element);
       renderMarkers();
     });
   }
