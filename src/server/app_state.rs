@@ -34,6 +34,7 @@ pub struct AppState {
     pub(super) activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
     pub(super) verdict_config: Arc<Option<VerdictConfig>>,
+    live_frame_url: Arc<Option<String>>,
     next_thread_number: Arc<AtomicU64>,
     next_agent_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
@@ -61,6 +62,7 @@ impl AppState {
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
             verdict_config: Arc::new(None),
+            live_frame_url: Arc::new(None),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_agent_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
@@ -228,6 +230,23 @@ impl AppState {
         self.verdict_config = Arc::new(verdict_config);
 
         self
+    }
+
+    pub fn with_live_frame_url(mut self, live_frame_url: impl Into<String>) -> Self {
+        self.live_frame_url = Arc::new(Some(live_frame_url.into()));
+        self
+    }
+
+    pub(super) fn live_frame_url(&self) -> Option<&str> {
+        self.live_frame_url.as_deref()
+    }
+
+    pub(super) fn is_live(&self) -> bool {
+        self.live_frame_url.is_some()
+    }
+
+    pub(crate) fn signal_shutdown(&self) {
+        self.shutdown.signal();
     }
 
     pub fn with_idle_timeout_secs(self, idle_timeout_secs: u64) -> Self {

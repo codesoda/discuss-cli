@@ -713,6 +713,9 @@
   .html-review { position: relative; width: 100%; overflow: hidden; background: var(--bg); }
   .html-review[hidden] { display: none; }
   .prototype-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--card); }
+  .live-route { height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--text-dim); font-size: 11px; }
+  .live-route code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .live-review .prototype-frame { height: calc(100% - 34px); }
   body.html-file .heading-minimap { display: none; }
   .pane-right {
     padding: 28px 24px 80px 24px;
@@ -1850,6 +1853,7 @@
   let inspectOn = false;
   const lastDetachedByFile = new Map();
   const pendingDetachedByFile = new Map();
+  const htmlRouteByFile = new Map();
   let htmlThreadStateNeedsRender = false;
 
   function threadFileId(t) {
@@ -1872,10 +1876,16 @@
     const wrapper = htmlFrameWrappers.get(activeFileId);
     return wrapper ? wrapper.querySelector('.prototype-frame') : null;
   }
+  function prototypeOrigin(frame) {
+    if (!frame) return null;
+    try { return new URL(frame.src, location.href).origin; }
+    catch (_) { return null; }
+  }
   function postToPrototype(type, payload = {}) {
     const frame = activePrototypeFrame();
-    if (!frame || !frame.contentWindow) return;
-    frame.contentWindow.postMessage({ type, ...payload }, location.origin);
+    const origin = prototypeOrigin(frame);
+    if (!frame || !frame.contentWindow || !origin) return;
+    frame.contentWindow.postMessage({ type, ...payload }, origin);
   }
 
   function emptyDiscussionState() {
@@ -1979,6 +1989,8 @@
       fallbacks: Array.isArray(raw.fallbacks) ? raw.fallbacks.filter(value => typeof value === 'string') : [],
       tag,
       ...(typeof raw.textDigest === 'string' && raw.textDigest ? { textDigest: raw.textDigest } : {}),
+      ...(typeof raw.accessibleName === 'string' && raw.accessibleName ? { accessibleName: raw.accessibleName } : {}),
+      ...(typeof raw.route === 'string' && raw.route.startsWith('/') ? { route: raw.route } : {}),
       outerHtml,
     };
   }
@@ -2247,10 +2259,11 @@
     }
   }
 
-  function applyElementDetachment(state, fileId, detached) {
+  function applyElementDetachment(state, fileId, detached, route = null) {
     let changed = false;
     const update = thread => {
       if (threadFileId(thread) !== fileId || !thread.elementAnchor) return;
+      if (route && thread.elementAnchor.route !== route) return;
       const orphaned = detached.has(String(thread.id));
       if (thread.orphaned !== orphaned) {
         thread.orphaned = orphaned;
@@ -2276,8 +2289,9 @@
     if (!payload || !payload.fileId) return;
     const fileId = String(payload.fileId);
     const detached = new Set((payload.detachedThreadIds || []).map(String));
+    const route = typeof payload.route === 'string' && payload.route.startsWith('/') ? payload.route : null;
     const state = cloneState(loadState());
-    if (!applyElementDetachment(state, fileId, detached)) return;
+    if (!applyElementDetachment(state, fileId, detached, route)) return;
     setCurrentState(state);
     if (fileId === activeFileId) renderElementThreadStateWhenSafe();
     else renderMetaStatus();
@@ -3382,14 +3396,34 @@
     doc.innerHTML = renderedFileHtml.get(fileId) || '';
   }
 
+  function reflectLiveRoute(route) {
+    if (typeof route !== 'string' || !route.startsWith('/')) return;
+    htmlRouteByFile.set(activeFileId, route);
+    const wrapper = htmlFrameWrappers.get(activeFileId);
+    const label = wrapper?.querySelector('.live-route-value');
+    if (label) label.textContent = route;
+  }
+
   window.addEventListener('message', event => {
     const frame = activePrototypeFrame();
-    if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin) return;
+    const origin = prototypeOrigin(frame);
+    if (!frame || !origin || event.source !== frame.contentWindow || event.origin !== origin) return;
     const message = event.data;
     if (!message || typeof message.type !== 'string' || !message.type.startsWith('discuss:')) return;
     if (message.type === 'discuss:ready') {
+      reflectLiveRoute(message.route);
       postToPrototype('discuss:set-inspect', { on: inspectOn });
       syncHtmlAnchors();
+    } else if (message.type === 'discuss:route-changed') {
+      reflectLiveRoute(message.route);
+      syncHtmlAnchors();
+    } else if (message.type === 'discuss:external-navigation') {
+      const destination = typeof message.url === 'string' ? message.url : '';
+      if (!/^https?:\/\//i.test(destination)) return;
+      document.body.dataset.discussExternalNavigation = destination;
+      if (window.confirm(`This live review wants to open an external site:\n\n${destination}\n\nOpen it in a new tab?`)) {
+        window.open(destination, '_blank', 'noopener,noreferrer');
+      }
     } else if (message.type === 'discuss:element-selected') {
       setInspectMode(false);
       openHtmlThreadEditor(message);
@@ -3398,18 +3432,19 @@
       if (thread) openThread(thread);
     } else if (message.type === 'discuss:anchors-resolved') {
       const detached = Array.isArray(message.detached) ? message.detached.map(String).sort() : [];
-      const key = detached.join('\n');
+      const route = typeof message.route === 'string' && message.route.startsWith('/') ? message.route : null;
+      const key = `${route || ''}\n${detached.join('\n')}`;
       if (lastDetachedByFile.get(activeFileId) === key || pendingDetachedByFile.get(activeFileId) === key) return;
       const fileId = activeFileId;
       pendingDetachedByFile.set(fileId, key);
       const state = cloneState(loadState());
       const detachedSet = new Set(detached);
-      if (applyElementDetachment(state, fileId, detachedSet)) {
+      if (applyElementDetachment(state, fileId, detachedSet, route)) {
         setCurrentState(state);
         renderElementThreadStateWhenSafe();
       }
       apiJson('/api/anchors/resolve', {
-        body: { fileId, detachedThreadIds: detached },
+        body: { fileId, detachedThreadIds: detached, ...(route ? { route } : {}) },
       }).then(() => {
         lastDetachedByFile.set(fileId, key);
       }).catch(error => {

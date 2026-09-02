@@ -18,6 +18,10 @@ From a clone (requires Rust):
 Review a Markdown file:
   discuss path/to/review.md
 
+Review a running website through a fixed-upstream second loopback origin:
+  discuss http://localhost:3000
+  discuss https://example.test/path
+
 Pin the port and suppress browser auto-open:
   discuss --port 9000 --no-open path/to/review.md
 
@@ -33,7 +37,7 @@ Finish review to finish the session.
 ## CLI
 
 Main command:
-  discuss [--port N] [--no-open] [--no-save] [--history-dir PATH] [--verdict-options SPEC] [--verdict-prompt TEXT] FILE
+  discuss [--port N] [--no-open] [--no-save] [--history-dir PATH] [--verdict-options SPEC] [--verdict-prompt TEXT] FILE|HTTP(S)_URL
 
 Update check:
   discuss update --check
@@ -84,7 +88,9 @@ Example `discuss.config.toml` with an explicitly pinned port:
 
 - `stdout` is reserved for JSONL events.
 - `stderr` is reserved for status and error text.
-- The first stdout event for a normal session is `session.started`. Existing payload fields are preserved; `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `blocksTemplate` with literal `{fileId}`, `done`), and short `agentInstructions` (including the invitation to pre-annotate edited documents with `kind: "agent"` threads) are additive. Agents must retain and use those exact endpoint URLs. Optional `proxyUrl` is omitted for ordinary sessions and is present only when a secondary listener exists.
+- The first stdout event for a normal session is `session.started`. Existing payload fields are preserved; `apiBaseUrl`, `endpoints` (`state`, `events`, `createThread`, `addTakeTemplate` with literal `{threadId}`, `blocksTemplate` with literal `{fileId}`, `done`), and short `agentInstructions` (including the invitation to pre-annotate edited documents with `kind: "agent"` threads) are additive. Agents must retain and use those exact endpoint URLs.
+- A sole HTTP/S argument starts live mode. `session.started` includes `mode: "live"`, `upstreamUrl`, and `proxyUrl`. The proxy is a fixed-upstream loopback website origin, never a Discuss API origin; agents must not send REST mutations to it. With no explicit port, both listener ports are OS-assigned. With `--port N`, the API binds N and the proxy binds N+1, failing before readiness if either is occupied.
+- Live HTML is inspector-injected and route-scoped; `elementAnchor` includes `route`, `selector`, optional `accessibleName`, and `outerHtml`. Authentication is limited: upstream browser cookies do not implicitly belong to the proxy origin, and v1 provides no cookie import flags or production-site compatibility guarantee.
 - When the review finishes, discuss emits `session.done` with the final transcript payload. With `--verdict-options`, finishing requires the human to pick a verdict, which is included in that payload.
 - After `idle_timeout_secs` of inactivity, discuss emits `prompt.suggest_done`. Set `idle_timeout_secs = 0` to disable that prompt.
 - Logs are written under `~/.discuss/logs`.

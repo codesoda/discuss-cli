@@ -106,6 +106,10 @@ fn bundled_integrations_consume_reported_endpoint_map() {
         "endpoints.done",
         "apiBaseUrl",
         "proxyUrl",
+        "upstreamUrl",
+        "mode: \"live\"",
+        "accessibleName",
+        "route",
         "OS",
     ] {
         assert!(
@@ -113,6 +117,12 @@ fn bundled_integrations_consume_reported_endpoint_map() {
             "bundled integration guidance should mention {required:?}"
         );
     }
+    assert!(
+        combined.contains("sole URL must be passed unchanged")
+            && combined.contains("never use `$proxyUrl` for Discuss REST mutations")
+            && combined.contains("not an arbitrary network proxy"),
+        "bundled skill must route sole HTTP/S URLs unchanged and keep API writes off the proxy origin"
+    );
     assert!(
         combined.contains("poller.sh \"$STATE_URL\""),
         "poller should receive the exact reported state endpoint"

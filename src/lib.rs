@@ -23,6 +23,7 @@ pub mod exit;
 pub mod history;
 pub mod launch;
 pub mod logging;
+pub mod proxy;
 pub mod render;
 pub mod server;
 pub mod sse;
@@ -123,7 +124,14 @@ where
             }
             run_demo_session(verdict_config, &config, shutdown).await
         }
-        None => run_review_session(files, None, verdict_config, &config, shutdown).await,
+        None => {
+            if let Some(upstream) = live_url_argument(&files)? {
+                let upstream_url = files[0].to_string_lossy().into_owned();
+                run_live_session(upstream, upstream_url, verdict_config, &config, shutdown).await
+            } else {
+                run_review_session(files, None, verdict_config, &config, shutdown).await
+            }
+        }
     }
 }
 
@@ -173,6 +181,7 @@ where
             files_count,
             Vec::new(),
             auto_open,
+            None,
         ),
     )
     .await
@@ -308,14 +317,145 @@ where
             files_count,
             git_args,
             auto_open,
+            None,
         ),
     )
     .await
 }
 
-/// Builds the `serve_with_ready` readiness callback shared by normal and demo
-/// sessions: emits `session.started`, then announces the URL on stderr and
-/// opens the browser when `auto_open` remains true.
+#[derive(Clone, Debug)]
+struct LiveStartup {
+    upstream_url: String,
+    proxy_url: String,
+}
+
+async fn run_live_session<F>(
+    upstream: url::Url,
+    upstream_url: String,
+    verdict_config: Option<verdict::VerdictConfig>,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let api_port = config.port.unwrap_or(0);
+    let proxy_port = match config.port {
+        Some(port) => port.checked_add(1).ok_or_else(|| DiscussError::ConfigError {
+            message: "--port 65535 cannot be used for live review because the adjacent proxy port is unavailable".to_string(),
+        })?,
+        None => 0,
+    };
+    let requested = [
+        SocketAddr::from((Ipv4Addr::LOCALHOST, api_port)),
+        SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
+    ];
+    let mut listeners = server::bind_loopback_listeners(&requested).await?;
+    let (proxy_listener, proxy_addr) = listeners
+        .pop()
+        .expect("proxy listener should be returned second");
+    let (api_listener, api_addr) = listeners
+        .pop()
+        .expect("API listener should be returned first");
+    let api_url = launch::loopback_url(api_addr);
+    let proxy_url = launch::loopback_url(proxy_addr);
+    let frame_url = format!("{proxy_url}{}", url_route(&upstream));
+
+    let source = Source {
+        files: vec![File {
+            id: FileId("f-1".to_string()),
+            path: upstream_url.clone(),
+            kind: FileKind::Html,
+            content: String::new(),
+        }],
+    };
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_live_frame_url(frame_url)
+        .with_verdict_config(verdict_config)
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let live_proxy = proxy::LiveProxy::new(upstream, proxy_url.clone(), api_url)?;
+    let emitter = app_state.emitter.clone();
+    let live = LiveStartup {
+        upstream_url: upstream_url.clone(),
+        proxy_url: proxy_url.clone(),
+    };
+    session_ready_callback(
+        emitter,
+        "live",
+        upstream_url,
+        1,
+        Vec::new(),
+        config.auto_open,
+        Some(live),
+    )(api_addr);
+
+    let proxy_shutdown = app_state.subscribe_shutdown();
+    let api_state = app_state.clone();
+    let proxy_state = app_state.clone();
+    let api = async move {
+        let result = server::serve_listener(api_listener, app_state, shutdown).await;
+        api_state.signal_shutdown();
+        result
+    };
+    let proxy = async move {
+        let result = proxy::serve_proxy_listener(proxy_listener, live_proxy, proxy_shutdown).await;
+        proxy_state.signal_shutdown();
+        result
+    };
+    let (api_result, proxy_result) = tokio::join!(api, proxy);
+    api_result?;
+    proxy_result
+}
+
+fn live_url_argument(files: &[PathBuf]) -> Result<Option<url::Url>> {
+    if files.len() != 1 {
+        return Ok(None);
+    }
+    let Some(value) = files[0].to_str() else {
+        return Ok(None);
+    };
+    let has_http_scheme = value
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
+    let has_https_scheme = value
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    if !has_http_scheme && !has_https_scheme {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(value).map_err(|error| DiscussError::ConfigError {
+        message: format!("invalid live website URL {value:?}: {error}"),
+    })?;
+    if parsed.host_str().is_none() {
+        return Err(DiscussError::ConfigError {
+            message: format!("live website URL must include a host: {value}"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn url_route(url: &url::Url) -> String {
+    let mut route = url.path().to_string();
+    if route.is_empty() {
+        route.push('/');
+    }
+    if let Some(query) = url.query() {
+        route.push('?');
+        route.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        route.push('#');
+        route.push_str(fragment);
+    }
+    route
+}
+
+/// Builds the readiness callback shared by normal, demo, and live sessions.
 fn session_ready_callback(
     emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     mode: &'static str,
@@ -323,6 +463,7 @@ fn session_ready_callback(
     files_count: usize,
     git_args: Vec<String>,
     auto_open: bool,
+    live: Option<LiveStartup>,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
         let url = launch::loopback_url(listening_addr);
@@ -340,6 +481,10 @@ fn session_ready_callback(
         });
         if !git_args.is_empty() {
             payload["git_args"] = serde_json::json!(git_args);
+        }
+        if let Some(live) = live {
+            payload["upstreamUrl"] = serde_json::json!(live.upstream_url);
+            payload["proxyUrl"] = serde_json::json!(live.proxy_url);
         }
 
         if let Err(error) = emitter.emit(&Event {
@@ -520,6 +665,51 @@ mod tests {
     use super::*;
 
     use tempfile::tempdir;
+
+    #[test]
+    fn sole_http_or_https_argument_selects_live_mode_and_preserves_route() {
+        for (value, expected) in [
+            ("http://localhost:3000/", "http://localhost:3000/"),
+            (
+                "https://example.test/path?q=1#section",
+                "https://example.test/path?q=1#section",
+            ),
+            ("HTTP://localhost:3000/", "http://localhost:3000/"),
+        ] {
+            let parsed = live_url_argument(&[PathBuf::from(value)])
+                .expect("URL should parse")
+                .expect("URL should select live mode");
+            assert_eq!(parsed.as_str(), expected);
+        }
+        let parsed = live_url_argument(&[PathBuf::from("https://example.test/path?q=1#section")])
+            .unwrap()
+            .unwrap();
+        assert_eq!(url_route(&parsed), "/path?q=1#section");
+    }
+
+    #[test]
+    fn paths_and_multiple_arguments_do_not_select_live_mode() {
+        assert!(
+            live_url_argument(&[PathBuf::from("review.md")])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            live_url_argument(&[
+                PathBuf::from("https://example.test"),
+                PathBuf::from("notes.md")
+            ])
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_live_url_returns_config_error() {
+        let error = live_url_argument(&[PathBuf::from("http://")])
+            .expect_err("malformed URL should fail as configuration");
+        assert!(matches!(error, DiscussError::ConfigError { .. }));
+    }
 
     #[test]
     fn missing_markdown_file_maps_to_file_not_found() {

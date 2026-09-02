@@ -6,7 +6,7 @@
 
 <sub>Higher-quality video: [docs/demo.mp4](docs/demo.mp4) · recording pipeline: [docs/demo-script.md](docs/demo-script.md)</sub>
 
-`discuss` opens Markdown, diffs, images, and local HTML prototypes in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
+`discuss` opens Markdown, diffs, images, local HTML prototypes, and running HTTP/S websites in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
 
 Anchored. Threaded. Bidirectional. No cloud.
 
@@ -21,13 +21,14 @@ Engineers share most non-code work as markdown: PRDs, design docs, RFCs, post-mo
 - **Image review** — `discuss mockup.png` renders the image. Drop numbered pins to anchor threads to coordinates.
 - **First-class diff review** — `discuss diff` opens the staged git diff with per-hunk syntax highlighting and line-anchored threads. It combines with the file list: `discuss plan.md diff HEAD~1..HEAD`.
 - **HTML prototype review** — `discuss prototype.html` renders the local prototype and its relative assets in a sandboxed iframe. Inspect mode anchors threads to DOM elements with resilient selector fallbacks.
+- **Live website review** — `discuss http://localhost:3000` proxies a running app through a second loopback origin, preserving root assets, app APIs, WebSockets, and SPA routes while injecting the element inspector.
 - **Rich rendering** — Prism highlights tagged code fences (e.g. ` ```rust `, ` ```diff-typescript `). ` ```mermaid ` fences render as diagrams. YAML frontmatter renders as a collapsed, threadable block. See [Prism's supported languages](https://prismjs.com/#supported-languages).
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. The UI renders them distinctly so you can tell who said what.
 - **Agent pre-annotations** — an agent that edited the doc can open `kind: "agent"` threads before you start reading. Each one marks a change and explains it.
 - **Live source updates** — the agent can push new markdown into a running session via `POST /api/source`. Threads re-anchor without a restart.
 - **Bidirectional** — the browser writes through a local REST API. The agent reads stdout events and writes back through the same API.
 - **Navigation and themes** — a thread summary popover lists all threads and jumps to any of them. Open thread panels have ‹ / › prev/next buttons. The UI supports light, dark, and system themes.
-- **No cloud.** One Rust binary, one localhost server, one browser tab.
+- **No review cloud.** One Rust binary, loopback-only local servers, one browser tab.
 
 ## Install
 
@@ -129,6 +130,19 @@ Relative CSS, JavaScript, images, and fonts resolve from the HTML file's directo
 
 See [`examples/prototype.html`](examples/prototype.html) for a small fixture.
 
+### Reviewing a live website
+
+```sh
+discuss http://localhost:3000
+discuss https://example.test/path
+```
+
+A sole HTTP/S URL starts two loopback-only listeners: the Discuss UI/API and a fixed-upstream reverse proxy loaded by the iframe. The second origin prevents the app's `/`, `/api/*`, root-absolute assets, and WebSockets from colliding with Discuss routes. HTML responses have frame-blocking CSP/X-Frame-Options removed and receive an early service-worker guard plus the inspector; non-HTML bytes pass through unchanged. Same-upstream redirects stay proxied, while cross-origin redirects require an explicit choice. SPA routes are shown above the iframe and stored on element anchors.
+
+The live iframe permits scripts, same-origin app behavior, forms, modals, popups, and downloads, but cannot navigate the top-level Discuss tab. This is intended for local development apps and public pages, not arbitrary production compatibility. Upstream cookies do not implicitly carry to the loopback proxy; v1 has no `--cookie` or `--cookie-file` flags, browser-profile import, transparent SSO, or anti-bot bypass.
+
+`session.started` reports `mode: "live"`, the unchanged `upstreamUrl`, the actual `proxyUrl`, and the API `endpoints` map. Agents must use the reported API endpoints for all Discuss mutations—never `proxyUrl`, which is only the iframe's fixed-upstream website origin. With no `--port`, both listeners use independent OS-assigned ports. With explicit `--port N`, the API binds exactly to `N` and the proxy to `N + 1`; either collision fails before readiness.
+
 ### Reviewing a git diff
 
 ```sh
@@ -148,6 +162,7 @@ Diff output is capped at 5 MB to keep the browser responsive. Override with `--m
 | Command | Description |
 |---------|-------------|
 | `discuss <file>...` | Open one or more files (markdown, `.diff`/`.patch`, images, `.html`/`.htm`) in a browser review session |
+| `discuss <http-or-https-url>` | Review one running website through a fixed-upstream loopback proxy |
 | `discuss -` | Read markdown from stdin explicitly (once, anywhere in the file list) |
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
 | `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
@@ -239,8 +254,8 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Ordinary sessions omit `proxyUrl`. |
-| `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`; ordinary sessions omit them. |
+| `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |
 | `thread.deleted` | Soft-delete | `{threadId}` |

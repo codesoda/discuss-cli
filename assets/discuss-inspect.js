@@ -1,7 +1,10 @@
 (() => {
   'use strict';
 
-  const parentOrigin = location.origin;
+  const inspectorScript = document.currentScript;
+  const parentOrigin = inspectorScript?.dataset.discussParentOrigin || location.origin;
+  const upstreamOrigin = inspectorScript?.dataset.discussUpstreamOrigin || location.origin;
+  const liveReview = parentOrigin !== location.origin;
   const host = document.createElement('div');
   host.setAttribute('data-discuss-inspector', '');
   const shadow = host.attachShadow({ mode: 'closed' });
@@ -36,6 +39,15 @@
 
   function post(type, detail = {}) {
     window.parent.postMessage({ type, ...detail }, parentOrigin);
+  }
+
+  function currentRoute() {
+    return `${location.pathname}${location.search}${location.hash}`;
+  }
+
+  function announceRoute() {
+    post('discuss:route-changed', { route: currentRoute() });
+    scheduleResolve();
   }
 
   function normalizeText(value) {
@@ -120,6 +132,17 @@
     return null;
   }
 
+  function accessibleName(element) {
+    return normalizeText(
+      element.getAttribute('aria-label')
+      || (element.labels && element.labels[0]?.textContent)
+      || element.getAttribute('alt')
+      || element.getAttribute('title')
+      || element.innerText
+      || element.textContent
+    ).slice(0, 500);
+  }
+
   function selectorDescriptor(element) {
     const id = stableId(element);
     const byId = id ? `#${cssEscape(id)}` : null;
@@ -135,6 +158,8 @@
       fallbacks,
       tag: element.tagName.toLowerCase(),
       ...(text ? { textDigest: text } : {}),
+      ...(accessibleName(element) ? { accessibleName: accessibleName(element) } : {}),
+      ...(liveReview ? { route: currentRoute() } : {}),
       outerHtml: String(element.outerHTML || '').slice(0, 500),
     };
   }
@@ -179,12 +204,18 @@
 
   function resolveAnchor(anchor) {
     if (!anchor || typeof anchor !== 'object') return null;
+    if (anchor.route && anchor.route !== currentRoute()) return null;
     const selectors = [anchor.selector, ...(Array.isArray(anchor.fallbacks) ? anchor.fallbacks : [])];
     for (const selector of selectors) {
       if (typeof selector !== 'string' || !selector) continue;
       try {
         const matches = document.querySelectorAll(selector);
-        if (matches.length === 1) return matches[0];
+        if (matches.length === 1) {
+          const candidate = matches[0];
+          const tagMatches = !anchor.tag || candidate.tagName.toLowerCase() === anchor.tag.toLowerCase();
+          const textMatches = !anchor.textDigest || dice(candidate.innerText || candidate.textContent, anchor.textDigest) >= 0.8;
+          if (tagMatches && textMatches) return candidate;
+        }
       } catch (_) {
         // Invalid selector — try the next fallback.
       }
@@ -219,6 +250,7 @@
     const detached = [];
     let number = 0;
     stableAnchors.forEach((anchor, threadId) => {
+      if (anchor.route && anchor.route !== currentRoute()) return;
       number++;
       const element = resolveAnchor(anchor);
       if (!element) { detached.push(threadId); return; }
@@ -240,7 +272,11 @@
       host.toggleAttribute('data-discuss-thread-focused', !!focusedElement);
       if (!inspectOn) setOutline(focusedElement);
     }
-    post('discuss:anchors-resolved', { resolved, detached });
+    const markerCount = String(resolved.length);
+    if (host.getAttribute('data-discuss-marker-count') !== markerCount) {
+      host.setAttribute('data-discuss-marker-count', markerCount);
+    }
+    post('discuss:anchors-resolved', { resolved, detached, route: liveReview ? currentRoute() : null });
   }
 
   function scheduleResolve() {
@@ -260,7 +296,20 @@
   }, true);
 
   window.addEventListener('click', event => {
-    if (!inspectOn) return;
+    if (!inspectOn) {
+      if (!liveReview) return;
+      const link = event.target?.closest?.('a[href]');
+      if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const destination = new URL(link.href, location.href);
+      if (destination.origin === upstreamOrigin) {
+        event.preventDefault();
+        location.assign(`${destination.pathname}${destination.search}${destination.hash}`);
+      } else if (destination.origin !== location.origin) {
+        event.preventDefault();
+        post('discuss:external-navigation', { url: destination.href });
+      }
+      return;
+    }
     const target = event.target;
     if (!target || target.nodeType !== 1 || target === host) return;
     event.preventDefault();
@@ -280,8 +329,37 @@
     post('discuss:marker-clicked', { threadId: marker.dataset.threadId });
   });
 
+  if (liveReview) {
+    const originalPushState = history.pushState.bind(history);
+    const originalReplaceState = history.replaceState.bind(history);
+    history.pushState = function(...args) {
+      const result = originalPushState(...args);
+      announceRoute();
+      return result;
+    };
+    history.replaceState = function(...args) {
+      const result = originalReplaceState(...args);
+      announceRoute();
+      return result;
+    };
+    window.addEventListener('popstate', announceRoute);
+    window.addEventListener('hashchange', announceRoute);
+    window.addEventListener('submit', event => {
+      if (inspectOn) return;
+      const form = event.target;
+      if (!form || !form.action) return;
+      const destination = new URL(form.action, location.href);
+      if (destination.origin === upstreamOrigin) {
+        form.action = `${destination.pathname}${destination.search}${destination.hash}`;
+      } else if (destination.origin !== location.origin) {
+        event.preventDefault();
+        post('discuss:external-navigation', { url: destination.href });
+      }
+    }, true);
+  }
+
   window.addEventListener('message', event => {
-    if (event.origin !== location.origin || event.source !== window.parent) return;
+    if (event.origin !== parentOrigin || event.source !== window.parent) return;
     const message = event.data;
     if (!message || typeof message.type !== 'string' || !message.type.startsWith('discuss:')) return;
     const payload = message.payload && typeof message.payload === 'object' ? message.payload : message;
@@ -327,5 +405,6 @@
   if (document.querySelector('[src^="/"], [href^="/"]')) {
     console.warn('discuss: root-absolute prototype assets are not rewritten; use relative URLs.');
   }
-  post('discuss:ready');
+  post('discuss:ready', { route: liveReview ? currentRoute() : null });
+  if (liveReview) announceRoute();
 })();

@@ -3863,6 +3863,82 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
 }
 
 #[tokio::test]
+async fn live_html_threads_require_routes_and_detachment_is_route_scoped() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let html_path = temp_dir.path().join("live.html");
+    fs::write(&html_path, "fixture").expect("write fixture");
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_source(html_source(&html_path, "", false))
+        .with_live_frame_url("http://127.0.0.1:49153/start");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let without_route = post_json_path(
+        addr,
+        "/api/threads",
+        r##"{"anchorStart":0,"anchorEnd":0,"snippet":"Buy","text":"Missing route","elementAnchor":{"selector":"#buy","tag":"button","outerHtml":"<button>Buy</button>"}}"##,
+    )
+    .await;
+    assert!(without_route.starts_with("HTTP/1.1 400"), "{without_route}");
+
+    for (selector, route) in [("#one", "/one"), ("#two", "/two?tab=2#details")] {
+        let created = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({
+                "anchorStart": 0,
+                "anchorEnd": 0,
+                "snippet": selector,
+                "text": "Route scoped",
+                "elementAnchor": {
+                    "selector": selector,
+                    "tag": "button",
+                    "accessibleName": selector,
+                    "route": route,
+                    "outerHtml": format!("<button id=\"{}\">Route</button>", &selector[1..]),
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        assert!(created.starts_with("HTTP/1.1 200"), "{created}");
+    }
+
+    let detached = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/two?tab=2#details","detachedThreadIds":["u-2"]}"#,
+    )
+    .await;
+    assert!(detached.starts_with("HTTP/1.1 200"), "{detached}");
+    assert_eq!(response_json(&detached)["route"], "/two?tab=2#details");
+    let first_route_resolution = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/one","detachedThreadIds":[]}"#,
+    )
+    .await;
+    assert!(
+        first_route_resolution.starts_with("HTTP/1.1 200"),
+        "{first_route_resolution}"
+    );
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(snapshot["threads"][0].get("orphaned").is_none());
+    assert_eq!(snapshot["threads"][1]["orphaned"], true);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn html_asset_route_rejects_parent_and_symlink_escape() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let root = temp_dir.path().join("prototype");
@@ -4142,10 +4218,77 @@ async fn assert_verdict_rejection_is_noop_then_valid(invalid_body: &str, expecte
     );
 }
 
+#[tokio::test]
+async fn browser_mutations_reject_cross_origin_requests_but_allow_originless_clients() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, std::future::pending()));
+    wait_for_server(addr).await;
+
+    let rejected = post_with_headers(
+        addr,
+        "/api/done",
+        &[
+            ("Origin", "http://127.0.0.1:49999"),
+            ("Sec-Fetch-Site", "same-site"),
+        ],
+    )
+    .await;
+    assert!(rejected.starts_with("HTTP/1.1 403"), "{rejected}");
+    assert_eq!(
+        response_json(&rejected)["error"]["code"],
+        "cross_origin_request"
+    );
+    assert!(
+        get_path(addr, "/api/state")
+            .await
+            .starts_with("HTTP/1.1 200"),
+        "cross-origin Done must not stop the session"
+    );
+
+    let origin = format!("http://{addr}");
+    let same_origin = post_with_headers(
+        addr,
+        "/api/heartbeat",
+        &[("Origin", &origin), ("Sec-Fetch-Site", "same-origin")],
+    )
+    .await;
+    assert!(same_origin.starts_with("HTTP/1.1 200"), "{same_origin}");
+
+    let done = post_path_no_body(addr, "/api/done").await;
+    assert!(done.starts_with("HTTP/1.1 200"), "{done}");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
     try_post_json_path(addr, path, body)
         .await
         .expect("POST request should succeed")
+}
+
+async fn post_with_headers(addr: SocketAddr, path: &str, headers: &[(&str, &str)]) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\n{extra_headers}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn post_path_no_body(addr: SocketAddr, path: &str) -> String {
