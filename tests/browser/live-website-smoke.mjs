@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -28,6 +29,16 @@ function firstLine(stream, label, timeoutMs = 15000) {
 }
 
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function freeLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
 async function waitFor(check, label, attempts = 100) {
   let last;
   for (let i = 0; i < attempts; i++) {
@@ -142,18 +153,15 @@ async function run() {
   phase = 'launch Chrome';
   const profile = path.join(temp, 'chrome');
   fs.mkdirSync(profile);
+  const cdpPort = await freeLoopbackPort();
   const chrome = start(chromeExecutable(), [
-    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-background-networking',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking',
+    `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profile}`, 'about:blank',
   ]);
   let chromeErrors = '';
   chrome.stderr.on('data', chunk => { chromeErrors += chunk; });
-  const activePortFile = path.join(profile, 'DevToolsActivePort');
-  const cdpPort = await waitFor(() => {
-    if (!fs.existsSync(activePortFile)) return null;
-    return Number(fs.readFileSync(activePortFile, 'utf8').split(/\r?\n/)[0]);
-  }, 'Chrome DevTools port');
   await waitFor(async () => {
+    if (chrome.exitCode != null) throw new Error(`Chrome exited ${chrome.exitCode}: ${chromeErrors}`);
     try { return (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).ok; }
     catch (_) { return false; }
   }, 'Chrome DevTools HTTP endpoint');
