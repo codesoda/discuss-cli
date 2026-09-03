@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **UI preferences survive every launch** — the theme, the ⌘-Enter-to-send choice, and the file-sidebar collapse are now stored by the server in `~/.discuss/preferences.json` and read back through `GET`/`PUT /api/preferences`. They previously lived in `localStorage`, which is keyed by origin: a session without `--port` binds a port the OS picks, so every launch was a new origin with an empty store and every choice was lost. The page is seeded with the stored answers above the pre-paint theme bootstrap, so the theme is correct on the first frame and no extra round trip is needed.
+
 - **Live website review** — a sole HTTP/S URL starts a fixed-upstream reverse proxy on a second loopback origin and loads that origin in the review iframe. Root-relative assets, application `/api/*` routes, request bodies, and WebSockets stay with the upstream; HTML responses receive frame-header/CSP neutralization, an early service-worker guard, and the element inspector, while non-HTML bytes stream unchanged. Same-upstream redirects remain proxied and cross-origin redirects require explicit reviewer confirmation. SPA `pushState`, `replaceState`, `popstate`, and hash changes are reported to the parent, with route and accessible-name context persisted on element anchors. Startup reports `mode: "live"`, `upstreamUrl`, `proxyUrl`, and the existing API endpoint map after both listeners bind; Done/external shutdown terminates both. Authentication remains explicit out-of-scope for v1 because upstream cookies do not implicitly belong to the loopback proxy origin. Closes [#32](https://github.com/codesoda/discuss-cli/issues/32).
 
 ## [0.10.0] - 2026-08-30

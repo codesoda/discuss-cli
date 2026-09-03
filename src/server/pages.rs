@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
 use crate::assets;
+use crate::preferences::Preferences;
 use crate::state::{File, FileId, FileKind};
 use crate::update::{self, VersionStatus};
 use crate::{render, template};
@@ -63,10 +64,16 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .map(|file| file.html.clone())
         .unwrap_or_default();
 
-    Ok(template::render_page(
+    // The page is seeded with the stored preferences so the theme is right on
+    // the first paint and the page needs no extra round trip to know them.
+    let preferences_json = serde_json::to_string(&app_state.preferences())
+        .map_err(|error| format!("failed to serialize preferences: {error}"))?;
+
+    Ok(template::render_page_with_preferences(
         &first_file_html,
         &initial_state_json,
         &rendered_files_json,
+        &preferences_json,
     ))
 }
 
@@ -192,6 +199,27 @@ pub(super) async fn get_api_version() -> Response {
 pub(super) async fn post_api_heartbeat(AxumState(app_state): AxumState<AppState>) -> Response {
     match app_state.record_heartbeat() {
         Ok(_) => Json(OkResponse { ok: true }).into_response(),
+        Err(message) => {
+            api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+        }
+    }
+}
+
+pub(super) async fn get_api_preferences(AxumState(app_state): AxumState<AppState>) -> Response {
+    Json(app_state.preferences()).into_response()
+}
+
+/// Merge a change into the stored preferences.
+///
+/// The body carries only the preferences the page wants to change, so one page
+/// cannot erase a preference another page owns. The response is the whole
+/// stored set.
+pub(super) async fn put_api_preferences(
+    AxumState(app_state): AxumState<AppState>,
+    Json(change): Json<Preferences>,
+) -> Response {
+    match app_state.update_preferences(change) {
+        Ok(stored) => Json(stored).into_response(),
         Err(message) => {
             api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
         }
