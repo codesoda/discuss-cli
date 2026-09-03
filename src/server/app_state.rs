@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use crate::Config;
 use crate::events::EventEmitter;
 use crate::history;
+use crate::preferences::{self, Preferences};
 use crate::sse::EventBus;
 use crate::state::{File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id};
 use crate::verdict::VerdictConfig;
@@ -28,6 +29,7 @@ pub struct AppState {
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
     pub(super) history_dir: Arc<PathBuf>,
+    preferences_path: Arc<Option<PathBuf>>,
     no_save: Arc<AtomicBool>,
     done_started: Arc<AtomicBool>,
     pub(super) shutdown: ShutdownSignal,
@@ -56,6 +58,7 @@ impl AppState {
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
+            preferences_path: Arc::new(None),
             no_save: Arc::new(AtomicBool::new(false)),
             done_started: Arc::new(AtomicBool::new(false)),
             shutdown: ShutdownSignal::new(),
@@ -218,6 +221,43 @@ impl AppState {
     pub fn with_history_dir(mut self, history_dir: impl Into<PathBuf>) -> Self {
         self.history_dir = Arc::new(history_dir.into());
         self
+    }
+
+    /// Point the session at the file that keeps the browser UI preferences.
+    ///
+    /// A session without a path keeps the page defaults and stores nothing.
+    /// The real sessions always set it; tests leave it unset so they never
+    /// read or write the user's own preferences file.
+    pub fn with_preferences_path(mut self, preferences_path: impl Into<PathBuf>) -> Self {
+        self.preferences_path = Arc::new(Some(preferences_path.into()));
+        self
+    }
+
+    pub(super) fn preferences(&self) -> Preferences {
+        match self.preferences_path.as_ref() {
+            Some(path) => preferences::load(path),
+            None => Preferences::default(),
+        }
+    }
+
+    /// Merge a change into the stored preferences and return the whole set.
+    ///
+    /// The file is read again here rather than cached, so a second browser tab
+    /// or a hand edit between writes is not overwritten.
+    pub(super) fn update_preferences(
+        &self,
+        change: Preferences,
+    ) -> std::result::Result<Preferences, String> {
+        let Some(path) = self.preferences_path.as_ref() else {
+            let mut merged = Preferences::default();
+            merged.merge(change);
+            return Ok(merged);
+        };
+        let mut merged = preferences::load(path);
+        merged.merge(change);
+        preferences::save(path, &merged)
+            .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+        Ok(merged)
     }
 
     pub fn with_no_save(self, no_save: bool) -> Self {

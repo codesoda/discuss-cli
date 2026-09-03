@@ -23,6 +23,7 @@ pub mod exit;
 pub mod history;
 pub mod launch;
 pub mod logging;
+pub mod preferences;
 pub mod proxy;
 pub mod render;
 pub mod server;
@@ -42,7 +43,7 @@ pub use logging::init_tracing;
 pub use render::render;
 pub use server::{AppState, bind_loopback_listeners, serve, serve_listener, serve_with_ready};
 pub use sse::{BroadcastEvent, EventBus};
-pub use template::render_page;
+pub use template::{render_page, render_page_with_preferences};
 pub use transcript::{
     Transcript, TranscriptThread, build_transcript, build_transcript_with_source,
 };
@@ -160,7 +161,8 @@ where
         .with_file_bytes(file_bytes)
         .with_verdict_config(verdict_config)
         .with_no_save(true)
-        .with_idle_timeout_secs(config.idle_timeout_secs);
+        .with_idle_timeout_secs(config.idle_timeout_secs)
+        .with_preferences_path(preferences::default_preferences_path());
     // Seed before serving so the first GET / snapshot includes the threads.
     let seeded = server::demo::seed_demo_threads(&app_state);
     server::demo::spawn_demo_responder(
@@ -297,7 +299,8 @@ where
         .with_file_bytes(file_bytes)
         .with_verdict_config(verdict_config)
         .with_no_save(config.no_save)
-        .with_idle_timeout_secs(config.idle_timeout_secs);
+        .with_idle_timeout_secs(config.idle_timeout_secs)
+        .with_preferences_path(preferences::default_preferences_path());
     if let Some(source_path) = primary_source_path {
         app_state = app_state.with_source_path(source_path);
     }
@@ -374,7 +377,8 @@ where
         .with_live_frame_url(frame_url)
         .with_verdict_config(verdict_config)
         .with_no_save(config.no_save)
-        .with_idle_timeout_secs(config.idle_timeout_secs);
+        .with_idle_timeout_secs(config.idle_timeout_secs)
+        .with_preferences_path(preferences::default_preferences_path());
     if let Some(history_dir) = config.history_dir.clone() {
         app_state = app_state.with_history_dir(history_dir);
     }

@@ -9,6 +9,11 @@ const INITIAL_STATE_SCRIPT_CLOSE: &str = "</script>";
 const MERMAID_SHIM_SCRIPT_OPEN: &str = "<script id=\"discuss-mermaid-shim\">";
 const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
 const RENDERED_FILES_SCRIPT_OPEN: &str = "<script id=\"discuss-rendered-files\">";
+const PREFERENCES_SCRIPT_OPEN: &str = "<script id=\"discuss-preferences\">";
+const PREFERENCES_SCRIPT_CLOSE: &str = "</script>";
+// The theme bootstrap runs before the first paint, so the stored theme has to
+// be on the page before it.
+const THEME_BOOTSTRAP_OPEN: &str = "<script id=\"discuss-theme-bootstrap\">";
 const RENDERED_FILES_SCRIPT_CLOSE: &str = "</script>";
 
 pub fn render_page(
@@ -16,10 +21,30 @@ pub fn render_page(
     initial_state_json: &str,
     rendered_files_json: &str,
 ) -> String {
+    render_page_with_preferences(
+        rendered_markdown,
+        initial_state_json,
+        rendered_files_json,
+        "{}",
+    )
+}
+
+/// Render the page and seed the reader's stored UI preferences into it.
+///
+/// The seed carries the preferences the server holds. The page cannot read
+/// them from `localStorage` because a session binds a new port every launch,
+/// and a new port is a new origin with an empty store.
+pub fn render_page_with_preferences(
+    rendered_markdown: &str,
+    initial_state_json: &str,
+    rendered_files_json: &str,
+    preferences_json: &str,
+) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
     let page = inject_initial_state(&page, initial_state_json);
     let page = inject_rendered_files(&page, rendered_files_json);
-    inject_mermaid_shim(&page)
+    let page = inject_mermaid_shim(&page);
+    inject_preferences(&page, preferences_json)
 }
 
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
@@ -71,6 +96,23 @@ fn inject_rendered_files(page: &str, rendered_files_json: &str) -> String {
     );
 
     inject_before_main_script(page, &rendered_files_script)
+}
+
+fn inject_preferences(page: &str, preferences_json: &str) -> String {
+    let preferences_script = format!(
+        "{PREFERENCES_SCRIPT_OPEN}\nwindow.__DISCUSS_PREFERENCES__ = {};\n{PREFERENCES_SCRIPT_CLOSE}\n\n",
+        js_safe_json(preferences_json)
+    );
+
+    let insert_at = page
+        .find(THEME_BOOTSTRAP_OPEN)
+        .expect("bundled template must contain the theme bootstrap script");
+
+    let mut rendered = String::with_capacity(page.len() + preferences_script.len());
+    rendered.push_str(&page[..insert_at]);
+    rendered.push_str(&preferences_script);
+    rendered.push_str(&page[insert_at..]);
+    rendered
 }
 
 fn inject_mermaid_shim(page: &str) -> String {
@@ -143,7 +185,9 @@ mod tests {
             RENDERED_FILES_SCRIPT_OPEN,
             RENDERED_FILES_SCRIPT_CLOSE,
         );
-        without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE)
+        let html =
+            without_injected_script(&html, MERMAID_SHIM_SCRIPT_OPEN, MERMAID_SHIM_SCRIPT_CLOSE);
+        without_injected_script(&html, PREFERENCES_SCRIPT_OPEN, PREFERENCES_SCRIPT_CLOSE)
     }
 
     #[test]
@@ -337,8 +381,9 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        // localStorage may only persist UI preferences (theme, ⌘-Enter-to-send,
-        // sidebar collapse), never document/thread state. The old
+        // localStorage may only mirror UI preferences (theme, ⌘-Enter-to-send,
+        // sidebar collapse), never document/thread state. The server file is
+        // the store of record for those three; see `preferences.rs`. The old
         // state-in-localStorage pattern used STORAGE_KEY = 'discuss-state' —
         // that must stay removed.
         for (offset, _) in page.match_indices("localStorage") {
@@ -353,6 +398,38 @@ mod tests {
             );
         }
         assert!(!page.contains("STORAGE_KEY = 'discuss-state'"));
+    }
+
+    #[test]
+    fn preferences_seed_precedes_the_pre_paint_theme_bootstrap() {
+        let page = render_page_with_preferences("<p>Doc</p>", "{}", "[]", r#"{"theme":"dark"}"#);
+
+        let seed_at = page
+            .find("window.__DISCUSS_PREFERENCES__ = {\"theme\":\"dark\"}")
+            .expect("page should seed the stored preferences");
+        let bootstrap_at = page
+            .find(THEME_BOOTSTRAP_OPEN)
+            .expect("page should keep the pre-paint theme bootstrap");
+
+        // The bootstrap picks the theme before the first paint, so it can only
+        // read a seed that is already on the page.
+        assert!(seed_at < bootstrap_at);
+    }
+
+    #[test]
+    fn bundled_template_reads_stored_preferences_before_browser_storage() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        // Each launch binds a new port, so localStorage is a same-origin
+        // fallback only. The server seed decides.
+        assert!(page.contains("const preferences = window.__DISCUSS_PREFERENCES__ || {};"));
+        assert!(page.contains("fetch('/api/preferences', {"));
+        for preference in ["theme", "filesCollapsed", "cmdEnterToSend"] {
+            assert!(
+                page.contains(&format!("savePreference('{preference}'")),
+                "page should store {preference} on the server",
+            );
+        }
     }
 
     #[test]

@@ -137,6 +137,67 @@ async fn get_root_seeds_current_state_for_reload() {
         .expect("server shutdown should succeed");
 }
 
+/// Preferences must outlive one session. The browser cannot hold them: a
+/// session binds a new port each launch, and a new port is a new origin with
+/// an empty `localStorage`.
+#[tokio::test]
+async fn preferences_round_trip_through_the_file_and_seed_the_page() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let preferences_path = directory.path().join("preferences.json");
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Preferences")
+        .with_preferences_path(preferences_path.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    // Nothing stored yet: every preference is absent and the page decides.
+    let response = get_path(addr, "/api/preferences").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_eq!(response_json(&response), json!({}));
+
+    let response = put_json_path(addr, "/api/preferences", r#"{"theme":"dark"}"#).await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert_eq!(response_json(&response), json!({"theme": "dark"}));
+
+    // A second write adds a preference without erasing the first.
+    let response = put_json_path(addr, "/api/preferences", r#"{"cmdEnterToSend":false}"#).await;
+    assert_eq!(
+        response_json(&response),
+        json!({"theme": "dark", "cmdEnterToSend": false})
+    );
+
+    // The file is the store of record, not the process.
+    let stored: Value = serde_json::from_str(
+        &fs::read_to_string(&preferences_path).expect("preferences file should exist"),
+    )
+    .expect("preferences file should be JSON");
+    assert_eq!(stored, json!({"theme": "dark", "cmdEnterToSend": false}));
+
+    // The page carries the answer, so the theme is right on the first paint.
+    let root_response = get_root(addr).await;
+    let page = response_body(&root_response);
+    let seed_at = page
+        .find("window.__DISCUSS_PREFERENCES__")
+        .expect("page should seed the stored preferences");
+    let bootstrap_at = page
+        .find("<script id=\"discuss-theme-bootstrap\">")
+        .expect("page should keep the pre-paint theme bootstrap");
+    assert!(seed_at < bootstrap_at);
+    assert!(page[seed_at..bootstrap_at].contains("\"theme\":\"dark\""));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 #[tokio::test]
 async fn get_api_state_returns_empty_snapshot_json() {
     let addr = free_loopback_addr();
@@ -4321,6 +4382,25 @@ async fn try_post_json_path(addr: SocketAddr, path: &str, body: &str) -> io::Res
     stream.read_to_string(&mut response).await?;
 
     Ok(response)
+}
+
+async fn put_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!(
+        "PUT {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn delete_path(addr: SocketAddr, path: &str) -> String {

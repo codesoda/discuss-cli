@@ -48,8 +48,9 @@ use drafts::{
 };
 use files::{get_html_asset, get_html_file};
 use pages::{
-    get_api_events, get_api_file_raw, get_api_state, get_api_version, get_discuss_inspect_js,
-    get_mermaid_js, get_mermaid_shim_js, get_root, post_api_heartbeat,
+    get_api_events, get_api_file_raw, get_api_preferences, get_api_state, get_api_version,
+    get_discuss_inspect_js, get_mermaid_js, get_mermaid_shim_js, get_root, post_api_heartbeat,
+    put_api_preferences,
 };
 use response::{api_error_response, not_found};
 use source::post_api_source;
@@ -219,6 +220,10 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/files/{id}/blocks", get(get_api_file_blocks))
         .route("/api/events", get(get_api_events))
         .route("/api/heartbeat", post(post_api_heartbeat))
+        .route(
+            "/api/preferences",
+            get(get_api_preferences).put(put_api_preferences),
+        )
         .route(
             "/api/drafts/new-thread",
             post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),

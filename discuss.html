@@ -60,8 +60,14 @@
 <!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
 <script id="discuss-theme-bootstrap">
 (function () {
-  var stored = null;
-  try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  // The server injects the stored preferences just above this script. Browser
+  // storage is only a same-origin fallback: a session binds a new port on each
+  // launch, and a new port is a new origin with an empty store.
+  var seeded = window.__DISCUSS_PREFERENCES__ || {};
+  var stored = typeof seeded.theme === 'string' ? seeded.theme : null;
+  if (stored === null) {
+    try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  }
   var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
   var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
@@ -1833,6 +1839,22 @@
   const stateSeed = Object.prototype.hasOwnProperty.call(window, '__DISCUSS_INITIAL_STATE__')
     ? window.__DISCUSS_INITIAL_STATE__
     : null;
+
+  // ---------- Stored UI preferences ----------
+  // The server owns these and keeps them in ~/.discuss/preferences.json, so
+  // one answer holds for every session, every launch, and every install. The
+  // page starts from the seed the server injected and writes each change back.
+  // The browser-storage mirror stays for a page opened without a server seed;
+  // it cannot be the store of record because each launch is a new origin.
+  const preferences = window.__DISCUSS_PREFERENCES__ || {};
+  function savePreference(name, value) {
+    preferences[name] = value;
+    fetch('/api/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [name]: value }),
+    }).catch(() => {});
+  }
   let currentState = emptyDiscussionState();
   let reviewComplete = false;
 
@@ -3173,16 +3195,18 @@
   }
 
   // ---------- File sidebar (multi-file sessions) ----------
-  // Browser storage here holds a UI preference only (collapsed vs expanded),
-  // mirroring the theme pref pattern. Review state never touches storage.
+  // A UI preference only (collapsed vs expanded), stored by the server like
+  // the theme. Review state never goes into browser storage.
   const FILES_COLLAPSED_KEY = 'discuss-files-collapsed';
   function isFilesCollapsed() {
+    if (typeof preferences.filesCollapsed === 'boolean') return preferences.filesCollapsed;
     let stored = null;
     try { stored = localStorage.getItem(FILES_COLLAPSED_KEY); } catch (_) {}
     // Anything but the exact stored '1' means expanded (the first-run default).
     return stored === '1';
   }
   function setFilesCollapsedPref(collapsed) {
+    savePreference('filesCollapsed', collapsed);
     try { localStorage.setItem(FILES_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
   }
   function applyFilesCollapsed(collapsed, toggle) {
@@ -3687,8 +3711,17 @@
 
   // ---------- Send-shortcut setting ----------
   const CMD_ENTER_KEY = 'discuss-cmd-enter-to-send';
-  function isCmdEnterRequired() { return localStorage.getItem(CMD_ENTER_KEY) !== 'false'; }
-  function setCmdEnterRequired(v) { localStorage.setItem(CMD_ENTER_KEY, v ? 'true' : 'false'); document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v); }
+  function isCmdEnterRequired() {
+    if (typeof preferences.cmdEnterToSend === 'boolean') return preferences.cmdEnterToSend;
+    let stored = null;
+    try { stored = localStorage.getItem(CMD_ENTER_KEY); } catch (_) {}
+    return stored !== 'false';
+  }
+  function setCmdEnterRequired(v) {
+    savePreference('cmdEnterToSend', v);
+    try { localStorage.setItem(CMD_ENTER_KEY, v ? 'true' : 'false'); } catch (_) {}
+    document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v);
+  }
   function enterSendCheckboxHtml() {
     return `<label class="enter-to-send"><input type="checkbox" ${isCmdEnterRequired() ? 'checked' : ''}> ⌘ Enter to send</label>`;
   }
@@ -5945,6 +5978,7 @@
       event.stopPropagation();
       const mode = item.getAttribute('data-mode');
       if (!THEME_MODES.includes(mode)) return;
+      savePreference('theme', mode);
       try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
       applyThemeMode(mode);
       closeMenu();
