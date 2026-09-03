@@ -53,12 +53,14 @@ impl PrImportBundle {
                 "PR import `overviewMarkdown` must not be empty",
             ));
         }
-        if self.diff.context_source != DiffContextSource::GitUnified10
-            || self.diff.context_lines != Some(10)
-        {
-            return Err(config_error(
-                "PR import diff context must be `git-unified-10` with `contextLines: 10`",
-            ));
+        match (self.diff.context_source, self.diff.context_lines) {
+            (DiffContextSource::GitUnified10, Some(10))
+            | (DiffContextSource::GitUnified, Some(_)) => {}
+            _ => {
+                return Err(config_error(
+                    "PR import diff context must use matching git unified metadata and a nonnegative `contextLines` value",
+                ));
+            }
         }
         check_count("files", self.files.len(), MAX_FILES)?;
         check_count("discussions", self.discussions.len(), MAX_DISCUSSIONS)?;
@@ -357,6 +359,7 @@ pub struct DiffContext {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DiffContextSource {
+    GitUnified,
     #[serde(rename = "git-unified-10")]
     GitUnified10,
 }
@@ -599,9 +602,22 @@ mod tests {
 
     #[test]
     fn validates_complete_bundle() {
-        bundle()
-            .validate(&GithubPrUrl::parse("https://github.com/acme/project/pull/51").unwrap())
-            .unwrap();
+        let expected = GithubPrUrl::parse("https://github.com/acme/project/pull/51").unwrap();
+        bundle().validate(&expected).unwrap();
+
+        let mut custom_context = bundle();
+        custom_context.diff.context_lines = Some(4);
+        custom_context.diff.context_source = DiffContextSource::GitUnified;
+        custom_context.validate(&expected).unwrap();
+
+        let mut mismatched_legacy_context = bundle();
+        mismatched_legacy_context.diff.context_lines = Some(4);
+        assert!(mismatched_legacy_context.validate(&expected).is_err());
+
+        let mut missing_context = bundle();
+        missing_context.diff.context_lines = None;
+        missing_context.diff.context_source = DiffContextSource::GitUnified;
+        assert!(missing_context.validate(&expected).is_err());
     }
 
     #[test]

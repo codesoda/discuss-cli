@@ -131,7 +131,7 @@ where
         }
         Some(cli::Commands::Pr(pr_args)) => {
             let identity = pr::GithubPrUrl::parse(&pr_args.url)?;
-            run_pr_session(identity, &config, shutdown).await
+            run_pr_session(identity, pr_args.unified, &config, shutdown).await
         }
         Some(cli::Commands::Demo) => {
             if !files.is_empty() {
@@ -154,11 +154,16 @@ where
     }
 }
 
-async fn run_pr_session<F>(identity: pr::GithubPrUrl, config: &Config, shutdown: F) -> Result<()>
+async fn run_pr_session<F>(
+    identity: pr::GithubPrUrl,
+    unified: u32,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let bundle = pr::load_pr(&identity).await?;
+    let bundle = pr::load_pr(&identity, unified).await?;
     let files_count = bundle.files.len() + 1;
     let import_body = serde_json::to_vec(&bundle).map_err(|error| DiscussError::PrError {
         message: format!("could not encode the loaded PR: {error}"),
@@ -192,10 +197,13 @@ where
         pr_session_ready_callback(
             emitter,
             ready_state,
-            identity,
-            secret,
-            import_body,
-            files_count,
+            PrStartup {
+                identity,
+                secret,
+                import_body,
+                files_count,
+                unified,
+            },
             config.auto_open,
         ),
     )
@@ -212,13 +220,18 @@ fn random_hex_secret() -> String {
     secret
 }
 
-fn pr_session_ready_callback(
-    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
-    app_state: AppState,
+struct PrStartup {
     identity: pr::GithubPrUrl,
     secret: String,
     import_body: Vec<u8>,
     files_count: usize,
+    unified: u32,
+}
+
+fn pr_session_ready_callback(
+    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    app_state: AppState,
+    startup: PrStartup,
     auto_open: bool,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
@@ -231,18 +244,19 @@ fn pr_session_ready_callback(
         endpoints["prSummary"] = serde_json::json!(format!("{url}/api/pr/summary"));
         endpoints["prPublicationResult"] =
             serde_json::json!(format!("{url}/api/pr/publication-result"));
-        let instructions = pr::agent_instructions().replace("<SESSION_SECRET>", &secret);
+        let instructions = pr::agent_instructions().replace("<SESSION_SECRET>", &startup.secret);
         let payload = serde_json::json!({
             "url": url,
             "apiBaseUrl": url,
             "endpoints": endpoints,
             "agentInstructions": instructions,
             "mode": "pr",
-            "prUrl": identity.canonical_url(),
-            "prSessionSecret": secret,
+            "prUrl": startup.identity.canonical_url(),
+            "prSessionSecret": startup.secret,
             "prImportMode": "automatic",
+            "unified": startup.unified,
             "source_file": "pr-overview.md",
-            "files_count": files_count,
+            "files_count": startup.files_count,
             "started_at": started_at.to_rfc3339(),
         });
         if let Err(error) = emitter.emit(&Event {
@@ -255,8 +269,8 @@ fn pr_session_ready_callback(
         tokio::spawn(post_automatic_pr_import(
             app_state,
             import_url,
-            secret,
-            import_body,
+            startup.secret,
+            startup.import_body,
         ));
         let launcher = launch::SystemBrowserLauncher;
         if let Err(error) =

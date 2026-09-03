@@ -70,7 +70,7 @@ Pass exactly one full public-GitHub PR URL to the `pr` subcommand:
 discuss pr https://github.com/OWNER/REPO/pull/NUMBER
 ```
 
-Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. PR mode requires the GitHub CLI to be installed and authenticated. Discuss exits before readiness with installation guidance when `gh` is absent; it never asks for, receives, or stores a token.
+Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. The optional PR flag `--unified <N>` controls unchanged diff context and defaults to 10. PR mode requires the GitHub CLI to be installed and authenticated. Discuss exits before readiness with installation guidance when `gh` is absent; it never asks for, receives, or stores a token.
 
 Discuss performs the read-only import itself by shelling directly to authenticated `gh` and `git`. On `session.started` with `mode: "pr"`:
 

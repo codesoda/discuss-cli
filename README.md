@@ -161,11 +161,13 @@ Diff output is capped at 5 MB to keep the browser responsive. Override with `--m
 
 ```sh
 discuss pr https://github.com/acme/project/pull/123
+# Optional: reduce or expand unchanged hunk context
+# discuss pr https://github.com/acme/project/pull/123 --unified 4
 ```
 
-PR mode accepts a full `https://github.com/OWNER/REPO/pull/NUMBER` URL only. It requires the [GitHub CLI](https://cli.github.com/) to be installed and authenticated with `gh auth login --hostname github.com`; when `gh` is missing, Discuss exits before starting a server and prints installation commands for macOS, Windows, and Linux. Discuss invokes `gh` directly for read-only GitHub access without requesting, storing, or receiving its token. It loads PR metadata and all existing discussion in parallel, uses `gh repo clone` plus the immutable PR ref in a temporary filtered clone, and generates the aggregate `git diff --unified=10` exactly once. The resulting GFM overview and one diff file per changed path are imported automatically before review begins.
+PR mode accepts a full `https://github.com/OWNER/REPO/pull/NUMBER` URL only. It requires the [GitHub CLI](https://cli.github.com/) to be installed and authenticated with `gh auth login --hostname github.com`; when `gh` is missing, Discuss exits before starting a server and prints installation commands for macOS, Windows, and Linux. Discuss invokes `gh` directly for read-only GitHub access without requesting, storing, or receiving its token. It loads PR metadata and all existing discussion in parallel, uses `gh repo clone` plus the immutable PR ref in a temporary filtered clone, and generates one aggregate git diff exactly once. Diff hunks include ten unchanged lines by default; override that with `--unified <N>` (including `--unified 0` for no unchanged context). The resulting GFM overview and one diff file per changed path are imported automatically before review begins.
 
-The overview distinguishes issue comments, review summaries, and review threads while preserving authors, timestamps, IDs, and GitHub links. Resolvable inline review discussion is also anchored on its diff. Every textual hunk includes ten unchanged context lines by default; binary and mode-only files remain visible but unanchorable.
+The overview distinguishes issue comments, review summaries, and review threads while preserving authors, timestamps, IDs, and GitHub links. Resolvable inline review discussion is also anchored on its diff. Every textual hunk uses the configured unchanged context; binary and mode-only files remain visible but unanchorable.
 
 Everything created during review stays local by default. Diff file headers include the file's green addition and red deletion totals, are not generic thread click targets, and use a dedicated speech-bubble control for explicit whole-file local comments. Each changed-file header also includes a **Viewed** checkbox; marking it records the server timestamp and current immutable PR head SHA, shows an eye-style viewed indicator in the file tree (not an approval checkmark), and advances to the next unviewed changed file. Viewed progress survives reloads and is included in the final local transcript.
 
@@ -198,6 +200,7 @@ Everything created during review stays local by default. Diff file headers inclu
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
 | `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
+| `--unified <N>` | `10` | (`pr` subcommand) Unchanged context lines around each diff hunk |
 | `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `\|`, e.g. `approved:Approve\|declined:Decline:negative!` |
 | `--verdict-prompt <TEXT>` | default prompt | Custom prompt text shown above verdict options; without `--verdict-options` it only warns on stderr |
 
@@ -274,7 +277,7 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret, and exact compatibility-import/summary/publication-result endpoints. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret, and exact compatibility-import/summary/publication-result endpoints. |
 | `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |

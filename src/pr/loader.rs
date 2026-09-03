@@ -39,7 +39,7 @@ pub async fn ensure_gh_available() -> Result<()> {
 }
 
 /// Loads one complete PR review bundle using read-only `gh` and `git` commands.
-pub async fn load_pr(identity: &GithubPrUrl) -> Result<PrImportBundle> {
+pub async fn load_pr(identity: &GithubPrUrl, unified: u32) -> Result<PrImportBundle> {
     ensure_gh_available().await?;
     ensure_gh_authentication().await?;
 
@@ -144,8 +144,13 @@ pub async fn load_pr(identity: &GithubPrUrl) -> Result<PrImportBundle> {
         "head",
     )
     .await?;
-    let aggregate_diff =
-        git_diff(&repo_path, &metadata.base_ref_oid, &metadata.head_ref_oid).await?;
+    let aggregate_diff = git_diff(
+        &repo_path,
+        &metadata.base_ref_oid,
+        &metadata.head_ref_oid,
+        unified,
+    )
+    .await?;
 
     build_bundle(
         identity,
@@ -158,6 +163,7 @@ pub async fn load_pr(identity: &GithubPrUrl) -> Result<PrImportBundle> {
             review_thread_pages: review_threads,
         },
         &aggregate_diff,
+        unified,
     )
 }
 
@@ -250,8 +256,14 @@ async fn verify_commit_ref(
     Ok(())
 }
 
-async fn git_diff(repo_path: &Path, base_sha: &str, head_sha: &str) -> Result<String> {
+async fn git_diff(
+    repo_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+    unified: u32,
+) -> Result<String> {
     let range = format!("{base_sha}...{head_sha}");
+    let unified_arg = format!("--unified={unified}");
     let output = run_command(
         "git",
         &[
@@ -262,7 +274,7 @@ async fn git_diff(repo_path: &Path, base_sha: &str, head_sha: &str) -> Result<St
             OsStr::new("--no-ext-diff"),
             OsStr::new("--no-textconv"),
             OsStr::new("--find-renames"),
-            OsStr::new("--unified=10"),
+            OsStr::new(&unified_arg),
             OsStr::new(&range),
         ],
         "generate PR diff",
@@ -278,6 +290,7 @@ fn build_bundle(
     changed_files: Vec<GhChangedFile>,
     discussion_data: GhDiscussionData,
     aggregate_diff: &str,
+    unified: u32,
 ) -> Result<PrImportBundle> {
     let pr = ImportedPullRequest {
         owner: identity.owner().to_string(),
@@ -314,8 +327,12 @@ fn build_bundle(
         pr,
         overview_markdown,
         diff: DiffContext {
-            context_lines: Some(10),
-            context_source: DiffContextSource::GitUnified10,
+            context_lines: Some(unified),
+            context_source: if unified == 10 {
+                DiffContextSource::GitUnified10
+            } else {
+                DiffContextSource::GitUnified
+            },
         },
         files,
         discussions,
@@ -983,6 +1000,7 @@ mod tests {
                 review_thread_pages: vec![graph],
             },
             diff,
+            10,
         )
         .unwrap();
 

@@ -261,7 +261,9 @@ case "$3" in
       refs/discuss/pr-head*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
       *) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
     esac ;;
-  diff) printf '%s\n' 'diff --git a/src/lib.rs b/src/lib.rs
+  diff)
+    case "$*" in *'--unified=4'*) ;; *) printf '%s\n' "missing --unified=4: $*" >&2; exit 1 ;; esac
+    printf '%s\n' 'diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -1 +1 @@
@@ -280,6 +282,7 @@ esac
             &port.to_string(),
             "pr",
             "https://github.com/codesoda/discuss-cli/pull/51",
+            "--unified=4",
         ])
         .env("HOME", &home_dir)
         .env("PATH", &bin_dir)
@@ -298,6 +301,7 @@ esac
     assert_eq!(started["kind"], "session.started");
     assert_eq!(started["payload"]["mode"], "pr");
     assert_eq!(started["payload"]["prImportMode"], "automatic");
+    assert_eq!(started["payload"]["unified"], 4);
     assert_eq!(started["payload"]["files_count"], 2);
     let instructions = started["payload"]["agentInstructions"]
         .as_str()

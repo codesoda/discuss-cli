@@ -120,6 +120,14 @@ pub struct PrArgs {
         help = "Full GitHub pull request URL: https://github.com/OWNER/REPO/pull/NUMBER"
     )]
     pub url: String,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 10,
+        help = "Include N unchanged context lines around each PR diff hunk"
+    )]
+    pub unified: u32,
 }
 
 #[derive(Debug, clap::Args)]
@@ -414,6 +422,23 @@ mod tests {
             pr_args.url,
             "https://github.com/codesoda/discuss-cli/pull/51"
         );
+        assert_eq!(pr_args.unified, 10);
+    }
+
+    #[test]
+    fn parses_pr_subcommand_unified_context_override() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+            "--unified=4",
+        ])
+        .expect("PR unified override should parse");
+
+        let Some(Commands::Pr(pr_args)) = args.command else {
+            panic!("expected pr subcommand");
+        };
+        assert_eq!(pr_args.unified, 4);
     }
 
     #[test]
@@ -437,6 +462,7 @@ mod tests {
             "authenticated gh CLI",
             "load the PR automatically",
             "gh auth login",
+            "--unified <N>",
             "Nothing is posted to GitHub",
             "previews the exact GFM",
         ] {
