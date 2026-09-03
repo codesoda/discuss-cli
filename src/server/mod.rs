@@ -55,9 +55,9 @@ use pages::{
     get_mermaid_js, get_mermaid_shim_js, get_root, post_api_heartbeat,
 };
 use pr::{
-    get_api_pr_draft, post_api_pr_cancel, post_api_pr_confirm, post_api_pr_draft,
-    post_api_pr_import, post_api_pr_prepare, post_api_pr_publication_result, post_api_pr_publish,
-    post_api_pr_summary,
+    delete_api_pr_file_viewed, get_api_pr_draft, post_api_pr_cancel, post_api_pr_confirm,
+    post_api_pr_draft, post_api_pr_file_viewed, post_api_pr_import, post_api_pr_prepare,
+    post_api_pr_publication_result, post_api_pr_publish, post_api_pr_summary,
 };
 use response::{api_error_response, not_found};
 use source::post_api_source;
@@ -250,6 +250,10 @@ fn build_router(app_state: AppState) -> Router {
         .route(
             "/api/pr/import",
             post(post_api_pr_import).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
+        .route(
+            "/api/pr/files/{id}/viewed",
+            post(post_api_pr_file_viewed).delete(delete_api_pr_file_viewed),
         )
         .route("/api/pr/prepare", post(post_api_pr_prepare))
         .route("/api/pr/summary", post(post_api_pr_summary))

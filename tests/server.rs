@@ -4217,6 +4217,37 @@ async fn pr_backend_import_draft_publish_retry_and_success_protocol() {
         json!({"start": 3, "end": 3})
     );
     assert!(snapshot["prSession"].get("secret").is_none());
+    assert!(
+        snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let overview_viewed = post_path_no_body(addr, "/api/pr/files/pr-overview/viewed").await;
+    assert!(
+        overview_viewed.starts_with("HTTP/1.1 404"),
+        "{overview_viewed}"
+    );
+    let viewed = post_path_no_body(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(viewed.starts_with("HTTP/1.1 200"), "{viewed}");
+    let viewed = response_json(&viewed);
+    assert_eq!(viewed["fileId"], diff_file_id);
+    assert_eq!(viewed["headSha"], "b".repeat(40));
+    DateTime::parse_from_rfc3339(viewed["viewedAt"].as_str().unwrap())
+        .expect("viewedAt should be RFC3339");
+    let viewed_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(viewed_snapshot["prSession"]["viewedFiles"][0], viewed);
+
+    let cleared = delete_path(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(cleared.starts_with("HTTP/1.1 200"), "{cleared}");
+    let cleared_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(
+        cleared_snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let local_thread = post_json_path(
         addr,

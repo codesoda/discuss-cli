@@ -440,6 +440,27 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_tracks_viewed_pr_files_and_advances() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("viewedFiles: Array.isArray(rawSession.viewedFiles)"));
+        assert!(page.contains("function installPrFileViewedControl()"));
+        assert!(page.contains("checkbox.type = 'checkbox'"));
+        assert!(page.contains("text.textContent = 'Viewed'"));
+        assert!(page.contains("function nextUnviewedPrFileId(fileId)"));
+        assert!(page.contains("if (candidate.kind === 'diff' && !prViewedFile(candidate.id))"));
+        assert!(page.contains("/api/pr/files/${encodeURIComponent(fileId)}/viewed"));
+        assert!(page.contains("if (nextFileId) switchToFile(nextFileId)"));
+        assert!(page.contains("'pr.file.viewed'"));
+        assert!(page.contains("'pr.file.unviewed'"));
+        assert!(page.contains("className = 'file-viewed-marker'"));
+        assert!(page.contains(
+            "Viewed ${viewed.viewedAt || ''} at ${String(viewed.headSha || '').slice(0, 12)}"
+        ));
+        assert!(!page.contains("file-viewed-marker-check"));
+    }
+
+    #[test]
     fn bundled_template_has_self_contained_github_diff_colors() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 

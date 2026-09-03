@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use axum::Json;
 use axum::body::Bytes;
+use axum::extract::Path;
 use axum::extract::State as AxumState;
 use axum::extract::rejection::JsonRejection;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -17,8 +18,8 @@ use crate::history;
 use crate::pr::{
     ConfirmedDraft, DiffSide, ImportedReviewTarget, MAX_IMPORT_BYTES, PR_OVERVIEW_FILE_ID,
     PendingPublication, PendingSummary, PrDraft, PrDraftDestination, PrDraftItem, PrFileTarget,
-    PrImportBundle, PrPhase, PrPublicationResult, PrPublicationStatus, PrReviewAction, file_id,
-    imported_thread_id,
+    PrImportBundle, PrPhase, PrPublicationResult, PrPublicationStatus, PrReviewAction,
+    PrViewedFile, file_id, imported_thread_id,
 };
 use crate::sse::BroadcastEvent;
 use crate::state::{File, FileId, FileKind, LineRange, Source, Thread, ThreadId, ThreadKind};
@@ -126,6 +127,102 @@ struct PendingResponse {
 struct PublishResponse {
     request_id: String,
     status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewedClearResponse {
+    ok: bool,
+    file_id: FileId,
+}
+
+pub(super) async fn post_api_pr_file_viewed(
+    AxumState(app_state): AxumState<AppState>,
+    Path(file_id): Path<String>,
+) -> Response {
+    let file_id = FileId(file_id);
+    let pr_review = match require_pr(&app_state) {
+        Ok(state) => state,
+        Err(response) => return response,
+    };
+    let mut review = match pr_review.write() {
+        Ok(review) => review,
+        Err(_) => return internal_error("PR state lock poisoned while marking a file viewed"),
+    };
+    if review.phase != PrPhase::Reviewing {
+        return phase_conflict("files can only be marked viewed while reviewing");
+    }
+    if !review
+        .file_targets
+        .values()
+        .any(|target| target.file_id == file_id)
+    {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_pr_file",
+            format!("unknown PR diff fileId: {}", file_id.0),
+        );
+    }
+    if let Some(existing) = review.viewed_files.get(&file_id).cloned() {
+        return Json(existing).into_response();
+    }
+    let Some(head_sha) = review
+        .imported
+        .as_ref()
+        .map(|bundle| bundle.pr.head.sha.clone())
+    else {
+        return phase_conflict("the PR import has not completed");
+    };
+    let viewed = PrViewedFile {
+        file_id: file_id.clone(),
+        viewed_at: Utc::now(),
+        head_sha,
+    };
+    review.viewed_files.insert(file_id, viewed.clone());
+    drop(review);
+    app_state.record_mutation();
+    app_state.bus.publish(BroadcastEvent {
+        kind: "pr.file.viewed".to_string(),
+        payload: serde_json::json!({ "viewedFile": viewed }),
+    });
+    Json(viewed).into_response()
+}
+
+pub(super) async fn delete_api_pr_file_viewed(
+    AxumState(app_state): AxumState<AppState>,
+    Path(file_id): Path<String>,
+) -> Response {
+    let file_id = FileId(file_id);
+    let pr_review = match require_pr(&app_state) {
+        Ok(state) => state,
+        Err(response) => return response,
+    };
+    let mut review = match pr_review.write() {
+        Ok(review) => review,
+        Err(_) => return internal_error("PR state lock poisoned while clearing viewed state"),
+    };
+    if review.phase != PrPhase::Reviewing {
+        return phase_conflict("viewed state can only be cleared while reviewing");
+    }
+    if !review
+        .file_targets
+        .values()
+        .any(|target| target.file_id == file_id)
+    {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_pr_file",
+            format!("unknown PR diff fileId: {}", file_id.0),
+        );
+    }
+    review.viewed_files.remove(&file_id);
+    drop(review);
+    app_state.record_mutation();
+    app_state.bus.publish(BroadcastEvent {
+        kind: "pr.file.unviewed".to_string(),
+        payload: serde_json::json!({ "fileId": file_id }),
+    });
+    Json(ViewedClearResponse { ok: true, file_id }).into_response()
 }
 
 pub(super) async fn post_api_pr_import(

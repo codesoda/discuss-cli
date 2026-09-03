@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -128,6 +129,15 @@ pub struct PrFileLink {
     pub path: String,
 }
 
+/// A changed file explicitly marked as reviewed at one immutable PR head.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrViewedFile {
+    pub file_id: FileId,
+    pub viewed_at: DateTime<Utc>,
+    pub head_sha: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrPublicationError {
@@ -186,6 +196,8 @@ pub struct PrSessionSnapshot {
     pub pr: Option<PrDisplayMetadata>,
     #[serde(default)]
     pub files: Vec<PrFileLink>,
+    #[serde(default)]
+    pub viewed_files: Vec<PrViewedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<PrDraft>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,6 +251,7 @@ pub struct PrReviewState {
     pub import_digest: Option<String>,
     pub file_targets: HashMap<String, PrFileTarget>,
     pub imported_threads: HashMap<ThreadId, ImportedReviewTarget>,
+    pub viewed_files: HashMap<FileId, PrViewedFile>,
     pub draft: Option<PrDraft>,
     pub pending_summary: Option<PendingSummary>,
     pub confirmed: Option<ConfirmedDraft>,
@@ -256,6 +269,7 @@ impl std::fmt::Debug for PrReviewState {
             .field("secret", &"[redacted]")
             .field("phase", &self.phase)
             .field("import_id", &self.import_id)
+            .field("viewed_files", &self.viewed_files)
             .field("draft", &self.draft)
             .field("pending_summary", &self.pending_summary)
             .field("confirmed", &self.confirmed)
@@ -277,6 +291,7 @@ impl PrReviewState {
             import_digest: None,
             file_targets: HashMap::new(),
             imported_threads: HashMap::new(),
+            viewed_files: HashMap::new(),
             draft: None,
             pending_summary: None,
             confirmed: None,
@@ -298,11 +313,14 @@ impl PrReviewState {
             })
             .collect::<Vec<_>>();
         files.sort_by(|left, right| left.key.cmp(&right.key));
+        let mut viewed_files = self.viewed_files.values().cloned().collect::<Vec<_>>();
+        viewed_files.sort_by(|left, right| left.file_id.0.cmp(&right.file_id.0));
         PrSessionSnapshot {
             phase: self.phase,
             url: self.identity.canonical_url().to_string(),
             pr: self.imported.as_ref().map(|bundle| (&bundle.pr).into()),
             files,
+            viewed_files,
             draft: self.draft.clone(),
             publication_result: self.publication_result.clone(),
         }

@@ -17,7 +17,7 @@ pub use session::{
     ConfirmedDraft, ImportedReviewTarget, PendingPublication, PendingSummary, PrDisplayMetadata,
     PrDraft, PrDraftDestination, PrDraftItem, PrFileLink, PrFileTarget, PrPhase,
     PrPublicationError, PrPublicationResult, PrPublicationStatus, PrPublishedLink,
-    PrPublishedReply, PrReviewAction, PrReviewState, PrSessionSnapshot,
+    PrPublishedReply, PrReviewAction, PrReviewState, PrSessionSnapshot, PrViewedFile,
 };
 pub use types::{
     DiffContext, DiffContextSource, DiscussionKind, GithubAuthor, GithubRef, ImportedDiscussion,
