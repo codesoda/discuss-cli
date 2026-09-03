@@ -70,19 +70,16 @@ Pass exactly one full public-GitHub PR URL to the `pr` subcommand:
 discuss pr https://github.com/OWNER/REPO/pull/NUMBER
 ```
 
-Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. PR mode is an agent-mediated protocol, not a direct GitHub client: Discuss owns only local state and the loopback UI/API. It never asks for or stores a token.
+Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. PR mode requires the GitHub CLI to be installed and authenticated. Discuss exits before readiness with installation guidance when `gh` is absent; it never asks for, receives, or stores a token.
 
-On `session.started` with `mode: "pr"`:
+Discuss performs the read-only import itself by shelling directly to authenticated `gh` and `git`. On `session.started` with `mode: "pr"`:
 
-1. Retain the exact `prUrl`, `prSessionSecret`, protected PR endpoint URLs, and `agentInstructions`. Never print or persist the secret.
-2. Follow those instructions literally with the already-authenticated `gh` CLI. Verify auth, fetch metadata and all three discussion classes, fetch GraphQL review-thread state, then use an authenticated temporary filtered clone plus the immutable pull ref to generate one aggregate `git diff --unified=10` **exactly once**. Split only that result into one `diff --git` block per changed path.
-3. Build the schema-v1 overview/import bundle, preserving GitHub IDs, authors, timestamps, URLs, root review-comment IDs, commit SHAs, paths, sides, and line data. POST it to the reported import endpoint with the bearer secret. Retain the concrete overview/diff file IDs returned by the response and echoed in `pr.imported`. Do not post a token or any review content to GitHub.
-4. Verify the temporary clone's base/head commits against fetched metadata. Record `contextLines: 10` and `contextSource: "git-unified-10"`; never run `gh pr diff`, refetch per file, or generate a second diff.
-5. Continue the ordinary take loop for local `thread.created` and `reply.added` events. Everything remains private, including your takes.
-6. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations and POST it to the event's callback with the bearer secret. Do not select items or destinations for the reviewer.
-7. Ignore edit, preview, cancel, and Go back operations; they authorize nothing. Act only on one `pr.publish.requested` event, which is emitted after the reviewer presses **OK** on the exact GFM confirmation screen.
-8. Recheck the PR head SHA before publishing. If stale, publish nothing and report `stale_pr_head`. Otherwise pipe `payload.review.githubRequest` unchanged into the grouped `gh api .../reviews --input -` call, and each reply entry's `githubRequest` unchanged into its root-comment reply call. Keep `operationId`/`commentOperations` only for result bookkeeping; never send those fields to GitHub. Never interpolate bodies into shell flags, invent/approximate a destination silently, convert failures into standalone PR comments, or retry automatically.
-9. POST the structured publication result to the supplied callback. On failure, wait for a reviewer-driven retry and honor completed/unknown operation IDs to prevent duplicates. On success, stop only after `session.done`.
+1. Retain the exact `prUrl`, `prSessionSecret`, protected PR callback URLs, and `agentInstructions`. Never print or persist the secret. `prImportMode` is `"automatic"`; do not fetch the PR, clone it, build an import bundle, or call `/api/pr/import`.
+2. Wait for `pr.imported`, then retain its concrete overview/diff file IDs. Continue the ordinary take loop for local `thread.created` and `reply.added` events. Everything remains private, including your takes.
+3. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations and POST it to the event's callback with the bearer secret. Do not select items or destinations for the reviewer.
+4. Ignore edit, preview, cancel, and Go back operations; they authorize nothing. Act only on one `pr.publish.requested` event, which is emitted after the reviewer presses **OK** on the exact GFM confirmation screen.
+5. Recheck the PR head SHA before publishing. If stale, publish nothing and report `stale_pr_head`. Otherwise pipe `payload.review.githubRequest` unchanged into the grouped `gh api .../reviews --input -` call, and each reply entry's `githubRequest` unchanged into its root-comment reply call. Keep `operationId`/`commentOperations` only for result bookkeeping; never send those fields to GitHub. Never interpolate bodies into shell flags, invent/approximate a destination silently, convert failures into standalone PR comments, or retry automatically.
+6. POST the structured publication result to the supplied callback. On failure, wait for a reviewer-driven retry and honor completed/unknown operation IDs to prevent duplicates. On success, stop only after `session.done`.
 
 The browser's include controls default off. Binary/no-hunk/outdated/ambiguous items stay unpublished with a reason. Standalone issue/PR comments are deliberately out of scope; use the provided GitHub links as the escape hatch.
 

@@ -24,7 +24,7 @@ pub const MAX_DISCUSSION_COMMENTS: usize = 10_000;
 /// Maximum number of review threads seeded by an import.
 pub const MAX_SEED_THREADS: usize = 10_000;
 
-/// Version-one bundle posted by an agent after loading a PR with `gh`.
+/// Version-one bundle built from PR data loaded through `gh`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrImportBundle {

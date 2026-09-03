@@ -158,13 +158,18 @@ async fn run_pr_session<F>(identity: pr::GithubPrUrl, config: &Config, shutdown:
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let bundle = pr::load_pr(&identity).await?;
+    let files_count = bundle.files.len() + 1;
+    let import_body = serde_json::to_vec(&bundle).map_err(|error| DiscussError::PrError {
+        message: format!("could not encode the loaded PR: {error}"),
+    })?;
     let source = Source {
         files: vec![File {
             id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
             path: "pr-overview.md".to_string(),
             kind: FileKind::Markdown,
             content:
-                "# Loading pull request\n\nWaiting for the active agent to import GitHub PR data.\n"
+                "# Loading pull request\n\nDiscuss is importing this pull request through your authenticated `gh` CLI.\n"
                     .to_string(),
         }],
     };
@@ -184,7 +189,15 @@ where
         addr,
         app_state,
         shutdown,
-        pr_session_ready_callback(emitter, ready_state, identity, secret, config.auto_open),
+        pr_session_ready_callback(
+            emitter,
+            ready_state,
+            identity,
+            secret,
+            import_body,
+            files_count,
+            config.auto_open,
+        ),
     )
     .await
 }
@@ -204,6 +217,8 @@ fn pr_session_ready_callback(
     app_state: AppState,
     identity: pr::GithubPrUrl,
     secret: String,
+    import_body: Vec<u8>,
+    files_count: usize,
     auto_open: bool,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
@@ -216,9 +231,7 @@ fn pr_session_ready_callback(
         endpoints["prSummary"] = serde_json::json!(format!("{url}/api/pr/summary"));
         endpoints["prPublicationResult"] =
             serde_json::json!(format!("{url}/api/pr/publication-result"));
-        let instructions = pr::agent_instructions()
-            .replace("<IMPORT_ENDPOINT>", &import_url)
-            .replace("<SESSION_SECRET>", &secret);
+        let instructions = pr::agent_instructions().replace("<SESSION_SECRET>", &secret);
         let payload = serde_json::json!({
             "url": url,
             "apiBaseUrl": url,
@@ -227,8 +240,9 @@ fn pr_session_ready_callback(
             "mode": "pr",
             "prUrl": identity.canonical_url(),
             "prSessionSecret": secret,
+            "prImportMode": "automatic",
             "source_file": "pr-overview.md",
-            "files_count": 1,
+            "files_count": files_count,
             "started_at": started_at.to_rfc3339(),
         });
         if let Err(error) = emitter.emit(&Event {
@@ -238,12 +252,55 @@ fn pr_session_ready_callback(
         }) {
             tracing::warn!(%url, error = %error, "failed to emit PR session.started event");
         }
+        tokio::spawn(post_automatic_pr_import(
+            app_state,
+            import_url,
+            secret,
+            import_body,
+        ));
         let launcher = launch::SystemBrowserLauncher;
         if let Err(error) =
             launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
         {
             tracing::warn!(%url, error = %error, "failed to write listening URL to stderr");
         }
+    }
+}
+
+async fn post_automatic_pr_import(
+    app_state: AppState,
+    import_url: String,
+    secret: String,
+    body: Vec<u8>,
+) {
+    let result = async {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|error| format!("could not create loopback HTTP client: {error}"))?;
+        let response = client
+            .post(import_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .bearer_auth(secret)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| format!("could not reach the local import endpoint: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "response body unavailable".to_string());
+            return Err(format!("local import returned {status}: {detail}"));
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        eprintln!("pull request error: automatic PR import failed: {error}");
+        tracing::error!(%error, "automatic PR import failed");
+        app_state.signal_shutdown();
     }
 }
 

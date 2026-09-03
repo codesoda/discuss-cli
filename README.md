@@ -163,7 +163,7 @@ Diff output is capped at 5 MB to keep the browser responsive. Override with `--m
 discuss pr https://github.com/acme/project/pull/123
 ```
 
-PR mode accepts a full `https://github.com/OWNER/REPO/pull/NUMBER` URL only. The local server does not store a GitHub token or call GitHub itself. Instead, `session.started` gives the active agent authenticated-`gh` instructions and a bearer-protected loopback import endpoint. The agent loads PR metadata and all existing discussion, uses `gh repo clone` plus the immutable PR ref in a temporary filtered clone, and generates the aggregate `git diff --unified=10` exactly once. It splits that result into one review file per changed path and imports a GFM overview plus the diff files into the session.
+PR mode accepts a full `https://github.com/OWNER/REPO/pull/NUMBER` URL only. It requires the [GitHub CLI](https://cli.github.com/) to be installed and authenticated with `gh auth login --hostname github.com`; when `gh` is missing, Discuss exits before starting a server and prints installation commands for macOS, Windows, and Linux. Discuss invokes `gh` directly for read-only GitHub access without requesting, storing, or receiving its token. It loads PR metadata and all existing discussion in parallel, uses `gh repo clone` plus the immutable PR ref in a temporary filtered clone, and generates the aggregate `git diff --unified=10` exactly once. The resulting GFM overview and one diff file per changed path are imported automatically before review begins.
 
 The overview distinguishes issue comments, review summaries, and review threads while preserving authors, timestamps, IDs, and GitHub links. Resolvable inline review discussion is also anchored on its diff. Every textual hunk includes ten unchanged context lines by default; binary and mode-only files remain visible but unanchorable.
 
@@ -183,7 +183,7 @@ Everything created during review stays local by default. Diff file headers inclu
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
 | `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
 | `discuss <file>... diff [args]` | Review files and a git diff together in one session |
-| `discuss pr <full-github-pr-url>` | Private-first GitHub PR review imported and published by the active authenticated-`gh` agent |
+| `discuss pr <full-github-pr-url>` | Load a private-first GitHub PR review automatically through authenticated `gh`; publication remains confirmation-gated |
 | `discuss demo` | Self-contained demo session: bundled example files plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
 | `discuss update` | Check for a newer release and confirm interactively before installing |
 | `discuss update --check` | Check GitHub for a newer release (check only) |
@@ -262,7 +262,7 @@ Agents should use the exact URLs in `session.started.payload.endpoints` rather t
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread; optional `{decision}` body |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
 | `POST` | `/api/source` | Push new markdown into the running session: `{markdown, fileId?, threadAnchors}`. Each active thread on that file needs a new anchor or `"orphaned": true`. Coverage is strict; a partial list is rejected. Success bumps `sourceVersion` and broadcasts `source.updated`. Not supported for image or HTML files. |
-| `POST` | `/api/pr/import` | PR mode only: bearer-protected schema-v1 import assembled from authenticated `gh` output |
+| `POST` | `/api/pr/import` | PR mode only: internal/compatibility bearer-protected schema-v1 import endpoint; normal imports are automatic |
 | `POST` | `/api/pr/summary` | PR mode only: bearer-protected callback for the requested AI review summary |
 | `POST` | `/api/pr/publication-result` | PR mode only: bearer-protected callback reporting the confirmed GitHub publication result |
 | `POST` | `/api/done` | Finish a non-PR review; requires a verdict body when verdict options are configured |
@@ -274,14 +274,14 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, a one-session bearer secret, and exact import/summary/publication-result endpoints. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret, and exact compatibility-import/summary/publication-result endpoints. |
 | `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |
 | `thread.deleted` | Soft-delete | `{threadId}` |
 | `source.updated` | A live source update was applied | `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` |
 | `prompt.suggest_done` | Idle timeout fired (`idle_timeout_secs`, default 600) | Includes `idle_for_secs` |
-| `pr.imported` | Agent import is installed | Concrete overview/changed-file IDs, seeded imported-thread IDs, warnings, and anchoring/publication reminders |
+| `pr.imported` | Discuss's automatic `gh` import is installed | Concrete overview/changed-file IDs, seeded imported-thread IDs, warnings, and anchoring/publication reminders |
 | `pr.summary.requested` | PR reviewer opens Finish review | Agent generates the editable summary and calls the supplied protected callback |
 | `pr.publish.requested` | PR reviewer confirms the exact GFM preview with OK | Exact grouped-review and existing-thread reply operations; agent rechecks the head SHA, publishes with `gh`, then reports the result |
 | `session.done` | Final transcript payload | Includes optional `verdict` for generic sessions or PR draft/publication metadata for a successfully published PR review |

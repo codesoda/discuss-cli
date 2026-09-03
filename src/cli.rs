@@ -90,10 +90,10 @@ the diff together in one session."
     #[command(
         about = "Review a GitHub pull request privately before publishing.",
         long_about = "Review a GitHub pull request privately before publishing.\n\n\
-Accepts a full https://github.com/OWNER/REPO/pull/NUMBER URL only. discuss starts a\n\
-local session and prints machine-readable instructions for the active agent, which uses\n\
-the authenticated gh CLI to import the PR. Nothing is posted to GitHub until the reviewer\n\
-selects items, previews the exact GFM payload, and confirms publication.\n\n\
+Accepts a full https://github.com/OWNER/REPO/pull/NUMBER URL only. discuss uses the\n\
+already-authenticated gh CLI to load the PR automatically; install gh and run `gh auth login`\n\
+first. Nothing is posted to GitHub until the reviewer selects items, previews the exact GFM\n\
+payload, and confirms publication.\n\n\
 Top-level flags must come first: `discuss --no-open pr https://github.com/acme/app/pull/123`."
     )]
     Pr(PrArgs),
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_help_documents_private_first_agent_workflow() {
+    fn pr_help_documents_private_first_automatic_workflow() {
         let mut command = Args::command();
         let pr = command
             .find_subcommand_mut("pr")
@@ -435,8 +435,10 @@ mod tests {
         for expected in [
             "full https://github.com/OWNER/REPO/pull/NUMBER URL only",
             "authenticated gh CLI",
+            "load the PR automatically",
+            "gh auth login",
             "Nothing is posted to GitHub",
-            "previews the exact GFM payload",
+            "previews the exact GFM",
         ] {
             assert!(
                 help.contains(expected),
