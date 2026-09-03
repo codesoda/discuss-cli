@@ -990,15 +990,28 @@
     font-size: 13px;
     cursor: default;
   }
+  body.diff-file #doc-content > h3.diff-file-header-ready { border-radius: 6px; }
   body.diff-file #doc-content > h3[data-anchor-idx]:hover {
     background: var(--diff-file-header-bg);
     outline: none;
   }
+  .diff-file-stats {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .diff-file-additions { color: var(--diff-add-ink); }
+  .diff-file-deletions { color: var(--diff-delete-ink); }
+  .diff-file-status-note { color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 10px; font-weight: 500; }
   .diff-file-actions {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
   }
   .diff-file-comment {
     display: inline-flex;
@@ -3911,10 +3924,42 @@
   }
 
   function installPrFileViewedControl() {
-    document.querySelectorAll('.diff-file-actions').forEach(control => control.remove());
+    document.querySelectorAll('.diff-file-actions, .diff-file-stats').forEach(control => control.remove());
     if (fileKind() !== 'diff') return;
     const heading = document.querySelector('#doc-content > h3');
     if (!heading) return;
+    heading.classList.add('diff-file-header-ready');
+
+    const metadata = heading.nextElementSibling?.tagName === 'P'
+      ? heading.nextElementSibling
+      : null;
+    const stats = document.createElement('span');
+    stats.className = 'diff-file-stats';
+    const metadataText = (metadata?.textContent || heading.dataset.diffMetadata || '').trim();
+    if (metadata) heading.dataset.diffMetadata = metadataText;
+    const counts = metadataText.match(/^\+(\d+)\s+[−-](\d+)(?:\s+·\s+)?(.*)$/);
+    if (counts) {
+      const additions = document.createElement('span');
+      additions.className = 'diff-file-additions';
+      additions.textContent = `+${counts[1]}`;
+      const deletions = document.createElement('span');
+      deletions.className = 'diff-file-deletions';
+      deletions.textContent = `−${counts[2]}`;
+      stats.append(additions, deletions);
+      if (counts[3]) {
+        const note = document.createElement('span');
+        note.className = 'diff-file-status-note';
+        note.textContent = counts[3];
+        stats.appendChild(note);
+      }
+    } else if (metadataText) {
+      const note = document.createElement('span');
+      note.className = 'diff-file-status-note';
+      note.textContent = metadataText;
+      stats.appendChild(note);
+    }
+    heading.appendChild(stats);
+    if (metadata) metadata.remove();
 
     const actions = document.createElement('span');
     actions.className = 'diff-file-actions';

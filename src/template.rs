@@ -463,6 +463,20 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_moves_diff_counts_into_file_header() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("stats.className = 'diff-file-stats'"));
+        assert!(page.contains("metadataText.match(/^\\+(\\d+)\\s+[−-](\\d+)"));
+        assert!(page.contains("additions.className = 'diff-file-additions'"));
+        assert!(page.contains("deletions.className = 'diff-file-deletions'"));
+        assert!(page.contains("heading.appendChild(stats)"));
+        assert!(page.contains("if (metadata) metadata.remove()"));
+        assert!(page.contains("heading.dataset.diffMetadata"));
+        assert!(page.contains(".diff-file-actions, .diff-file-stats"));
+    }
+
+    #[test]
     fn bundled_template_uses_explicit_whole_file_comment_control() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 
