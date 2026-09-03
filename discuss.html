@@ -3863,11 +3863,16 @@
   }
 
   function nextUnviewedPrFileId(fileId) {
-    const start = discussFiles.findIndex(file => String(file.id) === String(fileId));
+    // Follow the rendered tree's depth-first alphabetical order, not the raw
+    // import order. That keeps automatic advancement identical to what the
+    // reviewer sees in the sidebar, including nested folders.
+    const orderedIds = [...document.querySelectorAll('#file-sidebar .file-item')]
+      .map(item => String(item.dataset.fileId || ''));
+    const start = orderedIds.indexOf(String(fileId));
     if (start < 0) return null;
-    for (let index = start + 1; index < discussFiles.length; index += 1) {
-      const candidate = discussFiles[index];
-      if (candidate.kind === 'diff' && !prViewedFile(candidate.id)) return String(candidate.id);
+    for (let index = start + 1; index < orderedIds.length; index += 1) {
+      const candidate = discussFiles.find(file => String(file.id) === orderedIds[index]);
+      if (candidate?.kind === 'diff' && !prViewedFile(candidate.id)) return String(candidate.id);
     }
     return null;
   }

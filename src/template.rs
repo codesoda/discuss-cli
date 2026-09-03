@@ -448,7 +448,9 @@ mod tests {
         assert!(page.contains("checkbox.type = 'checkbox'"));
         assert!(page.contains("text.textContent = 'Viewed'"));
         assert!(page.contains("function nextUnviewedPrFileId(fileId)"));
-        assert!(page.contains("if (candidate.kind === 'diff' && !prViewedFile(candidate.id))"));
+        assert!(page.contains("document.querySelectorAll('#file-sidebar .file-item')"));
+        assert!(page.contains("const start = orderedIds.indexOf(String(fileId))"));
+        assert!(page.contains("candidate?.kind === 'diff' && !prViewedFile(candidate.id)"));
         assert!(page.contains("/api/pr/files/${encodeURIComponent(fileId)}/viewed"));
         assert!(page.contains("if (nextFileId) switchToFile(nextFileId)"));
         assert!(page.contains("'pr.file.viewed'"));
