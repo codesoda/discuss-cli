@@ -37,6 +37,7 @@ pub struct AppState {
     pub(super) verdict_config: Arc<Option<VerdictConfig>>,
     live_frame_url: Arc<Option<String>>,
     pub(crate) pr_review: Option<Arc<std::sync::RwLock<PrReviewState>>>,
+    direct_pr_publication: Arc<AtomicBool>,
     next_thread_number: Arc<AtomicU64>,
     next_agent_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
@@ -66,6 +67,7 @@ impl AppState {
             verdict_config: Arc::new(None),
             live_frame_url: Arc::new(None),
             pr_review: None,
+            direct_pr_publication: Arc::new(AtomicBool::new(false)),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_agent_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
@@ -259,6 +261,15 @@ impl AppState {
 
     pub fn is_pr_session(&self) -> bool {
         self.pr_review.is_some()
+    }
+
+    pub fn with_direct_pr_publication(self) -> Self {
+        self.direct_pr_publication.store(true, Ordering::Relaxed);
+        self
+    }
+
+    pub(super) fn uses_direct_pr_publication(&self) -> bool {
+        self.direct_pr_publication.load(Ordering::Relaxed)
     }
 
     pub(crate) fn set_pr_base_url(&self, base_url: String) {

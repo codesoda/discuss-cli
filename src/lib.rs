@@ -182,6 +182,7 @@ where
     let mut app_state = AppState::for_process()
         .with_source(source)
         .with_pr_session(identity.clone(), secret.clone())
+        .with_direct_pr_publication()
         .with_no_save(config.no_save)
         .with_idle_timeout_secs(config.idle_timeout_secs);
     if let Some(history_dir) = config.history_dir.clone() {

@@ -306,9 +306,10 @@ esac
     let instructions = started["payload"]["agentInstructions"]
         .as_str()
         .expect("PR instructions");
-    assert!(instructions.contains("Discuss itself loads the PR"));
-    assert!(instructions.contains("Do not fetch, clone, build an import bundle"));
+    assert!(instructions.contains("Discuss itself loads the PR and publishes"));
+    assert!(instructions.contains("Do not fetch, clone, publish"));
     assert!(!instructions.contains("gh repo clone"));
+    assert!(!instructions.contains("pr.publish.requested"));
 
     let imported: Value = serde_json::from_str(
         &stdout

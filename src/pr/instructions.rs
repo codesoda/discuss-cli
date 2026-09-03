@@ -36,40 +36,27 @@ pub const GH_GROUPED_REVIEW_COMMAND: &str = "gh api --hostname github.com --meth
 /// Replies to one existing review-comment thread from JSON on stdin.
 pub const GH_REVIEW_REPLY_COMMAND: &str = "gh api --hostname github.com --method POST \"repos/$OWNER/$REPO/pulls/$NUMBER/comments/$ROOT_ID/replies\" --input -";
 
-/// Returns the private-first agent protocol after Discuss automatically loads a PR.
+/// Returns the private-first agent protocol for local takes and review summaries.
 pub fn agent_instructions() -> &'static str {
-    r##"GitHub pull-request review summary and publication protocol
+    r##"GitHub pull-request review assistant protocol
 
-Automatic read-only import
-- Discuss itself loads the PR through the user's authenticated `gh` CLI. Do not fetch, clone, build an import bundle, or call `/api/pr/import`.
+Automatic GitHub I/O
+- Discuss itself loads the PR and publishes an explicitly confirmed review through the user's authenticated `gh` CLI. Do not fetch, clone, publish, build an import bundle, or call `/api/pr/import` or `/api/pr/publication-result`.
 - Wait for `pr.imported`. Its payload identifies the `pr-overview` file and every changed-file ID. Diff `anchorStart`/`anchorEnd` values select a rendered hunk; `lineRange` selects rows within that hunk.
 - Imported `gh-review-thread-*` IDs retain their immutable GitHub root-comment reply targets. Issue comments and review summaries remain linked, read-only context.
 
 Security and privacy
 - The session is private-first. Keep every new question, local thread, answer, summary, and draft local unless the reviewer explicitly includes it and confirms the final preview with OK.
-- Never create a standalone PR comment. Publish a reply only when an imported review thread has a positive root comment database ID. Publish a new inline comment only when its file, side, and changed line resolve confidently.
-- Keep binary, no-hunk, outdated, detached, or otherwise ambiguous targets unpublished and report why; never guess a destination or create a duplicate.
-- Never request, print, persist, or POST a GitHub token to Discuss. Never interpolate review text, summary text, or reply text into shell flags; pass exact structured JSON through stdin with `--input -`.
+- Do not call GitHub yourself. Discuss rechecks the immutable head and publishes only the exact grouped review and thread replies authorized by OK. Standalone PR comments remain unsupported.
+- Keep binary, no-hunk, outdated, detached, or otherwise ambiguous targets unpublished; never guess a destination or create a duplicate.
+- Never request, print, persist, or POST a GitHub token to Discuss.
 
 Prepare and summary
-- The browser starts preparation. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations.
+- On `thread.created` and `reply.added`, add local takes through the reported endpoint map.
+- When `pr.summary.requested` arrives, generate only the requested editable review summary from the supplied local conversations.
 - POST `{ "requestId": "...", "summary": "..." }` as JSON stdin to the event's `summaryUrl`, using `Authorization: Bearer <SESSION_SECRET>`.
 - Do not choose inclusion or publication destinations. The reviewer owns action, summary edits, include/exclude choices, comment edits, confirmation, and cancellation. Include controls default off.
-- Cancel or Go back is not approval and must not publish anything.
-
-Publish and result
-- Act only on one authoritative `pr.publish.requested` event emitted after OK. Use the exact confirmed body and targets in that event.
-- Immediately recheck the head SHA:
-   gh api --hostname github.com "repos/$OWNER/$REPO/pulls/$NUMBER" --jq .head.sha
-  If it differs from the imported/event head SHA, publish nothing and report `stale_pr_head` to `resultUrl`.
-- Group all new inline comments into exactly one review request. Pipe `payload.review.githubRequest` unchanged through stdin; `operationId` and `commentOperations` are local bookkeeping and must not be sent to GitHub:
-   gh api --hostname github.com --method POST "repos/$OWNER/$REPO/pulls/$NUMBER/reviews" --input -
-- Send each selected existing-thread reply separately. Set ROOT_ID from its immutable `rootCommentId` and pipe only that entry's `githubRequest` unchanged through stdin; keep its `operationId` for the result callback:
-   gh api --hostname github.com --method POST "repos/$OWNER/$REPO/pulls/$NUMBER/comments/$ROOT_ID/replies" --input -
-- Never convert a failed reply or unanchorable inline item into a standalone comment. Track operation IDs. Preserve completed and unknown-outcome operations so retries cannot duplicate them.
-- POST one structured succeeded or failed publication result, with `requestId`, created GitHub IDs/URLs, completed operations, unknown operations, or a safe error code/message, as JSON stdin to the event's `resultUrl` using `Authorization: Bearer <SESSION_SECRET>`.
-- If an operation outcome is unknown, publication remains blocked. Reconcile that exact operation against GitHub without creating anything new, then POST a corrected result with the same requestId: mark it completed with its GitHub ID/URL if found, or remove it from unknownOperations only after proving it is safe for a reviewer-driven retry.
-- On failure, wait for a reviewer-driven retry; do not publish automatically. On success, stop when `session.done` is received.
+- Cancel or Go back authorizes nothing. After submitting the summary, wait for more local discussion or `session.done`; publication requires no agent action.
 "##
 }
 
@@ -78,15 +65,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instructions_delegate_only_summary_and_confirmed_publication() {
+    fn instructions_delegate_only_local_takes_and_summary() {
         let instructions = agent_instructions();
-        for command in [
-            GH_HEAD_RECHECK_COMMAND,
-            GH_GROUPED_REVIEW_COMMAND,
-            GH_REVIEW_REPLY_COMMAND,
-        ] {
-            assert!(instructions.contains(command), "missing command: {command}");
-        }
         for command in [
             GH_AUTH_STATUS_COMMAND,
             GH_PR_VIEW_COMMAND,
@@ -97,18 +77,21 @@ mod tests {
             GH_REVIEW_COMMENTS_COMMAND,
             GH_REVIEW_THREADS_COMMAND,
             GH_PR_DIFF_COMMAND,
+            GH_HEAD_RECHECK_COMMAND,
+            GH_GROUPED_REVIEW_COMMAND,
+            GH_REVIEW_REPLY_COMMAND,
         ] {
             assert!(
                 !instructions.contains(command),
                 "automatic import command leaked into agent instructions: {command}"
             );
         }
-        assert!(instructions.contains("Discuss itself loads the PR"));
-        assert!(instructions.contains("Do not fetch, clone, build an import bundle"));
+        assert!(instructions.contains("Discuss itself loads the PR and publishes"));
+        assert!(instructions.contains("Do not fetch, clone, publish"));
         assert!(instructions.contains("Wait for `pr.imported`"));
         assert!(instructions.contains("private-first"));
         assert!(instructions.contains("<SESSION_SECRET>"));
-        assert!(instructions.contains("stale_pr_head"));
-        assert!(instructions.contains("--input -"));
+        assert!(instructions.contains("publication requires no agent action"));
+        assert!(instructions.contains("pr.summary.requested"));
     }
 }

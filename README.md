@@ -171,7 +171,7 @@ The overview distinguishes issue comments, review summaries, and review threads 
 
 Everything created during review stays local by default. Diff file headers include the file's green addition and red deletion totals, are not generic thread click targets, and use a dedicated speech-bubble control for explicit whole-file local comments. Each changed-file header also includes a **Viewed** checkbox; marking it records the server timestamp and current immutable PR head SHA, shows an eye-style viewed indicator in the file tree (not an approval checkmark), and advances to the next unviewed changed file. Viewed progress survives reloads and is included in the final local transcript.
 
-**Finish review** opens a PR-specific editor with Approve, Request changes, and Comment only actions; an editable agent-generated summary; and explicit include controls (off by default) for local responses. A second, text-first GFM screen shows the exact selected destinations and text. Only **OK** emits a publication request to the active agent. New inline comments are grouped into one GitHub review wherever possible, while replies target only confidently resolved existing review threads. Unanchorable, binary, outdated, or ambiguous items remain unpublished with a reason. Failures preserve the draft for retry; success makes the session read-only. Standalone PR comments are intentionally out of scope.
+**Finish review** opens a PR-specific editor with Approve, Request changes, and Comment only actions; an editable agent-generated summary; and explicit include controls (off by default) for local responses. A second, text-first GFM screen shows the exact selected destinations and text. Only **OK** authorizes Discuss to recheck the PR head and publish through the authenticated `gh` CLI. New inline comments are grouped into one GitHub review wherever possible, while replies target only confidently resolved existing review threads. Unanchorable, binary, outdated, or ambiguous items remain unpublished with a reason. Failures preserve the draft for retry; success makes the session read-only. Standalone PR comments are intentionally out of scope.
 
 `--verdict-options`, extra file arguments, shortened PR references, GitHub Enterprise URLs, and separate OAuth/token configuration are not supported in PR mode.
 
@@ -267,7 +267,7 @@ Agents should use the exact URLs in `session.started.payload.endpoints` rather t
 | `POST` | `/api/source` | Push new markdown into the running session: `{markdown, fileId?, threadAnchors}`. Each active thread on that file needs a new anchor or `"orphaned": true`. Coverage is strict; a partial list is rejected. Success bumps `sourceVersion` and broadcasts `source.updated`. Not supported for image or HTML files. |
 | `POST` | `/api/pr/import` | PR mode only: internal/compatibility bearer-protected schema-v1 import endpoint; normal imports are automatic |
 | `POST` | `/api/pr/summary` | PR mode only: bearer-protected callback for the requested AI review summary |
-| `POST` | `/api/pr/publication-result` | PR mode only: bearer-protected callback reporting the confirmed GitHub publication result |
+| `POST` | `/api/pr/publication-result` | PR mode only: internal/compatibility callback for applying a GitHub publication result |
 | `POST` | `/api/done` | Finish a non-PR review; requires a verdict body when verdict options are configured |
 | `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` or `"agent"`; `"prepopulated"` is 403) |
 
@@ -277,7 +277,7 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret, and exact compatibility-import/summary/publication-result endpoints. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret for summary callbacks, and compatibility import/publication-result endpoints. |
 | `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |
@@ -286,7 +286,7 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 | `prompt.suggest_done` | Idle timeout fired (`idle_timeout_secs`, default 600) | Includes `idle_for_secs` |
 | `pr.imported` | Discuss's automatic `gh` import is installed | Concrete overview/changed-file IDs, seeded imported-thread IDs, warnings, and anchoring/publication reminders |
 | `pr.summary.requested` | PR reviewer opens Finish review | Agent generates the editable summary and calls the supplied protected callback |
-| `pr.publish.requested` | PR reviewer confirms the exact GFM preview with OK | Exact grouped-review and existing-thread reply operations; agent rechecks the head SHA, publishes with `gh`, then reports the result |
+| `pr.publish.requested` | Compatibility/test publication mode only | Exact grouped-review and existing-thread reply operations; normal CLI PR sessions publish directly through `gh` after OK |
 | `session.done` | Final transcript payload | Includes optional `verdict` for generic sessions or PR draft/publication metadata for a successfully published PR review |
 
 Draft keystrokes and agent takes broadcast via SSE only — they never surface on stdout.

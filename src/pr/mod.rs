@@ -3,6 +3,7 @@
 pub mod diff_map;
 pub mod instructions;
 pub mod loader;
+pub mod publisher;
 pub mod session;
 pub mod types;
 pub mod url;
@@ -15,6 +16,7 @@ pub use instructions::{
     GH_REVIEW_THREADS_COMMAND, GH_REVIEWS_COMMAND, agent_instructions,
 };
 pub use loader::{ensure_gh_available, load_pr};
+pub use publisher::{DirectPublication, DirectReply, publish};
 pub use session::{
     ConfirmedDraft, ImportedReviewTarget, PendingPublication, PendingSummary, PrDisplayMetadata,
     PrDraft, PrDraftDestination, PrDraftItem, PrFileLink, PrFileTarget, PrPhase,

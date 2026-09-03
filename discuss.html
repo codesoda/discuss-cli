@@ -6993,7 +6993,7 @@
     const unknownOutcomes = Array.isArray(result?.unknownOperations) ? result.unknownOperations : [];
     if (status) {
       status.textContent = unknownOutcomes.length
-        ? 'Retry is blocked until the agent reconciles the unknown GitHub operation outcomes. Your draft remains saved.'
+        ? 'Retry is blocked until the unknown GitHub operation outcomes are reconciled. Your draft remains saved.'
         : 'Your action, summary, comment text, and include choices remain in the saved draft.';
     }
     if (prModalState.confirmation && !unknownOutcomes.length) {

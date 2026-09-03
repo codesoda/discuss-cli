@@ -16,10 +16,10 @@ use sha2::{Digest, Sha256};
 use crate::events::{Event, EventKind};
 use crate::history;
 use crate::pr::{
-    ConfirmedDraft, DiffSide, ImportedReviewTarget, MAX_IMPORT_BYTES, PR_OVERVIEW_FILE_ID,
-    PendingPublication, PendingSummary, PrDraft, PrDraftDestination, PrDraftItem, PrFileTarget,
-    PrImportBundle, PrPhase, PrPublicationResult, PrPublicationStatus, PrReviewAction,
-    PrViewedFile, file_id, imported_thread_id,
+    ConfirmedDraft, DiffSide, DirectPublication, DirectReply, ImportedReviewTarget,
+    MAX_IMPORT_BYTES, PR_OVERVIEW_FILE_ID, PendingPublication, PendingSummary, PrDraft,
+    PrDraftDestination, PrDraftItem, PrFileTarget, PrImportBundle, PrPhase, PrPublicationResult,
+    PrPublicationStatus, PrReviewAction, PrViewedFile, file_id, imported_thread_id,
 };
 use crate::sse::BroadcastEvent;
 use crate::state::{File, FileId, FileKind, LineRange, Source, Thread, ThreadId, ThreadKind};
@@ -1025,6 +1025,7 @@ pub(super) async fn post_api_pr_publish(
     let mut comments = Vec::new();
     let mut comment_operations = Vec::new();
     let mut replies = Vec::new();
+    let mut direct_replies = Vec::new();
     let mut expected_replies = HashMap::new();
     for item in draft.items.iter().filter(|item| item.include) {
         match &item.destination {
@@ -1046,11 +1047,17 @@ pub(super) async fn post_api_pr_publish(
                 if !completed.contains(&item.id) =>
             {
                 expected_replies.insert(item.id.clone(), *root_comment_id);
+                let github_request = serde_json::json!({ "body": item.text });
                 replies.push(serde_json::json!({
                     "operationId": item.id,
                     "rootCommentId": root_comment_id,
-                    "githubRequest": { "body": item.text },
+                    "githubRequest": github_request,
                 }));
+                direct_replies.push(DirectReply {
+                    operation_id: item.id.clone(),
+                    root_comment_id: *root_comment_id,
+                    request: github_request,
+                });
             }
             _ => {}
         }
@@ -1062,6 +1069,22 @@ pub(super) async fn post_api_pr_publish(
         completed.contains("review"),
     );
     let request_id = random_id("pr-publish");
+    let review_request = expects_review.then(|| {
+        serde_json::json!({
+            "event": draft.action.github_event(),
+            "body": draft.summary,
+            "comments": comments,
+        })
+    });
+    let direct_publication = DirectPublication {
+        request_id: request_id.clone(),
+        owner: bundle.pr.owner.clone(),
+        repo: bundle.pr.repo.clone(),
+        number: bundle.pr.number,
+        head_sha: bundle.pr.head.sha.clone(),
+        review: review_request.clone(),
+        replies: direct_replies,
+    };
     let result_url = callback_url(
         review.api_base_url.as_deref(),
         &headers,
@@ -1076,15 +1099,11 @@ pub(super) async fn post_api_pr_publish(
             "url": bundle.pr.url,
         },
         "headSha": bundle.pr.head.sha,
-        "review": if expects_review { serde_json::json!({
+        "review": review_request.map(|github_request| serde_json::json!({
             "operationId": "review",
-            "githubRequest": {
-                "event": draft.action.github_event(),
-                "body": draft.summary,
-                "comments": comments,
-            },
+            "githubRequest": github_request,
             "commentOperations": comment_operations,
-        }) } else { serde_json::Value::Null },
+        })),
         "replies": replies,
         "resultUrl": result_url,
     });
@@ -1099,9 +1118,12 @@ pub(super) async fn post_api_pr_publish(
     });
     // Keep any links from completed operations on a prior failed attempt so a
     // later retry can present one complete submitted result.
+    let secret = review.secret.clone();
     drop(review);
 
-    if let Err(error) = app_state.emitter.emit(&Event {
+    if app_state.uses_direct_pr_publication() {
+        tokio::spawn(publish_directly(direct_publication, result_url, secret));
+    } else if let Err(error) = app_state.emitter.emit(&Event {
         kind: EventKind::PrPublishRequested,
         at: Utc::now(),
         payload,
@@ -1114,6 +1136,40 @@ pub(super) async fn post_api_pr_publish(
         status: "publishing",
     })
     .into_response()
+}
+
+async fn publish_directly(publication: DirectPublication, result_url: String, secret: String) {
+    let result = crate::pr::publish(publication).await;
+    let body = match serde_json::to_vec(&result) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(%error, "could not encode direct PR publication result");
+            return;
+        }
+    };
+    let client = match reqwest::Client::builder().no_proxy().build() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::error!(%error, "could not create direct PR publication callback client");
+            return;
+        }
+    };
+    let response = client
+        .post(result_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .bearer_auth(secret)
+        .body(body)
+        .send()
+        .await;
+    match response {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            tracing::error!(status = %response.status(), "direct PR publication callback was rejected");
+        }
+        Err(error) => {
+            tracing::error!(%error, "direct PR publication callback failed");
+        }
+    }
 }
 
 pub(super) async fn post_api_pr_publication_result(
