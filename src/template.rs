@@ -452,7 +452,11 @@ mod tests {
         assert!(page.contains("const start = orderedIds.indexOf(String(fileId))"));
         assert!(page.contains("candidate?.kind === 'diff' && !prViewedFile(candidate.id)"));
         assert!(page.contains("/api/pr/files/${encodeURIComponent(fileId)}/viewed"));
-        assert!(page.contains("if (nextFileId) switchToFile(nextFileId)"));
+        assert!(page.contains("async function animateDiffHeaderIntoFileList(fileId)"));
+        assert!(page.contains("'(prefers-reduced-motion: reduce)'"));
+        assert!(page.contains("ghost.className = 'diff-file-close-ghost'"));
+        assert!(page.contains("await animateDiffHeaderIntoFileList(fileId)"));
+        assert!(page.contains("switchToFile(nextFileId)"));
         assert!(page.contains("'pr.file.viewed'"));
         assert!(page.contains("'pr.file.unviewed'"));
         assert!(page.contains("className = 'file-viewed-marker'"));

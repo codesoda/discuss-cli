@@ -1042,6 +1042,28 @@
   .pr-file-viewed-control input { margin: 0; accent-color: var(--accent); cursor: pointer; }
   .pr-file-viewed-control .viewed-meta { color: var(--muted); font-size: 10px; font-weight: 400; }
   .pr-file-viewed-control.busy { opacity: 0.65; }
+  .diff-file-close-ghost {
+    position: fixed;
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px 12px;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--diff-file-header-bg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: normal;
+    white-space: nowrap;
+    pointer-events: none;
+    transform-origin: center;
+  }
   body.diff-file #doc-content > h3 + p {
     margin: 0;
     padding: 6px 12px;
@@ -3923,6 +3945,63 @@
     return [when, sha].filter(Boolean).join(' · ');
   }
 
+  async function animateDiffHeaderIntoFileList(fileId) {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const heading = document.querySelector('#doc-content > h3.diff-file-header-ready');
+    const item = [...document.querySelectorAll('#file-sidebar .file-item')]
+      .find(candidate => String(candidate.dataset.fileId) === String(fileId));
+    if (!heading || !item || typeof heading.animate !== 'function') return;
+
+    item.scrollIntoView({ block: 'nearest' });
+    const sourceRect = heading.getBoundingClientRect();
+    const name = item.querySelector('.file-name');
+    const nameRect = name?.getBoundingClientRect();
+    const targetRect = nameRect?.width && nameRect?.height ? nameRect : item.getBoundingClientRect();
+    if (!sourceRect.width || !sourceRect.height || !targetRect.width || !targetRect.height) return;
+
+    const ghost = heading.cloneNode(true);
+    ghost.querySelector('.diff-file-actions')?.remove();
+    ghost.className = 'diff-file-close-ghost';
+    Object.assign(ghost.style, {
+      top: `${sourceRect.top}px`,
+      left: `${sourceRect.left}px`,
+      width: `${sourceRect.width}px`,
+      height: `${sourceRect.height}px`,
+    });
+    ghost.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(ghost);
+
+    const translateX = targetRect.left + targetRect.width / 2 - (sourceRect.left + sourceRect.width / 2);
+    const translateY = targetRect.top + targetRect.height / 2 - (sourceRect.top + sourceRect.height / 2);
+    const scaleX = Math.max(0.08, Math.min(1, targetRect.width / sourceRect.width));
+    const scaleY = Math.max(0.2, Math.min(1, targetRect.height / sourceRect.height));
+    const animation = ghost.animate([
+      { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+      { transform: `translate(${translateX * 0.12}px, ${translateY * 0.12}px) scale(0.96)`, opacity: 1, offset: 0.22 },
+      { transform: `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`, opacity: 0.18 },
+    ], {
+      duration: 380,
+      easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+      fill: 'forwards',
+    });
+    heading.animate([
+      { opacity: 1, transform: 'scale(1)' },
+      { opacity: 0, transform: 'scale(0.985)' },
+    ], { duration: 180, easing: 'ease-out', fill: 'forwards' });
+    try {
+      await animation.finished;
+    } catch (_) {
+      // Navigation or teardown may cancel the decorative transition.
+    } finally {
+      ghost.remove();
+    }
+    item.animate?.([
+      { transform: 'scale(1)' },
+      { transform: 'scale(1.035)' },
+      { transform: 'scale(1)' },
+    ], { duration: 180, easing: 'ease-out' });
+  }
+
   function installPrFileViewedControl() {
     document.querySelectorAll('.diff-file-actions, .diff-file-stats').forEach(control => control.remove());
     if (fileKind() !== 'diff') return;
@@ -4011,8 +4090,12 @@
             setLocalPrViewedFile(record);
             updateFileSidebar();
             const nextFileId = nextUnviewedPrFileId(fileId);
-            if (nextFileId) switchToFile(nextFileId);
-            else installPrFileViewedControl();
+            if (nextFileId) {
+              await animateDiffHeaderIntoFileList(fileId);
+              if (activeFileId === fileId) switchToFile(nextFileId);
+            } else {
+              installPrFileViewedControl();
+            }
           } else {
             await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`, { method: 'DELETE' });
             clearLocalPrViewedFile(fileId);
