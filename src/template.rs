@@ -463,6 +463,20 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_uses_explicit_whole_file_comment_control() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("comment.className = 'diff-file-comment'"));
+        assert!(page.contains("comment.title = 'Comment on this file as a whole'"));
+        assert!(page.contains("openNewThreadEditor(anchor, anchor)"));
+        assert!(page.contains("if (e.target.closest('.diff-file-actions')) return;"));
+        assert!(page.contains("const isDiffFileHeader = fileKind() === 'diff'"));
+        assert!(page.contains("if (isDiffFileHeader) return;"));
+        assert!(page.contains("body.diff-file #doc-content > h3[data-anchor-idx]:hover"));
+        assert!(page.contains("outline: none;"));
+    }
+
+    #[test]
     fn bundled_template_has_self_contained_github_diff_colors() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 

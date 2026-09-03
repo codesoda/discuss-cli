@@ -988,12 +988,37 @@
     color: var(--ink);
     font-family: var(--mono);
     font-size: 13px;
+    cursor: default;
   }
+  body.diff-file #doc-content > h3[data-anchor-idx]:hover {
+    background: var(--diff-file-header-bg);
+    outline: none;
+  }
+  .diff-file-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .diff-file-comment {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .diff-file-comment:hover { background: var(--accent-hover); color: var(--ink); }
+  .diff-file-comment svg { width: 16px; height: 16px; }
   .pr-file-viewed-control {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    margin-left: auto;
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     font-size: 12px;
@@ -3886,57 +3911,80 @@
   }
 
   function installPrFileViewedControl() {
-    document.querySelectorAll('.pr-file-viewed-control').forEach(control => control.remove());
-    const session = loadState().prSession;
-    if (!session || fileKind() !== 'diff') return;
+    document.querySelectorAll('.diff-file-actions').forEach(control => control.remove());
+    if (fileKind() !== 'diff') return;
     const heading = document.querySelector('#doc-content > h3');
     if (!heading) return;
-    const viewed = prViewedFile();
-    const label = document.createElement('label');
-    label.className = 'pr-file-viewed-control';
-    label.title = viewed
-      ? `Viewed at ${viewed.viewedAt} for PR head ${viewed.headSha}`
-      : 'Mark this changed file as viewed and continue to the next unviewed file';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = !!viewed;
-    checkbox.setAttribute('aria-label', `Mark ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'file'} as viewed`);
-    const text = document.createElement('span');
-    text.textContent = 'Viewed';
-    const meta = document.createElement('span');
-    meta.className = 'viewed-meta';
-    meta.textContent = formatViewedMeta(viewed);
-    label.append(checkbox, text, meta);
-    ['click', 'pointerdown'].forEach(type => label.addEventListener(type, event => event.stopPropagation()));
-    checkbox.addEventListener('change', async event => {
+
+    const actions = document.createElement('span');
+    actions.className = 'diff-file-actions';
+    const comment = document.createElement('button');
+    comment.type = 'button';
+    comment.className = 'diff-file-comment';
+    comment.title = 'Comment on this file as a whole';
+    comment.setAttribute('aria-label', `Comment on ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'file'} as a whole`);
+    comment.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M2 2.5h12v8H8l-3.5 3v-3H2z"/></svg>';
+    comment.addEventListener('pointerdown', event => event.stopPropagation());
+    comment.addEventListener('click', event => {
+      event.preventDefault();
       event.stopPropagation();
-      const fileId = activeFileId;
-      const markViewed = checkbox.checked;
-      checkbox.disabled = true;
-      label.classList.add('busy');
-      try {
-        if (markViewed) {
-          const record = await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`);
-          setLocalPrViewedFile(record);
-          updateFileSidebar();
-          const nextFileId = nextUnviewedPrFileId(fileId);
-          if (nextFileId) switchToFile(nextFileId);
-          else installPrFileViewedControl();
-        } else {
-          await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`, { method: 'DELETE' });
-          clearLocalPrViewedFile(fileId);
-          updateFileSidebar();
-          installPrFileViewedControl();
-        }
-      } catch (error) {
-        console.error('Failed to update viewed file state:', error);
-        checkbox.checked = !markViewed;
-        checkbox.disabled = false;
-        label.classList.remove('busy');
-        meta.textContent = 'Could not save — retry';
-      }
+      const anchor = parseInt(heading.getAttribute('data-anchor-idx'), 10);
+      if (!Number.isFinite(anchor)) return;
+      if (!showAllBtn.classList.contains('on')) closeAllThreads();
+      openNewThreadEditor(anchor, anchor);
     });
-    heading.appendChild(label);
+    actions.appendChild(comment);
+
+    const session = loadState().prSession;
+    if (session) {
+      const viewed = prViewedFile();
+      const label = document.createElement('label');
+      label.className = 'pr-file-viewed-control';
+      label.title = viewed
+        ? `Viewed at ${viewed.viewedAt} for PR head ${viewed.headSha}`
+        : 'Mark this changed file as viewed and continue to the next unviewed file';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!viewed;
+      checkbox.setAttribute('aria-label', `Mark ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'file'} as viewed`);
+      const text = document.createElement('span');
+      text.textContent = 'Viewed';
+      const meta = document.createElement('span');
+      meta.className = 'viewed-meta';
+      meta.textContent = formatViewedMeta(viewed);
+      label.append(checkbox, text, meta);
+      ['click', 'pointerdown'].forEach(type => label.addEventListener(type, event => event.stopPropagation()));
+      checkbox.addEventListener('change', async event => {
+        event.stopPropagation();
+        const fileId = activeFileId;
+        const markViewed = checkbox.checked;
+        checkbox.disabled = true;
+        label.classList.add('busy');
+        try {
+          if (markViewed) {
+            const record = await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`);
+            setLocalPrViewedFile(record);
+            updateFileSidebar();
+            const nextFileId = nextUnviewedPrFileId(fileId);
+            if (nextFileId) switchToFile(nextFileId);
+            else installPrFileViewedControl();
+          } else {
+            await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`, { method: 'DELETE' });
+            clearLocalPrViewedFile(fileId);
+            updateFileSidebar();
+            installPrFileViewedControl();
+          }
+        } catch (error) {
+          console.error('Failed to update viewed file state:', error);
+          checkbox.checked = !markViewed;
+          checkbox.disabled = false;
+          label.classList.remove('busy');
+          meta.textContent = 'Could not save — retry';
+        }
+      });
+      actions.insertBefore(label, comment);
+    }
+    heading.appendChild(actions);
   }
 
   function applyPrFileViewedEvent(payload) {
@@ -6148,6 +6196,7 @@
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
     if (e.target.closest('#toast-host')) return;
+    if (e.target.closest('.diff-file-actions')) return;
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
@@ -6162,6 +6211,10 @@
 
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
     if (anchorEl) {
+      const isDiffFileHeader = fileKind() === 'diff'
+        && anchorEl.tagName === 'H3'
+        && anchorEl.parentElement?.id === 'doc-content';
+      if (isDiffFileHeader) return;
       const idx = parseInt(anchorEl.getAttribute('data-anchor-idx'));
       const existingThreads = Array.from(document.querySelectorAll('.thread')).filter(t => {
         const s = parseInt(t.getAttribute('data-anchor-start'));
