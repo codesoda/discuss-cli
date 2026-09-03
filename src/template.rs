@@ -485,7 +485,11 @@ mod tests {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 
         assert!(page.contains("comment.className = 'diff-file-comment'"));
-        assert!(page.contains("comment.title = 'Comment on this file as a whole'"));
+        assert!(page.contains(
+            "comment.title = 'Start a thread on the file itself, not a particular line'"
+        ));
+        assert!(page.contains("body.diff-file #doc-content > h3 {"));
+        assert!(page.contains("position: sticky;"));
         assert!(page.contains("openNewThreadEditor(anchor, anchor)"));
         assert!(page.contains("if (e.target.closest('.diff-file-actions')) return;"));
         assert!(page.contains("const isDiffFileHeader = fileKind() === 'diff'"));

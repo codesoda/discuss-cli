@@ -977,6 +977,9 @@
   #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
   body.diff-file #doc-content > h3 {
+    position: sticky;
+    top: 0;
+    z-index: 8;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -4045,8 +4048,8 @@
     const comment = document.createElement('button');
     comment.type = 'button';
     comment.className = 'diff-file-comment';
-    comment.title = 'Comment on this file as a whole';
-    comment.setAttribute('aria-label', `Comment on ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'file'} as a whole`);
+    comment.title = 'Start a thread on the file itself, not a particular line';
+    comment.setAttribute('aria-label', `Start a thread on ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'the file'} itself, not a particular line`);
     comment.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M2 2.5h12v8H8l-3.5 3v-3H2z"/></svg>';
     comment.addEventListener('pointerdown', event => event.stopPropagation());
     comment.addEventListener('click', event => {
