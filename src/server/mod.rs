@@ -396,6 +396,28 @@ async fn reject_during_shutdown(
             "discuss session is shutting down",
         );
     }
+    let read_only = matches!(
+        *request.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    // A successful PR result remains visible for two seconds before shared
+    // demo shutdown. Freeze every scenario during that grace period. The
+    // Done and the authenticated publication-result callback may retry local
+    // transcript emission after failure; their finalization claims still
+    // reject a different demo scenario owner.
+    if app_state.done_started()
+        && !read_only
+        && !matches!(
+            request.uri().path(),
+            "/api/done" | "/api/pr/publication-result"
+        )
+    {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "review_complete",
+            "this review session is already complete",
+        );
+    }
 
     next.run(request).await
 }

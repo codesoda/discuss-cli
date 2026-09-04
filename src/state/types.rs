@@ -60,6 +60,17 @@ impl From<&File> for FileMeta {
     }
 }
 
+/// One locally hosted scenario exposed by the bundled demo launcher.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoScenarioLink {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub url: String,
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadKind {

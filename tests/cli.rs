@@ -692,7 +692,6 @@ fn cli_no_save_flag_suppresses_history_archive() {
 
 #[test]
 fn cli_demo_serves_bundled_session_with_normal_stdout_semantics() {
-    let port = free_port();
     let temp_dir = tempdir().expect("tempdir should be created");
     let home_dir = temp_dir.path().join("home");
     fs::create_dir(&home_dir).expect("home dir should be created");
@@ -700,8 +699,6 @@ fn cli_demo_serves_bundled_session_with_normal_stdout_semantics() {
     // Top-level flags must precede the subcommand.
     let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
         .arg("--no-open")
-        .arg("--port")
-        .arg(port.to_string())
         .arg("demo")
         .current_dir(temp_dir.path())
         .env("HOME", &home_dir)
@@ -719,7 +716,15 @@ fn cli_demo_serves_bundled_session_with_normal_stdout_semantics() {
         .recv_timeout(STARTUP_TIMEOUT)
         .expect("listening line should be written")
         .expect("stderr line should be readable");
-    assert_eq!(line, format!("review UI/API: http://127.0.0.1:{port}\n"));
+    let base_url = line
+        .strip_prefix("review UI/API: ")
+        .expect("listening line prefix")
+        .trim()
+        .to_string();
+    let port = url::Url::parse(&base_url)
+        .expect("listening URL")
+        .port()
+        .expect("listening port");
 
     let started_line = stdout_rx
         .recv_timeout(STARTUP_TIMEOUT)
@@ -730,7 +735,6 @@ fn cli_demo_serves_bundled_session_with_normal_stdout_semantics() {
     assert_eq!(started["payload"]["mode"], "demo");
     assert_eq!(started["payload"]["source_file"], "demo");
     assert_eq!(started["payload"]["files_count"], 6);
-    let base_url = format!("http://127.0.0.1:{port}");
     assert_endpoint_contract(&started["payload"], &base_url);
 
     // Bundled page: sidebar shell plus the seeded agent threads.

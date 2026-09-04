@@ -9,12 +9,20 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use axum::Router;
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use axum::routing::get;
 use chrono::Utc;
+use tokio::net::TcpListener;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
 
 use crate::blocks::markdown_blocks;
+use crate::pr::{GithubPrUrl, PrImportBundle};
 use crate::sse::BroadcastEvent;
 use crate::state::{File, FileId, FileKind, Source, Take, Thread, ThreadId, ThreadKind};
+use crate::{DiscussError, Result};
 
 use super::app_state::AppState;
 
@@ -47,6 +55,15 @@ const DEMO_NOTES_MD: &str = include_str!("../../assets/demo/notes.md");
 const DEMO_RETRY_DIFF: &str = include_str!("../../assets/demo/retry.diff");
 const DEMO_MOCKUP_PNG: &[u8] = include_bytes!("../../assets/demo/mockup.png");
 const DEMO_PROTOTYPE_HTML: &str = include_str!("../../assets/demo/prototype.html");
+const DEMO_PR_IMPORT_JSON: &[u8] = include_bytes!("../../assets/demo/example-pr.json");
+const DEMO_LOCAL_APP_HTML: &str = include_str!("../../assets/demo/local-app.html");
+const DEMO_LOCAL_APP_CSS: &str = include_str!("../../assets/demo/local-app.css");
+const DEMO_LOCAL_APP_JS: &str = include_str!("../../assets/demo/local-app.js");
+
+pub const DEMO_PR_URL: &str = "https://github.com/demo-only/ledgerly/pull/56";
+pub const DEMO_PR_IMPORTED_THREAD_ID: &str = "gh-review-thread-900003";
+pub const DEMO_PR_LOCAL_TAKE: &str = "Demo agent — I tied this sleep to the shared 30-second deadline and added a test for the complete retry window. This local take is excluded from the simulated GitHub reply until you choose Include in Finish Review.";
+pub(super) const DEMO_PR_SUMMARY: &str = "Demo review: the bounded retry window and coverage look ready for a staged rollout. Confirm the 20% provider-capacity reserve during Stage 2 monitoring.";
 
 /// One pre-seeded agent thread anchored to a deliberately revised passage.
 /// Anchors are 1-based block indices into `markdown_blocks(content)`; the
@@ -167,6 +184,103 @@ pub fn demo_source() -> (Source, HashMap<FileId, (Vec<u8>, &'static str)>) {
     );
 
     (Source { files }, file_bytes)
+}
+
+/// Returns and validates the deterministic synthetic PR import used by the
+/// Example PR scenario. The fixture is decoded locally and never reaches the
+/// real loader or an authenticated GitHub command.
+pub fn demo_pr_import() -> Result<(GithubPrUrl, Vec<u8>)> {
+    let identity = GithubPrUrl::parse(DEMO_PR_URL)?;
+    let bundle: PrImportBundle =
+        serde_json::from_slice(DEMO_PR_IMPORT_JSON).map_err(|error| DiscussError::ConfigError {
+            message: format!("bundled demo PR fixture is invalid JSON: {error}"),
+        })?;
+    bundle.validate(&identity)?;
+    Ok((identity, DEMO_PR_IMPORT_JSON.to_vec()))
+}
+
+/// Serves the bundled mini app entirely in process. Root-relative assets and
+/// the app's `/api/dashboard` route deliberately share this upstream origin;
+/// every other GET is the SPA document so pushState routes survive reloads.
+pub async fn serve_demo_app_listener(
+    listener: TcpListener,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let listening_addr = listener
+        .local_addr()
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
+            source,
+        })?;
+    if listening_addr.ip() != std::net::Ipv4Addr::LOCALHOST {
+        return Err(DiscussError::ServerBindError {
+            addr: listening_addr,
+            source: std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                "discuss only binds to 127.0.0.1",
+            ),
+        });
+    }
+
+    let app = Router::new()
+        .route("/demo-app.css", get(demo_app_css))
+        .route("/demo-app.js", get(demo_app_js))
+        .route("/api/dashboard", get(demo_app_dashboard))
+        .fallback(get(demo_app_page));
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            while shutdown.changed().await.is_ok() {
+                if *shutdown.borrow() {
+                    break;
+                }
+            }
+        })
+        .await
+        .map_err(|source| DiscussError::ServerBindError {
+            addr: listening_addr,
+            source,
+        })
+}
+
+async fn demo_app_page() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-store"),
+            ("x-frame-options", "DENY"),
+            (
+                "content-security-policy",
+                "default-src 'self'; frame-ancestors 'none'",
+            ),
+        ],
+        DEMO_LOCAL_APP_HTML,
+    )
+}
+
+async fn demo_app_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        DEMO_LOCAL_APP_CSS,
+    )
+}
+
+async fn demo_app_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        DEMO_LOCAL_APP_JS,
+    )
+}
+
+async fn demo_app_dashboard() -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "status": "local API connected",
+        "recoveryRate": "79%",
+        "retryBudget": "10 req/s",
+    }))
 }
 
 /// Seeds one agent-authored thread per `DEMO_SEEDS` entry, each with its
@@ -470,6 +584,37 @@ mod tests {
         assert!(!DEMO_PROTOTYPE_HTML.contains("src="));
         assert!(!DEMO_PROTOTYPE_HTML.contains("href="));
         assert!(DEMO_PROTOTYPE_HTML.contains("<style>"));
+    }
+
+    #[test]
+    fn synthetic_pr_fixture_uses_real_validated_contracts() {
+        let (identity, bytes) = demo_pr_import().expect("demo PR fixture should validate");
+        assert_eq!(identity.canonical_url(), DEMO_PR_URL);
+        let bundle: PrImportBundle = serde_json::from_slice(&bytes).expect("fixture JSON");
+        assert_eq!(bundle.files.len(), 4);
+        assert!(bundle.files.iter().any(|file| file.binary));
+        assert!(
+            bundle
+                .files
+                .iter()
+                .any(|file| file.status == crate::pr::DiffStatus::Renamed)
+        );
+        assert_eq!(bundle.discussions.len(), 3);
+        assert_eq!(bundle.seed_threads.len(), 1);
+        assert!(bundle.overview_markdown.contains("Synthetic demo data"));
+        assert!(bundle.overview_markdown.contains("Issue comment"));
+        assert!(bundle.overview_markdown.contains("Review summary"));
+        assert!(bundle.overview_markdown.contains("Inline review thread"));
+    }
+
+    #[test]
+    fn bundled_local_app_exercises_live_app_contracts() {
+        assert!(DEMO_LOCAL_APP_HTML.contains("href=\"/demo-app.css\""));
+        assert!(DEMO_LOCAL_APP_HTML.contains("src=\"/demo-app.js\""));
+        assert!(DEMO_LOCAL_APP_JS.contains("fetch('/api/dashboard')"));
+        assert!(DEMO_LOCAL_APP_JS.contains("history.pushState"));
+        assert!(DEMO_LOCAL_APP_JS.contains("popstate"));
+        assert!(DEMO_LOCAL_APP_HTML.contains("id=\"deploy-card\""));
     }
 
     #[test]

@@ -5,22 +5,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'captions');
+const SYSTEM_CHROME = process.env.CHROME_BIN
+  || (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
+    ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    : null);
 fs.mkdirSync(OUT, { recursive: true });
 
 const captions = {
-  scene01: 'Ask your agent to discuss a doc.',
-  scene02: 'Click a paragraph. Drop a comment. The agent replies in the margin.',
-  scene03: 'Review many files in one session. Badges track open threads.',
-  scene04: 'Run discuss diff. Comment on exact lines of the staged diff.',
-  scene05: 'Review images. Pins anchor threads to a spot.',
-  scene06: 'Review HTML prototypes. Click an element to anchor a thread.',
-  scene07: 'The agent pre-annotates its own edits. A guided review.',
-  scene08: 'The doc updates live. Threads survive the rewrite.',
-  scene09: 'End with a verdict. Feedback is required when you decline.',
-  scene10: 'The agent gets the transcript and the verdict.',
+  scene01: 'One command. Three safe, self-contained review scenarios.',
+  scene02: 'Tour markdown, diffs, images, and prototypes with a canned Demo agent.',
+  scene03: 'Review a realistic synthetic PR with imported discussion and nested files.',
+  scene04: 'Mark a changed file Viewed and continue to the next unviewed diff.',
+  scene05: 'Finish Review exposes editable summaries, destinations, and include choices.',
+  scene06: 'Confirm exact GFM, then simulate locally — nothing reaches GitHub.',
+  scene07: 'Inspect a bundled running app through the production live proxy.',
+  scene08: 'Root assets, an app API, pushState, and popstate stay on the app origin.',
+  scene09: 'Anchor a thread to an app element; its marker and canned response appear.',
+  scene10: 'No gh, no LLM, no history, and no public network required.',
 };
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(SYSTEM_CHROME ? { executablePath: SYSTEM_CHROME } : {});
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 for (const [name, text] of Object.entries(captions)) {
   await page.setContent(`

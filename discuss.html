@@ -307,6 +307,31 @@
   header .thread-summary-status { color: var(--pending-dark); font-size: 12px; }
   header .thread-summary-status.resolved { color: var(--ok-ink); }
   header .spacer { flex: 1; }
+  .demo-scenarios {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .demo-scenarios[hidden] { display: none; }
+  .demo-scenarios a {
+    padding: 5px 9px;
+    border-radius: 5px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .demo-scenarios a:hover { background: var(--accent-hover); color: var(--ink); }
+  .demo-scenarios a[aria-current="page"] {
+    background: var(--accent);
+    color: var(--accent-ink);
+    pointer-events: none;
+  }
   header .toggle {
     font: inherit;
     font-size: 12px;
@@ -1999,6 +2024,7 @@
   <span class="header-version" id="header-version" hidden></span>
   <div class="meta" id="meta-status">Loading…</div>
   <div class="pr-header" id="pr-header" aria-live="polite" hidden></div>
+  <nav class="demo-scenarios" id="demo-scenarios" aria-label="Demo scenarios" hidden></nav>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
@@ -2249,6 +2275,7 @@
       files: [],
       verdictConfig: null,
       prSession: null,
+      demoScenarios: [],
     };
   }
   function normalizeState(raw) {
@@ -2267,6 +2294,17 @@
     state.files = normalizeFilesList(raw.files);
     state.verdictConfig = normalizeVerdictConfig(raw.verdictConfig);
     state.prSession = normalizePrSession(raw.prSession);
+    state.demoScenarios = Array.isArray(raw.demoScenarios)
+      ? raw.demoScenarios
+        .filter(item => item && typeof item.url === 'string' && typeof item.label === 'string')
+        .map(item => ({
+          id: String(item.id || ''),
+          label: item.label,
+          description: typeof item.description === 'string' ? item.description : '',
+          url: item.url,
+          active: item.active === true,
+        }))
+      : [];
     return state;
   }
   function normalizePrSession(rawSession) {
@@ -2275,6 +2313,7 @@
     return {
       phase: phases.includes(rawSession.phase) ? rawSession.phase : 'loading',
       url: rawSession.url,
+      demo: rawSession.demo === true,
       pr: rawSession.pr && typeof rawSession.pr === 'object' ? { ...rawSession.pr } : null,
       files: Array.isArray(rawSession.files) ? rawSession.files.map(file => ({ ...file })) : [],
       viewedFiles: Array.isArray(rawSession.viewedFiles)
@@ -2921,16 +2960,20 @@
       banner.textContent = '';
       banner.classList.add('with-feedback');
       const summary = document.createElement('span');
-      summary.textContent = `GitHub review published — ${prActionLabel(verdictSummary.action)} ✓`;
+      summary.textContent = loadState().prSession?.demo
+        ? `Demo publication simulated locally — ${prActionLabel(verdictSummary.action)} ✓ · Nothing was sent to GitHub.`
+        : `GitHub review published — ${prActionLabel(verdictSummary.action)} ✓`;
       banner.appendChild(summary);
       const links = document.createElement('div');
       links.className = 'pr-publication-links';
       const result = verdictSummary.prResult;
       const publishedLinks = [];
-      if (result.review && safePreviewUrl(result.review.url)) publishedLinks.push(['Open published review', result.review.url]);
-      (Array.isArray(result.replies) ? result.replies : []).forEach((reply, index) => {
-        if (reply && safePreviewUrl(reply.url)) publishedLinks.push([`Open reply ${index + 1}`, reply.url]);
-      });
+      if (!loadState().prSession?.demo) {
+        if (result.review && safePreviewUrl(result.review.url)) publishedLinks.push(['Open published review', result.review.url]);
+        (Array.isArray(result.replies) ? result.replies : []).forEach((reply, index) => {
+          if (reply && safePreviewUrl(reply.url)) publishedLinks.push([`Open reply ${index + 1}`, reply.url]);
+        });
+      }
       publishedLinks.forEach(([label, url]) => {
         const link = document.createElement('a');
         link.href = url;
@@ -3011,7 +3054,9 @@
       btn.textContent = loading ? 'Importing PR…' : 'Finish review…';
       btn.title = loading
         ? 'Waiting for the pull request import to complete'
-        : 'Prepare and publish this review to GitHub';
+        : (prSession.demo
+          ? 'Edit, preview, and locally simulate this synthetic review'
+          : 'Prepare and publish this review to GitHub');
       return;
     }
     btn.disabled = false;
@@ -3992,7 +4037,13 @@
       { opacity: 0, transform: 'scale(0.985)' },
     ], { duration: 180, easing: 'ease-out', fill: 'forwards' });
     try {
-      await animation.finished;
+      // Decorative animation must never block Viewed progression. Browser
+      // engines can leave `finished` pending when stylesheets are unavailable
+      // or a background frame is throttled (notably the offline demo).
+      await Promise.race([
+        animation.finished,
+        new Promise(resolve => setTimeout(resolve, 600)),
+      ]);
     } catch (_) {
       // Navigation or teardown may cancel the decorative transition.
     } finally {
@@ -6433,6 +6484,24 @@
     document.addEventListener('pointerup', onUp);
   });
 
+  // ---------- Bundled demo scenarios ----------
+  function renderDemoScenarios() {
+    const nav = document.getElementById('demo-scenarios');
+    const scenarios = loadState().demoScenarios || [];
+    if (!nav) return;
+    nav.textContent = '';
+    nav.hidden = scenarios.length === 0;
+    scenarios.forEach(scenario => {
+      const link = document.createElement('a');
+      link.href = scenario.url;
+      link.textContent = scenario.label;
+      link.title = scenario.description;
+      link.dataset.demoScenario = scenario.id;
+      if (scenario.active) link.setAttribute('aria-current', 'page');
+      nav.appendChild(link);
+    });
+  }
+
   // ---------- Pull request publication ----------
   const prModalState = {
     view: null,
@@ -6442,6 +6511,10 @@
     prepareAccepted: false,
     lastFocus: null,
   };
+
+  function isDemoPr() {
+    return loadState().prSession?.demo === true;
+  }
 
   function prActionLabel(action) {
     return ({
@@ -6459,11 +6532,13 @@
     header.hidden = !session;
     if (!session) return;
 
-    const main = document.createElement('a');
+    const main = document.createElement(session.demo ? 'span' : 'a');
     main.className = 'pr-header-main';
-    main.href = session.pr?.url || session.url;
-    main.target = '_blank';
-    main.rel = 'noopener noreferrer';
+    if (!session.demo) {
+      main.href = session.pr?.url || session.url;
+      main.target = '_blank';
+      main.rel = 'noopener noreferrer';
+    }
     main.textContent = session.pr
       ? `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`
       : session.url;
@@ -6479,16 +6554,18 @@
 
     const detail = document.createElement('span');
     detail.className = 'pr-header-detail';
-    detail.textContent = `${session.pr.title} · @${session.pr.author} · ${session.pr.baseRef} → ${session.pr.headRef}`;
+    detail.textContent = `${session.pr.title} · @${session.pr.author} · ${session.pr.baseRef} → ${session.pr.headRef}${session.demo ? ' · SYNTHETIC DEMO DATA' : ''}`;
     detail.title = detail.textContent;
     const separator = document.createElement('span');
     separator.className = 'pr-header-separator';
     separator.textContent = '·';
-    const files = document.createElement('a');
-    files.href = `${session.pr.url || session.url}/files`;
-    files.target = '_blank';
-    files.rel = 'noopener noreferrer';
-    files.textContent = 'Files on GitHub';
+    const files = document.createElement(session.demo ? 'span' : 'a');
+    if (!session.demo) {
+      files.href = `${session.pr.url || session.url}/files`;
+      files.target = '_blank';
+      files.rel = 'noopener noreferrer';
+    }
+    files.textContent = session.demo ? 'Demo links disabled' : 'Files on GitHub';
     header.append(detail, separator, files);
   }
 
@@ -6529,6 +6606,8 @@
   }
 
   function resetPrModalChrome(phaseLabel) {
+    const title = document.getElementById('pr-dialog-title');
+    if (title) title.textContent = isDemoPr() ? 'Simulate demo PR review' : 'Publish GitHub review';
     const body = document.getElementById('pr-dialog-body');
     const actions = document.getElementById('pr-dialog-actions');
     const status = document.getElementById('pr-dialog-status');
@@ -6573,10 +6652,15 @@
     setPrSessionPhase(draft.summaryPending ? 'preparing' : 'editing', { draft: prModalState.draft });
   }
 
-  function renderPrPreparing(message = 'Generating an AI review summary. Your review remains open while this finishes…') {
+  function renderPrPreparing(message = '') {
+    if (!message) message = isDemoPr()
+      ? 'Building the deterministic local demo summary…'
+      : 'Generating an AI review summary. Your review remains open while this finishes…';
     const { body, actions, status } = resetPrModalChrome('Preparing draft');
     const note = document.createElement('p');
-    note.textContent = 'Discuss is collecting your review threads and preparing a server-owned publication draft.';
+    note.textContent = isDemoPr()
+      ? 'Discuss is collecting your review threads into a local-only simulation draft.'
+      : 'Discuss is collecting your review threads and preparing a server-owned publication draft.';
     body?.appendChild(note);
     if (status) {
       status.textContent = message;
@@ -6621,11 +6705,14 @@
       return { label: 'Will not publish', context: destination?.reason || 'No GitHub destination is available.' };
     }
     if (destination.kind === 'existingReviewThread') {
-      return { label: 'Reply to existing review thread', context: `GitHub root comment #${destination.rootCommentId}` };
+      return {
+        label: isDemoPr() ? 'Demo target: existing review thread' : 'Reply to existing review thread',
+        context: `${isDemoPr() ? 'Synthetic' : 'GitHub'} root comment #${destination.rootCommentId}`,
+      };
     }
     const side = String(destination.side || '').toUpperCase();
     return {
-      label: 'New review comment',
+      label: isDemoPr() ? 'Demo target: new inline comment' : 'New review comment',
       context: `${destination.path} · ${side} line ${destination.line}`,
     };
   }
@@ -6663,7 +6750,7 @@
     const summaryLabel = document.createElement('label');
     summaryLabel.className = 'pr-field-label';
     summaryLabel.htmlFor = 'pr-review-summary';
-    summaryLabel.textContent = 'AI-generated review summary';
+    summaryLabel.textContent = isDemoPr() ? 'Deterministic demo review summary' : 'AI-generated review summary';
     const summary = document.createElement('textarea');
     summary.className = 'pr-summary';
     summary.id = 'pr-review-summary';
@@ -6879,7 +6966,7 @@
     actions?.append(
       prButton('Cancel', cancelPrToReview),
       prButton('Go back', goBackToPrEdit),
-      prButton('OK — Publish', publishConfirmedPrDraft, { primary: true })
+      prButton(isDemoPr() ? 'OK — Simulate locally' : 'OK — Publish', publishConfirmedPrDraft, { primary: true })
     );
     showPrModal('confirming');
     setPrBusy(false);
@@ -6956,10 +7043,12 @@
   function renderPrPublishing() {
     const { body, status } = resetPrModalChrome('Publishing');
     const note = document.createElement('p');
-    note.textContent = 'Publishing the exact confirmed review and selected comments to GitHub.';
+    note.textContent = isDemoPr()
+      ? 'Simulating the exact confirmed review locally. No GitHub command or publication request can run.'
+      : 'Publishing the exact confirmed review and selected comments to GitHub.';
     body?.appendChild(note);
     showPrModal('publishing');
-    setPrBusy(true, 'Publishing… Keep this tab open.');
+    setPrBusy(true, isDemoPr() ? 'Simulating locally…' : 'Publishing… Keep this tab open.');
     if (status) status.classList.add('busy');
   }
 
@@ -7534,7 +7623,7 @@
     document.querySelectorAll('#doc-content pre').forEach(pre => {
       if (isMermaidPre(pre)) return;
       const code = pre.querySelector(':scope > code');
-      if (!window.Prism) {
+      if (!window.Prism || typeof Prism.highlightElement !== 'function') {
         applyPlainDiffColors(code);
         return;
       }
@@ -7572,6 +7661,7 @@
     activateFileUi();
     updateFinishReviewButtonLabel();
     renderPrHeader();
+    renderDemoScenarios();
     initFileSidebar();
     if (!isHtmlFile()) prepareActiveFileDocument();
     renderAllThreads();

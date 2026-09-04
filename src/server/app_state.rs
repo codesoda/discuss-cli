@@ -16,8 +16,30 @@ use crate::events::EventEmitter;
 use crate::history;
 use crate::pr::{GithubPrUrl, PrPhase, PrReviewState};
 use crate::sse::EventBus;
-use crate::state::{File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id};
+use crate::state::{
+    DemoScenarioLink, File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id,
+};
 use crate::verdict::VerdictConfig;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PrExecutionMode {
+    AgentEvent,
+    DirectGh,
+    DemoLocal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FinalizationStatus {
+    InProgress,
+    Failed,
+    Complete,
+}
+
+#[derive(Clone, Debug)]
+struct FinalizationClaim {
+    owner: String,
+    status: FinalizationStatus,
+}
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -31,13 +53,17 @@ pub struct AppState {
     pub(super) history_dir: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
     done_started: Arc<AtomicBool>,
+    finalization: Arc<Mutex<Option<FinalizationClaim>>>,
+    completion_scope: Arc<String>,
     pub(super) shutdown: ShutdownSignal,
     pub(super) activity: ActivityTracker,
     idle_timeout_secs: Arc<AtomicU64>,
     pub(super) verdict_config: Arc<Option<VerdictConfig>>,
     live_frame_url: Arc<Option<String>>,
+    demo_scenarios: Arc<Option<Vec<DemoScenarioLink>>>,
+    offline_demo: Arc<AtomicBool>,
     pub(crate) pr_review: Option<Arc<std::sync::RwLock<PrReviewState>>>,
-    direct_pr_publication: Arc<AtomicBool>,
+    pr_execution_mode: Arc<std::sync::RwLock<PrExecutionMode>>,
     next_thread_number: Arc<AtomicU64>,
     next_agent_thread_number: Arc<AtomicU64>,
     next_reply_number: Arc<AtomicU64>,
@@ -61,13 +87,17 @@ impl AppState {
             history_dir: Arc::new(history::default_history_dir()),
             no_save: Arc::new(AtomicBool::new(false)),
             done_started: Arc::new(AtomicBool::new(false)),
+            finalization: Arc::new(Mutex::new(None)),
+            completion_scope: Arc::new("session".to_string()),
             shutdown: ShutdownSignal::new(),
             activity: ActivityTracker::new(),
             idle_timeout_secs: Arc::new(AtomicU64::new(Config::default().idle_timeout_secs)),
             verdict_config: Arc::new(None),
             live_frame_url: Arc::new(None),
+            demo_scenarios: Arc::new(None),
+            offline_demo: Arc::new(AtomicBool::new(false)),
             pr_review: None,
-            direct_pr_publication: Arc::new(AtomicBool::new(false)),
+            pr_execution_mode: Arc::new(std::sync::RwLock::new(PrExecutionMode::AgentEvent)),
             next_thread_number: Arc::new(AtomicU64::new(1)),
             next_agent_thread_number: Arc::new(AtomicU64::new(1)),
             next_reply_number: Arc::new(AtomicU64::new(1)),
@@ -222,6 +252,10 @@ impl AppState {
                     .map_err(|_| "PR state lock poisoned while reading state".to_string())
             })
             .transpose()?;
+        if let Some(pr_session) = snapshot.pr_session.as_mut() {
+            pr_session.demo = self.pr_execution_mode() == PrExecutionMode::DemoLocal;
+        }
+        snapshot.demo_scenarios = self.demo_scenarios.as_ref().clone();
         Ok(snapshot)
     }
 
@@ -252,6 +286,29 @@ impl AppState {
         self
     }
 
+    pub fn with_demo_scenarios(mut self, scenarios: Vec<DemoScenarioLink>) -> Self {
+        self.demo_scenarios = Arc::new(Some(scenarios));
+        self
+    }
+
+    pub fn with_offline_demo(self) -> Self {
+        self.offline_demo.store(true, Ordering::Relaxed);
+        self
+    }
+
+    pub(crate) fn with_shared_demo_lifecycle(mut self, owner: &AppState) -> Self {
+        self.emitter = owner.emitter.clone();
+        self.done_started = owner.done_started.clone();
+        self.finalization = owner.finalization.clone();
+        self.shutdown = owner.shutdown.clone();
+        self
+    }
+
+    pub(crate) fn with_completion_scope(mut self, scope: impl Into<String>) -> Self {
+        self.completion_scope = Arc::new(scope.into());
+        self
+    }
+
     pub fn with_pr_session(mut self, identity: GithubPrUrl, secret: String) -> Self {
         self.pr_review = Some(Arc::new(std::sync::RwLock::new(PrReviewState::new(
             identity, secret,
@@ -264,12 +321,24 @@ impl AppState {
     }
 
     pub fn with_direct_pr_publication(self) -> Self {
-        self.direct_pr_publication.store(true, Ordering::Relaxed);
+        if let Ok(mut mode) = self.pr_execution_mode.write() {
+            *mode = PrExecutionMode::DirectGh;
+        }
         self
     }
 
-    pub(super) fn uses_direct_pr_publication(&self) -> bool {
-        self.direct_pr_publication.load(Ordering::Relaxed)
+    pub(crate) fn with_demo_pr_execution(self) -> Self {
+        if let Ok(mut mode) = self.pr_execution_mode.write() {
+            *mode = PrExecutionMode::DemoLocal;
+        }
+        self
+    }
+
+    pub(super) fn pr_execution_mode(&self) -> PrExecutionMode {
+        self.pr_execution_mode
+            .read()
+            .map(|mode| *mode)
+            .unwrap_or(PrExecutionMode::AgentEvent)
     }
 
     pub(crate) fn set_pr_base_url(&self, base_url: String) {
@@ -293,6 +362,10 @@ impl AppState {
 
     pub(super) fn is_live(&self) -> bool {
         self.live_frame_url.is_some()
+    }
+
+    pub(super) fn is_offline_demo(&self) -> bool {
+        self.offline_demo.load(Ordering::Relaxed)
     }
 
     pub(crate) fn signal_shutdown(&self) {
@@ -344,6 +417,52 @@ impl AppState {
     /// could acquire the read lock, so its mutation is in the transcript.
     pub(super) fn begin_done(&self) {
         self.done_started.store(true, Ordering::SeqCst);
+    }
+
+    /// Claims terminal transcript finalization for one server-owned operation.
+    /// Demo scenarios share this arbiter, so only the scenario that first
+    /// reaches Done can emit while the other listeners remain up for a brief
+    /// terminal UI grace period. A failed local emission may be retried by the
+    /// same owner, but concurrent or completed duplicates are rejected.
+    pub(super) fn claim_done(&self, operation: &str) -> bool {
+        let owner = format!("{}:{operation}", self.completion_scope);
+        let Ok(mut finalization) = self.finalization.lock() else {
+            return false;
+        };
+        match finalization.as_mut() {
+            None => {
+                *finalization = Some(FinalizationClaim {
+                    owner,
+                    status: FinalizationStatus::InProgress,
+                });
+            }
+            Some(claim) if claim.owner == owner && claim.status == FinalizationStatus::Failed => {
+                claim.status = FinalizationStatus::InProgress;
+            }
+            Some(_) => return false,
+        }
+        self.begin_done();
+        true
+    }
+
+    pub(super) fn fail_done(&self, operation: &str) {
+        self.set_finalization_status(operation, FinalizationStatus::Failed);
+        self.done_started.store(false, Ordering::SeqCst);
+    }
+
+    pub(super) fn complete_done(&self, operation: &str) {
+        self.set_finalization_status(operation, FinalizationStatus::Complete);
+    }
+
+    fn set_finalization_status(&self, operation: &str, status: FinalizationStatus) {
+        let owner = format!("{}:{operation}", self.completion_scope);
+        if let Ok(mut finalization) = self.finalization.lock()
+            && let Some(claim) = finalization.as_mut()
+            && claim.owner == owner
+            && claim.status == FinalizationStatus::InProgress
+        {
+            claim.status = status;
+        }
     }
 
     pub(super) fn done_started(&self) -> bool {
@@ -489,5 +608,43 @@ impl ShutdownSignal {
 
     pub(super) fn is_signaled(&self) -> bool {
         *self.tx.borrow()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pr_execution_mode_is_exclusive_and_demo_is_offline() {
+        let direct = AppState::for_process().with_direct_pr_publication();
+        let earlier_clone = direct.clone();
+        assert_eq!(direct.pr_execution_mode(), PrExecutionMode::DirectGh);
+
+        let demo = direct.with_demo_pr_execution().with_offline_demo();
+        assert_eq!(demo.pr_execution_mode(), PrExecutionMode::DemoLocal);
+        assert_eq!(
+            earlier_clone.pr_execution_mode(),
+            PrExecutionMode::DemoLocal
+        );
+        assert!(demo.is_offline_demo());
+    }
+
+    #[test]
+    fn demo_states_share_shutdown_and_done_latches_only_when_requested() {
+        let owner = AppState::for_process().with_completion_scope("tour");
+        let peer = AppState::for_process()
+            .with_shared_demo_lifecycle(&owner)
+            .with_completion_scope("local-app");
+        assert!(peer.claim_done("done"));
+        assert!(!peer.claim_done("done"), "concurrent duplicate is rejected");
+        assert!(!owner.claim_done("done"));
+        peer.fail_done("done");
+        assert!(peer.claim_done("done"), "failed owner may retry");
+        peer.complete_done("done");
+        assert!(!peer.claim_done("done"), "completed duplicate is rejected");
+        peer.signal_shutdown();
+        assert!(owner.done_started());
+        assert!(owner.shutdown.is_signaled());
     }
 }
