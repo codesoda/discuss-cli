@@ -131,7 +131,7 @@ where
         }
         Some(cli::Commands::Pr(pr_args)) => {
             let identity = pr::GithubPrUrl::parse(&pr_args.url)?;
-            run_pr_session(identity, pr_args.unified, &config, shutdown).await
+            Box::pin(run_pr_session(identity, pr_args.unified, &config, shutdown)).await
         }
         Some(cli::Commands::Demo) => {
             if !files.is_empty() {
