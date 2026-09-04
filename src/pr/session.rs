@@ -192,6 +192,8 @@ pub struct PrPublicationResult {
 pub struct PrSessionSnapshot {
     pub phase: PrPhase,
     pub url: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub demo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<PrDisplayMetadata>,
     #[serde(default)]
@@ -318,6 +320,7 @@ impl PrReviewState {
         PrSessionSnapshot {
             phase: self.phase,
             url: self.identity.canonical_url().to_string(),
+            demo: false,
             pr: self.imported.as_ref().map(|bundle| (&bundle.pr).into()),
             files,
             viewed_files,

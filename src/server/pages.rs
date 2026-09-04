@@ -63,11 +63,12 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .map(|file| file.html.clone())
         .unwrap_or_default();
 
-    Ok(template::render_page(
-        &first_file_html,
-        &initial_state_json,
-        &rendered_files_json,
-    ))
+    let page = template::render_page(&first_file_html, &initial_state_json, &rendered_files_json);
+    Ok(if app_state.is_offline_demo() {
+        template::without_external_prism_assets(page)
+    } else {
+        page
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -174,7 +175,10 @@ pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> 
 /// retry on the next request.
 static VERSION_STATUS_CACHE: OnceLock<VersionStatus> = OnceLock::new();
 
-pub(super) async fn get_api_version() -> Response {
+pub(super) async fn get_api_version(AxumState(app_state): AxumState<AppState>) -> Response {
+    if app_state.is_offline_demo() {
+        return Json(VersionStatus::current_only()).into_response();
+    }
     if let Some(status) = VERSION_STATUS_CACHE.get() {
         return Json(status.clone()).into_response();
     }

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Expanded self-contained demo** — one `discuss demo` launch now exposes the existing six-file feature tour, a deterministic synthetic private-first PR review, and a bundled running local-app review through a shared header switcher. The PR scenario uses the production import/state/UI contracts for nested changed files, GitHub-style diffs, imported issue/review/inline discussion, local takes, Viewed progression, editable Finish Review, and exact GFM confirmation; its exclusive demo execution mode generates a local summary and simulates OK locally, making `gh`, agent publication events, and the real publisher unreachable. The mini app serves root-relative CSS/JavaScript, an app API, and SPA routes in-process on its own loopback origin, then uses the production live proxy and inspector for route-scoped element anchors, markers, and canned responses. All five listeners bind before readiness, demo update checks stay offline, history stays disabled, and no LLM, GitHub authentication, external app process, or public network is required. README video/GIF and the deterministic recording pipeline now cover both workflows. Closes [#56](https://github.com/codesoda/discuss-cli/issues/56).
+
 ## [0.11.0] - 2026-09-04
 
 ### Added

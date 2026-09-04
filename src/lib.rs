@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::Utc;
 use clap::CommandFactory;
 
-use crate::state::{File, FileId, FileKind, Source};
+use crate::state::{DemoScenarioLink, File, FileId, FileKind, Source};
 
 pub mod assets;
 pub mod blocks;
@@ -272,6 +272,7 @@ fn pr_session_ready_callback(
             import_url,
             startup.secret,
             startup.import_body,
+            None,
         ));
         let launcher = launch::SystemBrowserLauncher;
         if let Err(error) =
@@ -287,6 +288,7 @@ async fn post_automatic_pr_import(
     import_url: String,
     secret: String,
     body: Vec<u8>,
+    demo_take: Option<(String, String)>,
 ) {
     let result = async {
         let client = reqwest::Client::builder()
@@ -309,6 +311,27 @@ async fn post_automatic_pr_import(
                 .unwrap_or_else(|_| "response body unavailable".to_string());
             return Err(format!("local import returned {status}: {detail}"));
         }
+        if let Some((take_url, text)) = demo_take {
+            let response = client
+                .post(take_url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(
+                    serde_json::to_vec(&serde_json::json!({ "text": text })).map_err(|error| {
+                        format!("could not encode the bundled demo PR take: {error}")
+                    })?,
+                )
+                .send()
+                .await
+                .map_err(|error| format!("could not seed the bundled demo PR take: {error}"))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let detail = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "response body unavailable".to_string());
+                return Err(format!("demo PR take returned {status}: {detail}"));
+            }
+        }
         Ok::<(), String>(())
     }
     .await;
@@ -319,11 +342,10 @@ async fn post_automatic_pr_import(
     }
 }
 
-/// Runs the bundled demo session: six embedded files (GIF first), four
-/// pre-seeded agent threads, and the canned Demo agent responder. No agent
-/// session is involved and history archives are always disabled; everything
-/// else (session.started, stderr announce, Done semantics) matches a normal
-/// review session, including the page's usual Prism/version-check fetches.
+/// Runs all three bundled demo scenarios from one process. The tour, the
+/// synthetic PR, and the local-app review each use an isolated real AppState;
+/// five listeners are acquired together so every advertised URL is live and
+/// loopback-only or startup fails without partial readiness.
 async fn run_demo_session<F>(
     verdict_config: Option<verdict::VerdictConfig>,
     config: &Config,
@@ -332,43 +354,195 @@ async fn run_demo_session<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (source, file_bytes) = server::demo::demo_source();
-    let files_count = source.files.len();
+    let (pr_identity, pr_import_body) = server::demo::demo_pr_import()?;
+    let requested = demo_listener_addrs(config.port)?;
+    let mut listeners = server::bind_loopback_listeners(&requested)
+        .await?
+        .into_iter();
+    let (tour_listener, tour_addr) = listeners.next().expect("tour listener");
+    let (pr_listener, pr_addr) = listeners.next().expect("PR listener");
+    let (local_api_listener, local_api_addr) = listeners.next().expect("local API listener");
+    let (app_listener, app_addr) = listeners.next().expect("demo app listener");
+    let (proxy_listener, proxy_addr) = listeners.next().expect("proxy listener");
 
-    let port = config.port.unwrap_or(0);
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let auto_open = config.auto_open;
+    let tour_url = launch::loopback_url(tour_addr);
+    let pr_url = launch::loopback_url(pr_addr);
+    let local_api_url = launch::loopback_url(local_api_addr);
+    let app_url = format!("{}/", launch::loopback_url(app_addr));
+    let proxy_url = launch::loopback_url(proxy_addr);
+    let scenarios = [
+        (
+            "tour",
+            "Feature tour",
+            "Markdown, diffs, images, and a static prototype",
+            &tour_url,
+        ),
+        (
+            "pr",
+            "Example PR",
+            "Private-first review with synthetic GitHub data",
+            &pr_url,
+        ),
+        (
+            "local-app",
+            "Local app",
+            "Inspect a bundled running SPA through the live proxy",
+            &local_api_url,
+        ),
+    ];
+    let links_for = |active: &str| {
+        scenarios
+            .iter()
+            .map(|(id, label, description, url)| DemoScenarioLink {
+                id: (*id).to_string(),
+                label: (*label).to_string(),
+                description: (*description).to_string(),
+                url: (*url).to_string(),
+                active: *id == active,
+            })
+            .collect::<Vec<_>>()
+    };
 
-    let app_state = AppState::for_process()
-        .with_source(source)
-        .with_file_bytes(file_bytes)
+    let (tour_source, tour_file_bytes) = server::demo::demo_source();
+    let files_count = tour_source.files.len();
+    let tour_state = AppState::for_process()
+        .with_source(tour_source)
+        .with_file_bytes(tour_file_bytes)
         .with_verdict_config(verdict_config)
+        .with_completion_scope("demo-tour")
+        .with_demo_scenarios(links_for("tour"))
+        .with_offline_demo()
         .with_no_save(true)
-        .with_idle_timeout_secs(config.idle_timeout_secs);
-    // Seed before serving so the first GET / snapshot includes the threads.
-    let seeded = server::demo::seed_demo_threads(&app_state);
+        .with_idle_timeout_secs(0);
+
+    let pr_secret = random_hex_secret();
+    let pr_state = AppState::for_process()
+        .with_shared_demo_lifecycle(&tour_state)
+        .with_source(Source {
+            files: vec![File {
+                id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
+                path: "pr-overview.md".to_string(),
+                kind: FileKind::Markdown,
+                content: "# Loading synthetic demo PR\n\nNo GitHub connection is used.\n"
+                    .to_string(),
+            }],
+        })
+        .with_pr_session(pr_identity, pr_secret.clone())
+        .with_demo_pr_execution()
+        .with_completion_scope("demo-pr")
+        .with_demo_scenarios(links_for("pr"))
+        .with_offline_demo()
+        .with_no_save(true)
+        .with_idle_timeout_secs(0);
+    pr_state.set_pr_base_url(pr_url.clone());
+
+    let local_state = AppState::for_process()
+        .with_shared_demo_lifecycle(&tour_state)
+        .with_source(Source {
+            files: vec![File {
+                id: FileId("f-1".to_string()),
+                path: "Bundled Ledgerly local app".to_string(),
+                kind: FileKind::Html,
+                content: String::new(),
+            }],
+        })
+        .with_live_frame_url(format!("{proxy_url}/"))
+        .with_completion_scope("demo-local-app")
+        .with_demo_scenarios(links_for("local-app"))
+        .with_offline_demo()
+        .with_no_save(true)
+        .with_idle_timeout_secs(0);
+
+    let tour_seeded = server::demo::seed_demo_threads(&tour_state);
     server::demo::spawn_demo_responder(
-        app_state.clone(),
-        seeded,
+        tour_state.clone(),
+        tour_seeded,
         server::demo::DEMO_RESPONSE_DELAY,
     );
-    let emitter = app_state.emitter.clone();
+    server::demo::spawn_demo_responder(
+        pr_state.clone(),
+        Vec::new(),
+        server::demo::DEMO_RESPONSE_DELAY,
+    );
+    server::demo::spawn_demo_responder(
+        local_state.clone(),
+        Vec::new(),
+        server::demo::DEMO_RESPONSE_DELAY,
+    );
 
-    server::serve_with_ready(
-        addr,
-        app_state,
-        shutdown,
-        session_ready_callback(
-            emitter,
-            server::demo::DEMO_MODE,
-            server::demo::DEMO_SOURCE_LABEL.to_string(),
-            files_count,
-            Vec::new(),
-            auto_open,
-            None,
-        ),
-    )
-    .await
+    let live_proxy = proxy::LiveProxy::new(
+        url::Url::parse(&app_url).expect("loopback app URL should parse"),
+        proxy_url.clone(),
+        local_api_url.clone(),
+    )?;
+    let import_url = format!("{pr_url}/api/pr/import");
+    let take_url = format!(
+        "{pr_url}/api/threads/{}/takes",
+        server::demo::DEMO_PR_IMPORTED_THREAD_ID
+    );
+    tokio::spawn(post_automatic_pr_import(
+        pr_state.clone(),
+        import_url,
+        pr_secret,
+        pr_import_body,
+        Some((take_url, server::demo::DEMO_PR_LOCAL_TAKE.to_string())),
+    ));
+
+    session_ready_callback(
+        tour_state.emitter.clone(),
+        server::demo::DEMO_MODE,
+        server::demo::DEMO_SOURCE_LABEL.to_string(),
+        files_count,
+        Vec::new(),
+        config.auto_open,
+        SessionReadyDetails::Demo(serde_json::json!({
+            "scenarios": scenarios.iter().map(|(id, label, description, url)| serde_json::json!({
+                "id": id,
+                "label": label,
+                "description": description,
+                "url": url,
+            })).collect::<Vec<_>>(),
+            "examplePrUrl": pr_url,
+            "localAppReviewUrl": local_api_url,
+            "localAppUpstreamUrl": app_url,
+            "localAppProxyUrl": proxy_url,
+        })),
+    )(tour_addr);
+
+    let proxy_shutdown = tour_state.subscribe_shutdown();
+    let app_shutdown = tour_state.subscribe_shutdown();
+    let lifecycle = tour_state.clone();
+    let result = tokio::try_join!(
+        server::serve_listener(tour_listener, tour_state, shutdown),
+        server::serve_listener(pr_listener, pr_state, pending()),
+        server::serve_listener(local_api_listener, local_state, pending()),
+        server::demo::serve_demo_app_listener(app_listener, app_shutdown),
+        proxy::serve_proxy_listener(proxy_listener, live_proxy, proxy_shutdown),
+    );
+    // Wake detached canned responders even when one listener failed and
+    // try_join dropped the remaining server futures.
+    lifecycle.signal_shutdown();
+    result?;
+    Ok(())
+}
+
+fn demo_listener_addrs(base_port: Option<u16>) -> Result<Vec<SocketAddr>> {
+    let ports = match base_port {
+        Some(base) => (0..5)
+            .map(|offset| {
+                base.checked_add(offset).ok_or_else(|| DiscussError::ConfigError {
+                    message: format!(
+                        "--port {base} cannot be used for demo because five adjacent loopback ports are required"
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        None => vec![0; 5],
+    };
+    Ok(ports
+        .into_iter()
+        .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        .collect())
 }
 
 async fn run_review_session<F>(
@@ -501,7 +675,7 @@ where
             files_count,
             git_args,
             auto_open,
-            None,
+            SessionReadyDetails::Standard,
         ),
     )
     .await
@@ -511,6 +685,12 @@ where
 struct LiveStartup {
     upstream_url: String,
     proxy_url: String,
+}
+
+enum SessionReadyDetails {
+    Standard,
+    Live(LiveStartup),
+    Demo(serde_json::Value),
 }
 
 async fn run_live_session<F>(
@@ -575,7 +755,7 @@ where
         1,
         Vec::new(),
         config.auto_open,
-        Some(live),
+        SessionReadyDetails::Live(live),
     )(api_addr);
 
     let proxy_shutdown = app_state.subscribe_shutdown();
@@ -647,7 +827,7 @@ fn session_ready_callback(
     files_count: usize,
     git_args: Vec<String>,
     auto_open: bool,
-    live: Option<LiveStartup>,
+    details: SessionReadyDetails,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
         let url = launch::loopback_url(listening_addr);
@@ -666,9 +846,17 @@ fn session_ready_callback(
         if !git_args.is_empty() {
             payload["git_args"] = serde_json::json!(git_args);
         }
-        if let Some(live) = live {
-            payload["upstreamUrl"] = serde_json::json!(live.upstream_url);
-            payload["proxyUrl"] = serde_json::json!(live.proxy_url);
+        match details {
+            SessionReadyDetails::Standard => {}
+            SessionReadyDetails::Live(live) => {
+                payload["upstreamUrl"] = serde_json::json!(live.upstream_url);
+                payload["proxyUrl"] = serde_json::json!(live.proxy_url);
+            }
+            SessionReadyDetails::Demo(extra) => {
+                if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+                    payload.extend(extra.clone());
+                }
+            }
         }
 
         if let Err(error) = emitter.emit(&Event {
@@ -886,6 +1074,24 @@ mod tests {
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn demo_reserves_five_adjacent_ports_or_fails_before_binding() {
+        let dynamic = demo_listener_addrs(None).expect("dynamic demo ports");
+        assert_eq!(dynamic.len(), 5);
+        assert!(
+            dynamic
+                .iter()
+                .all(|addr| addr.ip().is_loopback() && addr.port() == 0)
+        );
+
+        let fixed = demo_listener_addrs(Some(4200)).expect("fixed demo ports");
+        assert_eq!(
+            fixed.iter().map(SocketAddr::port).collect::<Vec<_>>(),
+            vec![4200, 4201, 4202, 4203, 4204]
+        );
+        assert!(demo_listener_addrs(Some(65_532)).is_err());
     }
 
     #[test]

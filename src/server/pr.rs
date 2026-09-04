@@ -19,13 +19,14 @@ use crate::pr::{
     ConfirmedDraft, DiffSide, DirectPublication, DirectReply, ImportedReviewTarget,
     MAX_IMPORT_BYTES, PR_OVERVIEW_FILE_ID, PendingPublication, PendingSummary, PrDraft,
     PrDraftDestination, PrDraftItem, PrFileTarget, PrImportBundle, PrPhase, PrPublicationResult,
-    PrPublicationStatus, PrReviewAction, PrViewedFile, file_id, imported_thread_id,
+    PrPublicationStatus, PrPublishedLink, PrPublishedReply, PrReviewAction, PrViewedFile, file_id,
+    imported_thread_id,
 };
 use crate::sse::BroadcastEvent;
 use crate::state::{File, FileId, FileKind, LineRange, Source, Thread, ThreadId, ThreadKind};
 use crate::transcript::build_transcript_with_source;
 
-use super::app_state::AppState;
+use super::app_state::{AppState, PrExecutionMode};
 use super::response::api_error_response;
 
 #[derive(Debug, Serialize)]
@@ -612,7 +613,7 @@ pub(super) async fn post_api_pr_prepare(
     }
     drop(state);
 
-    let draft = PrDraft {
+    let mut draft = PrDraft {
         draft_id: random_id("pr-draft"),
         revision: 1,
         action: PrReviewAction::CommentOnly,
@@ -621,15 +622,32 @@ pub(super) async fn post_api_pr_prepare(
         review_completed: false,
         items,
     };
+    review.confirmed = None;
+    review.pending_publication = None;
+    review.publication_result = None;
+
+    if app_state.pr_execution_mode() == PrExecutionMode::DemoLocal {
+        draft.summary = super::demo::DEMO_PR_SUMMARY.to_string();
+        draft.summary_pending = false;
+        draft.revision += 1;
+        review.phase = PrPhase::Editing;
+        review.draft = Some(draft.clone());
+        review.pending_summary = None;
+        drop(review);
+        app_state.record_mutation();
+        app_state.bus.publish(BroadcastEvent {
+            kind: "pr.draft.ready".to_string(),
+            payload: serde_json::json!({ "draft": draft }),
+        });
+        return Json(draft).into_response();
+    }
+
     let request_id = random_id("pr-summary");
     review.phase = PrPhase::Preparing;
     review.draft = Some(draft.clone());
     review.pending_summary = Some(PendingSummary {
         request_id: request_id.clone(),
     });
-    review.confirmed = None;
-    review.pending_publication = None;
-    review.publication_result = None;
     let summary_url = callback_url(review.api_base_url.as_deref(), &headers, "/api/pr/summary");
     drop(review);
 
@@ -1085,6 +1103,45 @@ pub(super) async fn post_api_pr_publish(
         review: review_request.clone(),
         replies: direct_replies,
     };
+    let execution_mode = app_state.pr_execution_mode();
+    let demo_result = (execution_mode == PrExecutionMode::DemoLocal).then(|| {
+        let mut reply_targets = expected_replies.iter().collect::<Vec<_>>();
+        reply_targets.sort_by(|left, right| left.0.cmp(right.0));
+        let mut completed_operations = reply_targets
+            .iter()
+            .map(|(operation_id, _)| (*operation_id).clone())
+            .collect::<Vec<_>>();
+        if expects_review {
+            completed_operations.push("review".to_string());
+        }
+        PrPublicationResult {
+            request_id: request_id.clone(),
+            status: PrPublicationStatus::Succeeded,
+            review: expects_review.then(|| PrPublishedLink {
+                id: Some(9_000_056),
+                url: "https://github.com/demo-only/ledgerly/pull/56#pullrequestreview-9000056"
+                    .to_string(),
+            }),
+            replies: reply_targets
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(index, (operation_id, root_comment_id))| PrPublishedReply {
+                        operation_id: operation_id.clone(),
+                        root_comment_id: *root_comment_id,
+                        id: Some(9_100_000 + index as u64),
+                        url: format!(
+                            "https://github.com/demo-only/ledgerly/pull/56#discussion_r{}",
+                            9_100_000 + index as u64
+                        ),
+                    },
+                )
+                .collect(),
+            completed_operations,
+            unknown_operations: Vec::new(),
+            error: None,
+        }
+    });
     let result_url = callback_url(
         review.api_base_url.as_deref(),
         &headers,
@@ -1121,25 +1178,49 @@ pub(super) async fn post_api_pr_publish(
     let secret = review.secret.clone();
     drop(review);
 
-    if app_state.uses_direct_pr_publication() {
-        tokio::spawn(publish_directly(direct_publication, result_url, secret));
-    } else if let Err(error) = app_state.emitter.emit(&Event {
-        kind: EventKind::PrPublishRequested,
-        at: Utc::now(),
-        payload,
-    }) {
-        return internal_error(format!("failed to emit pr.publish.requested: {error}"));
+    match execution_mode {
+        PrExecutionMode::DirectGh => {
+            tokio::spawn(publish_directly(direct_publication, result_url, secret));
+        }
+        PrExecutionMode::DemoLocal => {
+            let result = demo_result.expect("demo execution constructs a local result");
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+                post_local_publication_result(result, result_url, secret).await;
+            });
+        }
+        PrExecutionMode::AgentEvent => {
+            if let Err(error) = app_state.emitter.emit(&Event {
+                kind: EventKind::PrPublishRequested,
+                at: Utc::now(),
+                payload,
+            }) {
+                return internal_error(format!("failed to emit pr.publish.requested: {error}"));
+            }
+        }
     }
     app_state.record_mutation();
     Json(PublishResponse {
         request_id,
-        status: "publishing",
+        status: if execution_mode == PrExecutionMode::DemoLocal {
+            "simulating"
+        } else {
+            "publishing"
+        },
     })
     .into_response()
 }
 
 async fn publish_directly(publication: DirectPublication, result_url: String, secret: String) {
     let result = crate::pr::publish(publication).await;
+    post_local_publication_result(result, result_url, secret).await;
+}
+
+async fn post_local_publication_result(
+    result: PrPublicationResult,
+    result_url: String,
+    secret: String,
+) {
     let body = match serde_json::to_vec(&result) {
         Ok(body) => body,
         Err(error) => {
@@ -1362,28 +1443,39 @@ pub(super) async fn post_api_pr_publication_result(
     // completed. Keeping the pending request allows an identical callback to
     // resume finalization if those local steps fail.
     review.phase = PrPhase::Published;
-    let pr_snapshot = review.snapshot();
+    let mut pr_snapshot = review.snapshot();
+    pr_snapshot.demo = app_state.pr_execution_mode() == PrExecutionMode::DemoLocal;
     review.phase = PrPhase::Publishing;
     drop(review);
     let source = match app_state.current_source() {
         Ok(source) => source,
         Err(message) => return internal_error(message),
     };
-    app_state.begin_done();
+    let finalization = format!("publication:{}", result.request_id);
+    if !app_state.claim_done(&finalization) {
+        return phase_conflict("another finalization is already pending or complete");
+    }
     let transcript = match app_state.state.read() {
         Ok(state) => build_transcript_with_source(&state, &source).with_pr_session(pr_snapshot),
-        Err(_) => return internal_error("state lock poisoned while building PR transcript"),
+        Err(_) => {
+            app_state.fail_done(&finalization);
+            return internal_error("state lock poisoned while building PR transcript");
+        }
     };
     let event_at = Utc::now();
     let event_payload = match serde_json::to_value(transcript) {
         Ok(payload) => payload,
-        Err(error) => return internal_error(format!("failed to serialize PR transcript: {error}")),
+        Err(error) => {
+            app_state.fail_done(&finalization);
+            return internal_error(format!("failed to serialize PR transcript: {error}"));
+        }
     };
     if let Err(error) = app_state.emitter.emit(&Event {
         kind: EventKind::SessionDone,
         at: event_at,
         payload: event_payload.clone(),
     }) {
+        app_state.fail_done(&finalization);
         return internal_error(format!("failed to emit session.done: {error}"));
     }
     if !app_state.no_save() {
@@ -1412,6 +1504,7 @@ pub(super) async fn post_api_pr_publication_result(
         review.phase = PrPhase::Published;
         review.pending_publication = None;
     }
+    app_state.complete_done(&finalization);
     app_state.record_mutation();
     app_state.bus.publish(BroadcastEvent {
         kind: "pr.publication.succeeded".to_string(),

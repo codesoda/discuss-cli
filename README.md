@@ -2,11 +2,11 @@
 
 **Stop reviewing agent plans in the terminal.**
 
-<img src="docs/demo.gif" alt="Discuss CLI demo" width="100%">
+<img src="docs/demo.gif" alt="Discuss CLI demo showing the feature tour, a private-first PR review, and a running local-app review" width="100%">
 
 <sub>Higher-quality video: [docs/demo.mp4](docs/demo.mp4) · recording pipeline: [docs/demo-script.md](docs/demo-script.md)</sub>
 
-`discuss` opens Markdown, diffs, images, local HTML prototypes, and running HTTP/S websites in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
+`discuss` opens Markdown, diffs, images, private-first GitHub PRs, local HTML prototypes, and running HTTP/S websites in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
 
 Anchored. Threaded. Bidirectional. No cloud.
 
@@ -84,7 +84,9 @@ discuss ./plan.md
 
 The browser opens at the address printed on stderr as `review UI/API: http://127.0.0.1:<port>`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
-First time here? `discuss demo` opens a self-contained six-file tour — the feature GIF, two markdown docs pre-annotated with agent takes, a diff, an image, and an HTML prototype — with a canned Demo agent that replies to your comments. Every file is embedded in the binary: no agent session, no LLM, no history writes. The page itself behaves like any other session, so it still loads Prism syntax highlighting from a CDN and checks for a newer release; with no network the demo runs, minus code highlighting and per-line diff comments.
+First time here? `discuss demo` starts three self-contained scenarios from one command. Use the switcher in the header to move between **Feature tour** (the existing six-file gallery), **Example PR** (a realistic synthetic private-first review with nested diffs, imported discussion, Viewed progression, editable Finish Review, and exact GFM confirmation), and **Local app** (a bundled running SPA inspected through the production live proxy). The Demo agent replies with deterministic canned takes.
+
+Everything runs in-process on distinct loopback origins. Demo mode never invokes `gh`, a publisher, or an LLM; it never writes history; and it needs no GitHub login, app process, JavaScript runtime, or public network. Synthetic identities, links, destinations, and the local publication simulation are labelled as demo data. With `--port N`, the launcher reserves `N` through `N + 4`; without it, the OS assigns all five listeners.
 
 ### Piping markdown via stdin
 
@@ -173,7 +175,7 @@ Everything created during review stays local by default. Diff file headers inclu
 
 **Finish review** opens a PR-specific editor with Approve, Request changes, and Comment only actions; an editable agent-generated summary; and explicit include controls (off by default) for local responses. A second, text-first GFM screen shows the exact selected destinations and text. Only **OK** authorizes Discuss to recheck the PR head and publish through the authenticated `gh` CLI. New inline comments are grouped into one GitHub review wherever possible, while replies target only confidently resolved existing review threads. Unanchorable, binary, outdated, or ambiguous items remain unpublished with a reason. Failures preserve the draft for retry; success makes the session read-only. Standalone PR comments are intentionally out of scope.
 
-`--verdict-options`, extra file arguments, shortened PR references, GitHub Enterprise URLs, and separate OAuth/token configuration are not supported in PR mode.
+`--verdict-options`, extra file arguments, shortened PR references, GitHub Enterprise URLs, and separate OAuth/token configuration are not supported in PR mode. To try this workflow without `gh`, authentication, or a real repository, run `discuss demo` and choose **Example PR**; its OK action is a local simulation that cannot call the real publisher.
 
 ## CLI
 
@@ -186,7 +188,7 @@ Everything created during review stays local by default. Diff file headers inclu
 | `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
 | `discuss <file>... diff [args]` | Review files and a git diff together in one session |
 | `discuss pr <full-github-pr-url>` | Load a private-first GitHub PR review automatically through authenticated `gh`; publication remains confirmation-gated |
-| `discuss demo` | Self-contained demo session: bundled example files plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
+| `discuss demo` | One self-contained launch with Feature tour, synthetic Example PR, and bundled Local app scenarios plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
 | `discuss update` | Check for a newer release and confirm interactively before installing |
 | `discuss update --check` | Check GitHub for a newer release (check only) |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |
@@ -195,7 +197,7 @@ Everything created during review stays local by default. Diff file headers inclu
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <N>` | OS-assigned | Bind this exact nonzero port; fail if occupied. Without it, the OS assigns a loopback port. |
+| `--port <N>` | OS-assigned | Bind this exact nonzero port; fail if occupied. Live review also uses `N + 1`; demo reserves `N` through `N + 4`. Without it, the OS assigns loopback ports. |
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |

@@ -99,16 +99,16 @@ Top-level flags must come first: `discuss --no-open pr https://github.com/acme/a
     Pr(PrArgs),
 
     #[command(
-        about = "Open a self-contained demo review session with bundled example files.",
-        long_about = "Open a self-contained demo review session with bundled example files.\n\n\
-Every file is embedded in the binary: a feature-tour GIF, two revised markdown documents\n\
-pre-annotated with agent takes, a diff, an image, and an HTML prototype. A deterministic\n\
-Demo agent replies to comments you leave, entirely in-process: no agent session, no LLM,\n\
-and no history archive is written.\n\n\
-The review page behaves like any other session, so it still loads Prism syntax\n\
-highlighting from a CDN and checks for a newer release. With no network the demo still\n\
-runs; code fences lose highlighting and per-line diff comments.\n\n\
-Top-level flags must come first: `discuss --port 4000 --no-open demo`."
+        about = "Open self-contained tour, example PR, and local-app review scenarios.",
+        long_about = "Open three self-contained review scenarios from one command.\n\n\
+Use the in-page switcher to explore the existing six-file Feature tour, a synthetic\n\
+private-first Example PR using the real PR state/UI contracts, and a bundled running\n\
+Local app inspected through the production live proxy. A deterministic Demo agent replies\n\
+to comments entirely in-process. No agent session, LLM, gh command, GitHub authentication,\n\
+external app process, public network, or history archive is required. PR publication is a\n\
+clearly labelled local simulation that cannot invoke the real publisher.\n\n\
+With --port N, demo reserves loopback ports N through N+4. Without it, the OS assigns all\n\
+five ports. Top-level flags must come first: `discuss --port 4000 --no-open demo`."
     )]
     Demo,
 }
@@ -505,7 +505,8 @@ mod tests {
         let help = Args::command().render_long_help().to_string();
 
         assert!(
-            help.contains("demo") && help.contains("self-contained demo review session"),
+            help.contains("demo")
+                && help.contains("self-contained tour, example PR, and local-app review scenarios"),
             "expected help to list the demo subcommand\n{help}"
         );
     }
@@ -519,11 +520,13 @@ mod tests {
         let help = demo.render_long_help().to_string();
 
         for expected in [
-            "Open a self-contained demo review session with bundled example files.",
-            "no agent session, no LLM",
-            // The offline claim is scoped: the page still fetches Prism and the
-            // version check, so the help must not promise a network-free run.
-            "loads Prism syntax",
+            "Open three self-contained review scenarios from one command.",
+            "Feature tour",
+            "Example PR",
+            "production live proxy",
+            "No agent session, LLM, gh command, GitHub authentication",
+            "public network, or history archive is required",
+            "five ports",
             "Top-level flags must come first",
             "discuss --port 4000 --no-open demo",
         ] {

@@ -22,6 +22,21 @@ pub fn render_page(
     inject_mermaid_shim(&page)
 }
 
+/// Demo sessions must not initiate public fetches. Removing the external
+/// Prism tags leaves the existing local prefix-based diff colors and all
+/// non-highlighting review behavior intact; normal sessions retain the tags.
+pub(crate) fn without_external_prism_assets(page: String) -> String {
+    let mut offline = page
+        .lines()
+        .filter(|line| !line.contains("https://unpkg.com/prismjs@"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if page.ends_with('\n') {
+        offline.push('\n');
+    }
+    offline
+}
+
 fn inject_doc_content(template: &str, rendered_markdown: &str) -> String {
     let section_start =
         find_doc_content_open(template).expect("bundled template must contain #doc-content");
@@ -241,6 +256,17 @@ mod tests {
         assert!(page.contains("function highlightCodeBlocks()"));
         assert!(page.contains("Prism.highlightElement(code)"));
         assert!(page.contains("pre.classList.add('line-numbers')"));
+    }
+
+    #[test]
+    fn offline_demo_page_removes_every_public_prism_request() {
+        let normal = render_page("<p>Doc</p>", "{}", "[]");
+        let offline = without_external_prism_assets(normal);
+
+        assert!(!offline.contains("https://unpkg.com"));
+        assert!(offline.contains("function applyPlainDiffColors"));
+        assert!(offline.contains("id=\"discuss-mermaid-shim\""));
+        assert!(offline.contains("window.__DISCUSS_INITIAL_STATE__"));
     }
 
     #[test]
@@ -695,6 +721,20 @@ mod tests {
         }
         assert!(page.contains("if (prSession.phase === 'reviewing') preparePrDraft();"));
         assert!(page.contains("btn.textContent = loading ? 'Importing PR…' : 'Finish review…';"));
+    }
+
+    #[test]
+    fn bundled_template_exposes_demo_scenarios_and_labels_local_pr_simulation() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains(r#"id="demo-scenarios" aria-label="Demo scenarios""#));
+        assert!(page.contains("state.demoScenarios = Array.isArray(raw.demoScenarios)"));
+        assert!(page.contains("function renderDemoScenarios()"));
+        assert!(page.contains("link.setAttribute('aria-current', 'page')"));
+        assert!(page.contains("OK — Simulate locally"));
+        assert!(page.contains("No GitHub command or publication request can run"));
+        assert!(page.contains("Nothing was sent to GitHub"));
+        assert!(page.contains("if (!loadState().prSession?.demo)"));
     }
 
     #[test]
