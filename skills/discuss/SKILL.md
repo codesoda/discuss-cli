@@ -1,12 +1,12 @@
 ---
 name: discuss
-description: Launch the discuss CLI on markdown, diff, image, HTML prototypes, or a live HTTP/S website (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
+description: Launch the discuss CLI on markdown, diff, image, HTML prototypes, a live HTTP/S website, or a private-first GitHub PR review (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting takes and handling PR import/publication events.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
 # discuss — Interactive review session
 
-Open markdown, diffs, images, HTML prototypes, or a running HTTP/S website in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown, diffs, images, HTML prototypes, a running HTTP/S website, or a private-first GitHub PR in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
 The source can be a file on disk, a sole HTTP/S URL, or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
@@ -61,6 +61,26 @@ discuss plan.md diff          # markdown file(s) + diff in one session
 - `session.started` gains `mode` (`"markdown"` / `"diff"` / `"mixed"`) and `git_args` so you know what's under review.
 - Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
 - Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
+
+### Private-first GitHub PR mode
+
+Pass exactly one full public-GitHub PR URL to the `pr` subcommand:
+
+```
+discuss pr https://github.com/OWNER/REPO/pull/NUMBER
+```
+
+Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. The optional PR flag `--unified <N>` controls unchanged diff context and defaults to 10. PR mode requires the GitHub CLI to be installed and authenticated. Discuss exits before readiness with installation guidance when `gh` is absent; it never asks for, receives, or stores a token.
+
+Discuss performs the read-only import itself by shelling directly to authenticated `gh` and `git`. On `session.started` with `mode: "pr"`:
+
+1. Retain the exact `prUrl`, `prSessionSecret`, protected PR callback URLs, and `agentInstructions`. Never print or persist the secret. `prImportMode` is `"automatic"`; do not fetch the PR, clone it, build an import bundle, or call `/api/pr/import`.
+2. Wait for `pr.imported`, then retain its concrete overview/diff file IDs. Continue the ordinary take loop for local `thread.created` and `reply.added` events. Everything remains private, including your takes.
+3. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations and POST it to the event's callback with the bearer secret. Do not select items or destinations for the reviewer.
+4. Ignore edit, preview, cancel, Go back, and publication UI operations; they require no agent action. Only the reviewer's **OK** authorizes Discuss itself to recheck the PR head and publish the exact confirmed grouped review/thread replies through `gh`.
+5. Never call GitHub or the publication-result callback yourself. Continue handling local discussion and requested summaries until `session.done`.
+
+The browser's include controls default off. Binary/no-hunk/outdated/ambiguous items stay unpublished with a reason. Standalone issue/PR comments are deliberately out of scope; use the provided GitHub links as the escape hatch.
 
 ### HTML prototype mode
 
@@ -160,7 +180,7 @@ The monitor treats each stdout line from its command as an event notification de
 
 **The command string must start with `discuss`** — commands beginning with `discuss` are pre-approved and start immediately; any prefix (`cd … && discuss`, `VAR=x discuss`, `git … | discuss`) requires human approval before the monitor can start. Never prefix with `cd`: the monitor already runs in the session's working directory, so launch from the right cwd and pass repo-relative or absolute paths instead. When piping content in, prefer the heredoc form (`discuss - <<'EOF' … EOF`, which starts with `discuss`) over an upstream-command pipe.
 
-**File or live-URL mode** (Claude Code):
+**File, live-URL, or PR mode** (Claude Code):
 
 ```
 Monitor(

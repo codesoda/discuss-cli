@@ -425,6 +425,110 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_groups_files_into_collapsible_folder_tree() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("function buildFileTree(files)"));
+        assert!(page.contains("function appendFileTree(container, node)"));
+        assert!(page.contains("details.className = 'file-folder'"));
+        assert!(page.contains("details.open = true"));
+        assert!(page.contains("children.className = 'file-folder-children'"));
+        assert!(page.contains("summary.setAttribute('aria-label', summary.dataset.a11yBase)"));
+        assert!(page.contains("if (parent.matches('details.file-folder')) parent.open = true"));
+        assert!(page.contains("body.files-collapsed .file-folder > summary { display: none; }"));
+        assert!(page.contains("display: contents !important"));
+    }
+
+    #[test]
+    fn bundled_template_tracks_viewed_pr_files_and_advances() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("viewedFiles: Array.isArray(rawSession.viewedFiles)"));
+        assert!(page.contains("function installPrFileViewedControl()"));
+        assert!(page.contains("checkbox.type = 'checkbox'"));
+        assert!(page.contains("text.textContent = 'Viewed'"));
+        assert!(page.contains("function nextUnviewedPrFileId(fileId)"));
+        assert!(page.contains("document.querySelectorAll('#file-sidebar .file-item')"));
+        assert!(page.contains("const start = orderedIds.indexOf(String(fileId))"));
+        assert!(page.contains("candidate?.kind === 'diff' && !prViewedFile(candidate.id)"));
+        assert!(page.contains("/api/pr/files/${encodeURIComponent(fileId)}/viewed"));
+        assert!(page.contains("async function animateDiffHeaderIntoFileList(fileId)"));
+        assert!(page.contains("'(prefers-reduced-motion: reduce)'"));
+        assert!(page.contains("ghost.className = 'diff-file-close-ghost'"));
+        assert!(page.contains("await animateDiffHeaderIntoFileList(fileId)"));
+        assert!(page.contains("switchToFile(nextFileId)"));
+        assert!(page.contains("'pr.file.viewed'"));
+        assert!(page.contains("'pr.file.unviewed'"));
+        assert!(page.contains("className = 'file-viewed-marker'"));
+        assert!(page.contains(
+            "Viewed ${viewed.viewedAt || ''} at ${String(viewed.headSha || '').slice(0, 12)}"
+        ));
+        assert!(!page.contains("file-viewed-marker-check"));
+    }
+
+    #[test]
+    fn bundled_template_moves_diff_counts_into_file_header() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("stats.className = 'diff-file-stats'"));
+        assert!(page.contains("metadataText.match(/^\\+(\\d+)\\s+[−-](\\d+)"));
+        assert!(page.contains("additions.className = 'diff-file-additions'"));
+        assert!(page.contains("deletions.className = 'diff-file-deletions'"));
+        assert!(page.contains("heading.appendChild(stats)"));
+        assert!(page.contains("if (metadata) metadata.remove()"));
+        assert!(page.contains("heading.dataset.diffMetadata"));
+        assert!(page.contains(".diff-file-actions, .diff-file-stats"));
+    }
+
+    #[test]
+    fn bundled_template_uses_explicit_whole_file_comment_control() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        assert!(page.contains("comment.className = 'diff-file-comment'"));
+        assert!(page.contains(
+            "comment.title = 'Start a thread on the file itself, not a particular line'"
+        ));
+        assert!(page.contains("body.diff-file #doc-content > h3 {"));
+        assert!(page.contains("position: sticky;"));
+        assert!(page.contains("openNewThreadEditor(anchor, anchor)"));
+        assert!(page.contains("if (e.target.closest('.diff-file-actions')) return;"));
+        assert!(page.contains("const isDiffFileHeader = fileKind() === 'diff'"));
+        assert!(page.contains("if (isDiffFileHeader) return;"));
+        assert!(page.contains("body.diff-file #doc-content > h3[data-anchor-idx]:hover"));
+        assert!(page.contains("outline: none;"));
+    }
+
+    #[test]
+    fn bundled_template_has_self_contained_github_diff_colors() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        for token in [
+            "--diff-file-header-bg",
+            "--diff-hunk-bg",
+            "--diff-hunk-ink",
+            "--diff-add-bg",
+            "--diff-add-ink",
+            "--diff-delete-bg",
+            "--diff-delete-ink",
+        ] {
+            assert!(
+                page.matches(token).count() >= 3,
+                "missing themed diff token {token}"
+            );
+        }
+        assert!(
+            page.contains("document.body.classList.toggle('diff-file', fileKind() === 'diff')")
+        );
+        assert!(page.contains("body.diff-file #doc-content > h3"));
+        assert!(page.contains(".token.coord"));
+        assert!(page.contains(".token.inserted-sign"));
+        assert!(page.contains(".token.deleted-sign"));
+        assert!(page.contains("function applyPlainDiffColors(code)"));
+        assert!(page.contains("line.startsWith('@@') ? 'diff-line-hunk'"));
+        assert!(page.contains("applyPlainDiffColors(env.element);"));
+    }
+
+    #[test]
     fn file_sidebar_collapse_pref_defaults_to_expanded_and_persists_ui_pref_only() {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 
@@ -563,6 +667,100 @@ mod tests {
         assert!(page.contains("if (hasTake) return 'pending';"));
         assert!(page.contains("function latestContributorForThread(state, threadId, prep)"));
         assert!(page.contains("latest: ${latestContributorForThread(state, tid, prep)}"));
+    }
+
+    #[test]
+    fn bundled_template_has_accessible_pr_publication_dialog_and_endpoints() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains(r#"id="pr-modal" hidden"#));
+        assert!(
+            page.contains(r#"role="dialog" aria-modal="true" aria-labelledby="pr-dialog-title""#)
+        );
+        assert!(page.contains(r#"id="pr-dialog-status" role="status" aria-live="polite""#));
+        assert!(page.contains("function prModalFocusableControls()"));
+        assert!(page.contains("if (event.key !== 'Tab') return;"));
+        assert!(
+            page.contains("if (prModalState.view === 'publishing' || prModalState.busy) return;")
+        );
+
+        for endpoint in [
+            "/api/pr/prepare",
+            "/api/pr/draft",
+            "/api/pr/confirm",
+            "/api/pr/cancel",
+            "/api/pr/publish",
+        ] {
+            assert!(page.contains(endpoint), "missing PR endpoint {endpoint}");
+        }
+        assert!(page.contains("if (prSession.phase === 'reviewing') preparePrDraft();"));
+        assert!(page.contains("btn.textContent = loading ? 'Importing PR…' : 'Finish review…';"));
+    }
+
+    #[test]
+    fn bundled_template_edits_every_pr_item_and_previews_raw_gfm_first() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains("include.checked = item.include === true;"));
+        assert!(
+            page.contains(
+                "include.disabled = item.publishable === false || item.completed === true;"
+            )
+        );
+        assert!(page.contains(
+            "include: card.querySelector('.pr-item-include-checkbox')?.checked === true"
+        ));
+        assert!(page.contains("items: itemCards.map(card => ({"));
+        assert!(page.contains("AI-generated review summary"));
+        assert!(page.contains("New review comment"));
+        assert!(page.contains("Reply to existing review thread"));
+        assert!(page.contains("Will not publish"));
+        assert!(page.contains("Approximate target:"));
+
+        let raw_preview = page
+            .find("raw.className = 'pr-preview-raw'")
+            .expect("raw GFM preview");
+        let rendered_preview = page
+            .find("rendered.className = 'pr-preview-rendered'")
+            .expect("rendered GFM preview");
+        assert!(
+            raw_preview < rendered_preview,
+            "raw GFM must be shown first"
+        );
+        assert!(page.contains("raw.textContent = confirmation.previewGfm"));
+        assert!(page.contains("setSafePreviewHtml(renderedContent, confirmation.previewHtml)"));
+        assert!(page.contains("template.content.querySelectorAll('script, iframe, object, embed"));
+    }
+
+    #[test]
+    fn bundled_template_hydrates_pr_and_imported_prepopulated_threads_and_handles_pr_sse() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+
+        assert!(page.contains("state.prSession = normalizePrSession(raw.prSession);"));
+        assert!(page.contains("function syncPrepopulatedFromState(state)"));
+        assert!(page.contains("thread.kind !== 'prepopulated'"));
+        assert!(page.contains("userComment: thread.text || thread.snippet || ''"));
+        assert!(page.contains("lineRange: normalizeLineRange(thread.lineRange)"));
+        assert!(page.contains("!scriptPrepopulatedIds.has(thread.id)"));
+        assert!(page.contains("(userThread && userThread.lineRange) || (data && data.lineRange)"));
+        assert!(page.contains("userThreads.concat(prepopulated.map(thread => ({"));
+
+        for kind in [
+            "'pr.imported'",
+            "'pr.draft.ready'",
+            "'pr.publication.failed'",
+            "'pr.publication.succeeded'",
+        ] {
+            assert!(page.contains(kind), "missing SSE kind {kind}");
+        }
+        assert!(page.contains("loadState().prSession?.phase === 'loading'"));
+        assert!(page.contains("window.location.reload();"));
+        assert!(page.contains("markReviewComplete({"));
+        assert!(page.contains("source.onopen = () => { reconcilePrSessionFromServer(); };"));
+        assert!(
+            page.contains("if (localSession.phase === 'loading' && remote.phase !== 'loading')")
+        );
+        assert!(page.contains("await apiJson('/api/pr/cancel', { body: { mode: 'review' } });"));
     }
 
     #[test]

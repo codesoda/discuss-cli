@@ -7,6 +7,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use chrono::DateTime;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -174,6 +177,197 @@ fn cli_emits_single_session_started_event_after_listening() {
             .as_str()
             .expect("started_at should be a string"),
     );
+}
+
+#[test]
+fn cli_pr_without_gh_fails_before_readiness_with_install_instructions() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    let empty_bin = temp_dir.path().join("empty-bin");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    fs::create_dir(&empty_bin).expect("empty PATH directory should be created");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .args([
+            "--no-open",
+            "--no-save",
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+        ])
+        .env("HOME", &home_dir)
+        .env("PATH", &empty_bin)
+        .env_remove("DISCUSS_LOG")
+        .output()
+        .expect("run PR command without gh");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "startup must fail before session.started"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    for expected in [
+        "GitHub CLI (`gh`) is required",
+        "not found in PATH",
+        "brew install gh",
+        "winget install",
+        "install_linux.md",
+        "gh auth login --hostname github.com",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "expected stderr to contain {expected:?}: {stderr}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_pr_automatically_imports_through_gh_before_review() {
+    let port = free_port();
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    fs::create_dir(&bin_dir).expect("fake bin dir should be created");
+    write_executable(
+        &bin_dir.join("gh"),
+        r##"#!/bin/sh
+case "$1 $2" in
+  "--version ") printf '%s\n' 'gh version test' ;;
+  "auth status") exit 0 ;;
+  "pr view") printf '%s\n' '{"number":51,"title":"Test PR","body":"Body","state":"OPEN","isDraft":false,"author":{"login":"octocat"},"baseRefName":"main","baseRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","url":"https://github.com/codesoda/discuss-cli/pull/51"}' ;;
+  "repo clone") /bin/mkdir -p "$4/.git" ;;
+  "api --hostname")
+    case "$*" in
+      *'/files?per_page=100'*) printf '%s\n' '[[{"filename":"src/lib.rs"}]]' ;;
+      *'/issues/'*'/comments?per_page=100'*) printf '%s\n' '[[]]' ;;
+      *'/reviews?per_page=100'*) printf '%s\n' '[[]]' ;;
+      *'/pulls/'*'/comments?per_page=100'*) printf '%s\n' '[[]]' ;;
+      *' graphql '*) printf '%s\n' '[{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}]' ;;
+      *) printf '%s\n' "unexpected gh api arguments: $*" >&2; exit 1 ;;
+    esac ;;
+  *) printf '%s\n' "unexpected gh arguments: $*" >&2; exit 1 ;;
+esac
+"##,
+    );
+    write_executable(
+        &bin_dir.join("git"),
+        r##"#!/bin/sh
+case "$3" in
+  fetch) exit 0 ;;
+  rev-parse)
+    case "$4" in
+      refs/discuss/pr-head*) printf '%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ;;
+      *) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+    esac ;;
+  diff)
+    case "$*" in *'--unified=4'*) ;; *) printf '%s\n' "missing --unified=4: $*" >&2; exit 1 ;; esac
+    printf '%s\n' 'diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-old
++new' ;;
+  *) printf '%s\n' "unexpected git arguments: $*" >&2; exit 1 ;;
+esac
+"##,
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .args([
+            "--no-open",
+            "--no-save",
+            "--port",
+            &port.to_string(),
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+            "--unified=4",
+        ])
+        .env("HOME", &home_dir)
+        .env("PATH", &bin_dir)
+        .env_remove("DISCUSS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automatic PR session");
+    let stdout = read_all_lines(child.stdout.take().expect("stdout pipe"));
+    let started_line = stdout
+        .recv_timeout(STARTUP_TIMEOUT)
+        .expect("session.started event")
+        .expect("read session.started");
+    let started: Value = serde_json::from_str(&started_line)
+        .unwrap_or_else(|error| panic!("startup JSON {started_line:?}: {error}"));
+    assert_eq!(started["kind"], "session.started");
+    assert_eq!(started["payload"]["mode"], "pr");
+    assert_eq!(started["payload"]["prImportMode"], "automatic");
+    assert_eq!(started["payload"]["unified"], 4);
+    assert_eq!(started["payload"]["files_count"], 2);
+    let instructions = started["payload"]["agentInstructions"]
+        .as_str()
+        .expect("PR instructions");
+    assert!(instructions.contains("Discuss itself loads the PR and publishes"));
+    assert!(instructions.contains("Do not fetch, clone, publish"));
+    assert!(!instructions.contains("gh repo clone"));
+    assert!(!instructions.contains("pr.publish.requested"));
+
+    let imported: Value = serde_json::from_str(
+        &stdout
+            .recv_timeout(STARTUP_TIMEOUT)
+            .expect("automatic pr.imported event")
+            .expect("read pr.imported"),
+    )
+    .expect("import JSON");
+    assert_eq!(imported["kind"], "pr.imported");
+    assert_eq!(imported["payload"]["files"][0]["path"], "src/lib.rs");
+
+    let state_response =
+        http_request_url(&format!("http://127.0.0.1:{port}/api/state"), "GET", None);
+    let state = response_json(&state_response);
+    assert_eq!(state["prSession"]["phase"], "reviewing");
+    assert_eq!(state["files"].as_array().map(Vec::len), Some(2));
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn cli_pr_rejects_invalid_url_files_and_verdict_flags() {
+    let temp_dir = tempdir().expect("tempdir should be created");
+    let home_dir = temp_dir.path().join("home");
+    fs::create_dir(&home_dir).expect("home dir should be created");
+    let file = temp_dir.path().join("review.md");
+    fs::write(&file, "# Review\n").expect("write fixture");
+    let cases: Vec<Vec<String>> = vec![
+        vec!["pr".into(), "http://github.com/acme/repo/pull/1".into()],
+        vec![
+            file.display().to_string(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+        vec![
+            "--verdict-options".into(),
+            "yes,no".into(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+        vec![
+            "--verdict-prompt".into(),
+            "Choose".into(),
+            "pr".into(),
+            "https://github.com/acme/repo/pull/1".into(),
+        ],
+    ];
+    for args in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_discuss"))
+            .args(&args)
+            .env("HOME", &home_dir)
+            .env_remove("DISCUSS_LOG")
+            .output()
+            .expect("run invalid PR command");
+        assert_eq!(output.status.code(), Some(2), "args: {args:?}");
+        assert!(output.stdout.is_empty(), "args: {args:?}");
+    }
 }
 
 #[test]
@@ -686,6 +880,14 @@ struct RunningSession {
     child: Option<Child>,
     stdout: mpsc::Receiver<io::Result<String>>,
     stderr: mpsc::Receiver<io::Result<String>>,
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).expect("write executable fixture");
+    let mut permissions = fs::metadata(path).expect("fixture metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("make fixture executable");
 }
 
 fn occupied_proxy_pair() -> (u16, TcpListener) {

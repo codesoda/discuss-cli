@@ -19,6 +19,7 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         | DiscussError::LoggingInitError { .. }
         | DiscussError::UpdateCheckError { .. }
         | DiscussError::UpdateError { .. }
+        | DiscussError::PrError { .. }
         | DiscussError::DiffError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
@@ -106,6 +107,12 @@ mod tests {
             (
                 DiscussError::UpdateError {
                     message: "stdin is not a TTY - rerun with `discuss update -y`".to_string(),
+                },
+                EXIT_GENERIC_FAILURE,
+            ),
+            (
+                DiscussError::PrError {
+                    message: "failed to fetch PR metadata".to_string(),
                 },
                 EXIT_GENERIC_FAILURE,
             ),

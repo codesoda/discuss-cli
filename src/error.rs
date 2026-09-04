@@ -77,6 +77,9 @@ pub enum DiscussError {
     #[error("{message}")]
     ConfigError { message: String },
 
+    #[error("pull request error: {message}")]
+    PrError { message: String },
+
     #[error("diff error: {message}")]
     DiffError { message: String },
 }
@@ -214,6 +217,16 @@ mod tests {
                 "network connection",
                 "discuss update --check",
             ],
+        );
+    }
+
+    #[test]
+    fn pr_error_message_names_problem() {
+        assert_display_contains(
+            DiscussError::PrError {
+                message: "failed to fetch PR metadata".to_string(),
+            },
+            &["pull request error", "failed to fetch PR metadata"],
         );
     }
 

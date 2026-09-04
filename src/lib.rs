@@ -23,6 +23,7 @@ pub mod exit;
 pub mod history;
 pub mod launch;
 pub mod logging;
+pub mod pr;
 pub mod proxy;
 pub mod render;
 pub mod server;
@@ -82,6 +83,20 @@ where
         std::process::exit(exit::EXIT_CONFIG_ERROR);
     }
 
+    if matches!(&command, Some(cli::Commands::Pr(_))) {
+        if !files.is_empty() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept positional files".to_string(),
+            });
+        }
+        if verdict_options.is_some() || verdict_prompt.is_some() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept --verdict-options or --verdict-prompt"
+                    .to_string(),
+            });
+        }
+    }
+
     let config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
@@ -114,6 +129,10 @@ where
         Some(cli::Commands::Diff(diff_args)) => {
             run_review_session(files, Some(diff_args), verdict_config, &config, shutdown).await
         }
+        Some(cli::Commands::Pr(pr_args)) => {
+            let identity = pr::GithubPrUrl::parse(&pr_args.url)?;
+            Box::pin(run_pr_session(identity, pr_args.unified, &config, shutdown)).await
+        }
         Some(cli::Commands::Demo) => {
             if !files.is_empty() {
                 return Err(DiscussError::ConfigError {
@@ -132,6 +151,171 @@ where
                 run_review_session(files, None, verdict_config, &config, shutdown).await
             }
         }
+    }
+}
+
+async fn run_pr_session<F>(
+    identity: pr::GithubPrUrl,
+    unified: u32,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let bundle = pr::load_pr(&identity, unified).await?;
+    let files_count = bundle.files.len() + 1;
+    let import_body = serde_json::to_vec(&bundle).map_err(|error| DiscussError::PrError {
+        message: format!("could not encode the loaded PR: {error}"),
+    })?;
+    let source = Source {
+        files: vec![File {
+            id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
+            path: "pr-overview.md".to_string(),
+            kind: FileKind::Markdown,
+            content:
+                "# Loading pull request\n\nDiscuss is importing this pull request through your authenticated `gh` CLI.\n"
+                    .to_string(),
+        }],
+    };
+    let secret = random_hex_secret();
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_pr_session(identity.clone(), secret.clone())
+        .with_direct_pr_publication()
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let emitter = app_state.emitter.clone();
+    let ready_state = app_state.clone();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port.unwrap_or(0)));
+    server::serve_with_ready(
+        addr,
+        app_state,
+        shutdown,
+        pr_session_ready_callback(
+            emitter,
+            ready_state,
+            PrStartup {
+                identity,
+                secret,
+                import_body,
+                files_count,
+                unified,
+            },
+            config.auto_open,
+        ),
+    )
+    .await
+}
+
+fn random_hex_secret() -> String {
+    let bytes = rand::random::<[u8; 32]>();
+    let mut secret = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(secret, "{byte:02x}");
+    }
+    secret
+}
+
+struct PrStartup {
+    identity: pr::GithubPrUrl,
+    secret: String,
+    import_body: Vec<u8>,
+    files_count: usize,
+    unified: u32,
+}
+
+fn pr_session_ready_callback(
+    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    app_state: AppState,
+    startup: PrStartup,
+    auto_open: bool,
+) -> impl FnOnce(SocketAddr) {
+    move |listening_addr| {
+        let url = launch::loopback_url(listening_addr);
+        app_state.set_pr_base_url(url.clone());
+        let started_at = Utc::now();
+        let import_url = format!("{url}/api/pr/import");
+        let mut endpoints = launch::session_endpoints(&url);
+        endpoints["prImport"] = serde_json::json!(import_url);
+        endpoints["prSummary"] = serde_json::json!(format!("{url}/api/pr/summary"));
+        endpoints["prPublicationResult"] =
+            serde_json::json!(format!("{url}/api/pr/publication-result"));
+        let instructions = pr::agent_instructions().replace("<SESSION_SECRET>", &startup.secret);
+        let payload = serde_json::json!({
+            "url": url,
+            "apiBaseUrl": url,
+            "endpoints": endpoints,
+            "agentInstructions": instructions,
+            "mode": "pr",
+            "prUrl": startup.identity.canonical_url(),
+            "prSessionSecret": startup.secret,
+            "prImportMode": "automatic",
+            "unified": startup.unified,
+            "source_file": "pr-overview.md",
+            "files_count": startup.files_count,
+            "started_at": started_at.to_rfc3339(),
+        });
+        if let Err(error) = emitter.emit(&Event {
+            kind: EventKind::SessionStarted,
+            at: started_at,
+            payload,
+        }) {
+            tracing::warn!(%url, error = %error, "failed to emit PR session.started event");
+        }
+        tokio::spawn(post_automatic_pr_import(
+            app_state,
+            import_url,
+            startup.secret,
+            startup.import_body,
+        ));
+        let launcher = launch::SystemBrowserLauncher;
+        if let Err(error) =
+            launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
+        {
+            tracing::warn!(%url, error = %error, "failed to write listening URL to stderr");
+        }
+    }
+}
+
+async fn post_automatic_pr_import(
+    app_state: AppState,
+    import_url: String,
+    secret: String,
+    body: Vec<u8>,
+) {
+    let result = async {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|error| format!("could not create loopback HTTP client: {error}"))?;
+        let response = client
+            .post(import_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .bearer_auth(secret)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| format!("could not reach the local import endpoint: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "response body unavailable".to_string());
+            return Err(format!("local import returned {status}: {detail}"));
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        eprintln!("pull request error: automatic PR import failed: {error}");
+        tracing::error!(%error, "automatic PR import failed");
+        app_state.signal_shutdown();
     }
 }
 

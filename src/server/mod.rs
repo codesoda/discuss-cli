@@ -11,6 +11,7 @@ mod done;
 mod drafts;
 mod files;
 mod pages;
+mod pr;
 mod response;
 mod source;
 mod threads;
@@ -22,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::State as AxumState;
 use axum::http::Request;
 use axum::http::StatusCode;
@@ -34,6 +36,7 @@ use tokio::time::MissedTickBehavior;
 use tower_http::trace::TraceLayer;
 
 use crate::events::{Event, EventKind};
+use crate::pr::MAX_IMPORT_BYTES;
 use crate::state::FileId;
 use crate::{DiscussError, Result};
 
@@ -50,6 +53,11 @@ use files::{get_html_asset, get_html_file};
 use pages::{
     get_api_events, get_api_file_raw, get_api_state, get_api_version, get_discuss_inspect_js,
     get_mermaid_js, get_mermaid_shim_js, get_root, post_api_heartbeat,
+};
+use pr::{
+    delete_api_pr_file_viewed, get_api_pr_draft, post_api_pr_cancel, post_api_pr_confirm,
+    post_api_pr_draft, post_api_pr_file_viewed, post_api_pr_import, post_api_pr_prepare,
+    post_api_pr_publication_result, post_api_pr_publish, post_api_pr_summary,
 };
 use response::{api_error_response, not_found};
 use source::post_api_source;
@@ -239,12 +247,37 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_thread_unresolve),
         )
         .route("/api/done", post(post_api_done))
+        .route(
+            "/api/pr/import",
+            post(post_api_pr_import).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
+        .route(
+            "/api/pr/files/{id}/viewed",
+            post(post_api_pr_file_viewed).delete(delete_api_pr_file_viewed),
+        )
+        .route("/api/pr/prepare", post(post_api_pr_prepare))
+        .route("/api/pr/summary", post(post_api_pr_summary))
+        .route(
+            "/api/pr/draft",
+            get(get_api_pr_draft).post(post_api_pr_draft),
+        )
+        .route("/api/pr/confirm", post(post_api_pr_confirm))
+        .route("/api/pr/cancel", post(post_api_pr_cancel))
+        .route("/api/pr/publish", post(post_api_pr_publish))
+        .route(
+            "/api/pr/publication-result",
+            post(post_api_pr_publication_result),
+        )
         .route("/files/{id}", get(get_html_file))
         .route("/files/{id}/assets/{*path}", get(get_html_asset))
         .route("/assets/mermaid.min.js", get(get_mermaid_js))
         .route("/assets/mermaid-shim.js", get(get_mermaid_shim_js))
         .route("/assets/discuss-inspect.js", get(get_discuss_inspect_js))
         .route_layer(middleware::from_fn(reject_cross_origin_mutations))
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            reject_pr_thread_mutations,
+        ))
         .route_layer(middleware::from_fn_with_state(
             app_state.clone(),
             reject_during_shutdown,
@@ -309,7 +342,7 @@ async fn reject_cross_origin_mutations(request: Request<Body>, next: Next) -> Re
     let expected_origin = headers
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
-        .map(|host| format!("http://{host}"));
+        .and_then(loopback_origin_from_host);
     let allowed = match origin {
         Some(origin) => expected_origin.as_deref() == Some(origin),
         None => !browser_request,
@@ -322,6 +355,32 @@ async fn reject_cross_origin_mutations(request: Request<Body>, next: Next) -> Re
         );
     }
 
+    next.run(request).await
+}
+
+fn loopback_origin_from_host(host: &str) -> Option<String> {
+    let url = url::Url::parse(&format!("http://{host}")).ok()?;
+    (url.host_str() == Some("127.0.0.1")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none())
+    .then(|| url.origin().ascii_serialization())
+}
+
+async fn reject_pr_thread_mutations(
+    AxumState(app_state): AxumState<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.uri().path().starts_with("/api/threads") && app_state.pr_mutations_locked() {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "pr_publication_locked",
+            "thread mutations are disabled while PR publication is pending or complete",
+        );
+    }
     next.run(request).await
 }
 
