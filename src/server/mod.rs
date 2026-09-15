@@ -12,6 +12,7 @@ mod drafts;
 mod files;
 mod pages;
 mod pr;
+mod prefs;
 mod response;
 mod source;
 mod threads;
@@ -59,6 +60,7 @@ use pr::{
     post_api_pr_draft, post_api_pr_file_viewed, post_api_pr_import, post_api_pr_prepare,
     post_api_pr_publication_result, post_api_pr_publish, post_api_pr_summary,
 };
+use prefs::post_api_prefs;
 use response::{api_error_response, not_found};
 use source::post_api_source;
 use threads::{
@@ -227,6 +229,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/files/{id}/blocks", get(get_api_file_blocks))
         .route("/api/events", get(get_api_events))
         .route("/api/heartbeat", post(post_api_heartbeat))
+        .route("/api/prefs", post(post_api_prefs))
         .route(
             "/api/drafts/new-thread",
             post(post_api_drafts_new_thread).delete(delete_api_drafts_new_thread),
@@ -409,7 +412,9 @@ async fn reject_during_shutdown(
         && !read_only
         && !matches!(
             request.uri().path(),
-            "/api/done" | "/api/pr/publication-result"
+            // Preferences are browser chrome, not review state: the reviewer
+            // can still flip the theme on a completed session.
+            "/api/done" | "/api/pr/publication-result" | "/api/prefs"
         )
     {
         return api_error_response(

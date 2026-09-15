@@ -6,6 +6,9 @@ const DOC_CONTENT_CLOSE: &str = "</section>";
 const INITIAL_STATE_INSERT_BEFORE: &str = "<script>\n(function() {";
 const INITIAL_STATE_SCRIPT_OPEN: &str = "<script id=\"discuss-initial-state\">";
 const INITIAL_STATE_SCRIPT_CLOSE: &str = "</script>";
+const PREFS_SCRIPT_OPEN: &str = "<script id=\"discuss-prefs\">";
+const PREFS_SCRIPT_CLOSE: &str = "</script>";
+const THEME_BOOTSTRAP_SCRIPT_OPEN: &str = "<script id=\"discuss-theme-bootstrap\">";
 const MERMAID_SHIM_SCRIPT_OPEN: &str = "<script id=\"discuss-mermaid-shim\">";
 const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
 const RENDERED_FILES_SCRIPT_OPEN: &str = "<script id=\"discuss-rendered-files\">";
@@ -16,7 +19,25 @@ pub fn render_page(
     initial_state_json: &str,
     rendered_files_json: &str,
 ) -> String {
+    render_page_with_prefs(
+        rendered_markdown,
+        initial_state_json,
+        rendered_files_json,
+        "{}",
+    )
+}
+
+/// `prefs_json` carries the cross-session UI preferences read from disk. It is
+/// injected ahead of the pre-paint theme bootstrap, which needs the saved
+/// theme before the first paint.
+pub fn render_page_with_prefs(
+    rendered_markdown: &str,
+    initial_state_json: &str,
+    rendered_files_json: &str,
+    prefs_json: &str,
+) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
+    let page = inject_prefs(&page, prefs_json);
     let page = inject_initial_state(&page, initial_state_json);
     let page = inject_rendered_files(&page, rendered_files_json);
     inject_mermaid_shim(&page)
@@ -68,6 +89,23 @@ fn find_doc_content_open(html: &str) -> Option<usize> {
     html[search_start..]
         .find(DOC_CONTENT_OPEN)
         .map(|index| search_start + index)
+}
+
+fn inject_prefs(page: &str, prefs_json: &str) -> String {
+    let prefs_script = format!(
+        "{PREFS_SCRIPT_OPEN}\nwindow.__DISCUSS_PREFS__ = {};\n{PREFS_SCRIPT_CLOSE}\n\n",
+        js_safe_json(prefs_json)
+    );
+
+    let insert_at = page
+        .find(THEME_BOOTSTRAP_SCRIPT_OPEN)
+        .expect("bundled template must contain the theme bootstrap script");
+
+    let mut rendered = String::with_capacity(page.len() + prefs_script.len());
+    rendered.push_str(&page[..insert_at]);
+    rendered.push_str(&prefs_script);
+    rendered.push_str(&page[insert_at..]);
+    rendered
 }
 
 fn inject_initial_state(page: &str, initial_state_json: &str) -> String {
@@ -151,8 +189,9 @@ mod tests {
     }
 
     fn without_injected_scripts(html: &str) -> String {
+        let html = without_injected_script(html, PREFS_SCRIPT_OPEN, PREFS_SCRIPT_CLOSE);
         let html =
-            without_injected_script(html, INITIAL_STATE_SCRIPT_OPEN, INITIAL_STATE_SCRIPT_CLOSE);
+            without_injected_script(&html, INITIAL_STATE_SCRIPT_OPEN, INITIAL_STATE_SCRIPT_CLOSE);
         let html = without_injected_script(
             &html,
             RENDERED_FILES_SCRIPT_OPEN,
@@ -184,6 +223,50 @@ mod tests {
 
         assert!(state_script_start < main_script_start);
         assert!(page.contains(r#"window.__DISCUSS_INITIAL_STATE__ = {"threads":[]};"#));
+    }
+
+    #[test]
+    fn seeds_prefs_before_the_pre_paint_theme_bootstrap() {
+        let page = render_page_with_prefs("<p>Doc</p>", "{}", "[]", r#"{"theme":"dark"}"#);
+
+        let prefs_start = page
+            .find(PREFS_SCRIPT_OPEN)
+            .expect("prefs script should be present");
+        let bootstrap_start = page
+            .find(THEME_BOOTSTRAP_SCRIPT_OPEN)
+            .expect("theme bootstrap should be present");
+
+        assert!(
+            prefs_start < bootstrap_start,
+            "saved theme must be on the page before the pre-paint bootstrap reads it",
+        );
+        assert!(page.contains(r#"window.__DISCUSS_PREFS__ = {"theme":"dark"};"#));
+        assert_eq!(page.matches(PREFS_SCRIPT_OPEN).count(), 1);
+    }
+
+    #[test]
+    fn ui_preferences_are_written_back_to_the_cli_not_just_the_browser() {
+        let page = render_page("<p>Doc</p>", "{}", "[]");
+
+        // localStorage is scoped to this session's port, so it can only ever
+        // be a same-session mirror; the CLI holds the durable copy.
+        assert!(page.contains("window.discussReadPref = function (key, legacyKey, fallback)"));
+        assert!(page.contains("fetch('/api/prefs'"));
+        assert!(page.contains("window.discussReadPref('theme', 'discuss-theme', null)"));
+        assert!(page.contains("window.discussWritePref('theme', THEME_STORAGE_KEY, mode, mode)"));
+        assert!(page.contains("window.discussReadPref('cmdEnterToSend', CMD_ENTER_KEY, true)"));
+    }
+
+    #[test]
+    fn prefs_json_is_safe_inside_script_tag() {
+        let page = render_page_with_prefs(
+            "<p>Doc</p>",
+            "{}",
+            "[]",
+            r#"{"theme":"</script><p>break</p>"}"#,
+        );
+
+        assert!(page.contains(r#"{"theme":"\u003c/script>\u003cp>break\u003c/p>"}"#));
     }
 
     #[test]
@@ -363,15 +446,17 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        // localStorage may only persist UI preferences (theme, ⌘-Enter-to-send,
+        // localStorage may only mirror UI preferences (theme, ⌘-Enter-to-send,
         // sidebar collapse), never document/thread state. The old
         // state-in-localStorage pattern used STORAGE_KEY = 'discuss-state' —
-        // that must stay removed.
+        // that must stay removed. Preference reads and writes now go through
+        // the shared helper, which names its argument `legacyKey`.
         for (offset, _) in page.match_indices("localStorage") {
             let window_end = (offset + 80).min(page.len());
             let context = &page[offset..window_end];
             assert!(
-                context.contains("discuss-theme")
+                context.contains("legacyKey")
+                    || context.contains("discuss-theme")
                     || context.contains("THEME_STORAGE_KEY")
                     || context.contains("CMD_ENTER_KEY")
                     || context.contains("FILES_COLLAPSED_KEY"),
@@ -559,10 +644,13 @@ mod tests {
         let page = render_page("<p>Doc</p>", "{}", "[]");
 
         assert!(page.contains("const FILES_COLLAPSED_KEY = 'discuss-files-collapsed'"));
-        // Absent/anything-but-'1' reads as expanded: the first-run default.
-        assert!(page.contains("return stored === '1';"));
-        assert!(page.contains("localStorage.getItem(FILES_COLLAPSED_KEY)"));
-        assert!(page.contains("localStorage.setItem(FILES_COLLAPSED_KEY, collapsed ? '1' : '0')"));
+        // Unset reads as expanded: the first-run default.
+        assert!(page.contains(
+            "window.discussReadPref('filesCollapsed', FILES_COLLAPSED_KEY, false) === true"
+        ));
+        assert!(page.contains(
+            "window.discussWritePref('filesCollapsed', FILES_COLLAPSED_KEY, collapsed, collapsed ? '1' : '0')"
+        ));
         // Only the UI pref is stored - never review state.
         assert!(!page.contains("localStorage.setItem('discuss-state'"));
     }

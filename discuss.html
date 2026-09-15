@@ -57,11 +57,54 @@
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css">
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
 
+<!-- Preference plumbing. Every session binds a fresh port, so browser storage
+     is scoped to one run and forgets everything between reviews. The CLI owns
+     these values (~/.discuss/prefs.json) and injects them above as
+     window.__DISCUSS_PREFS__; browser storage stays as a same-session mirror
+     so a toggle is instant and a failed write never loses the click. -->
+<script id="discuss-prefs-client">
+(function () {
+  function prefs() {
+    if (!window.__DISCUSS_PREFS__ || typeof window.__DISCUSS_PREFS__ !== 'object') {
+      window.__DISCUSS_PREFS__ = {};
+    }
+    return window.__DISCUSS_PREFS__;
+  }
+
+  // Saved value wins. A value left in this browser by an older build is the
+  // fallback, so an existing choice survives the upgrade instead of resetting.
+  window.discussReadPref = function (key, legacyKey, fallback) {
+    var saved = prefs();
+    if (Object.prototype.hasOwnProperty.call(saved, key) && saved[key] !== null) {
+      return saved[key];
+    }
+    var legacy = null;
+    try { legacy = localStorage.getItem(legacyKey); } catch (_) {}
+    if (legacy === null) return fallback;
+    if (typeof fallback === 'boolean') return legacy === 'true' || legacy === '1';
+    return legacy;
+  };
+
+  window.discussWritePref = function (key, legacyKey, value, legacyValue) {
+    prefs()[key] = value;
+    try { localStorage.setItem(legacyKey, legacyValue); } catch (_) {}
+    var body = {};
+    body[key] = value;
+    try {
+      fetch('/api/prefs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).catch(function () {});
+    } catch (_) {}
+  };
+})();
+</script>
+
 <!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
 <script id="discuss-theme-bootstrap">
 (function () {
-  var stored = null;
-  try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  var stored = window.discussReadPref('theme', 'discuss-theme', null);
   var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
   var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
@@ -3718,17 +3761,15 @@
   }
 
   // ---------- File sidebar (multi-file sessions) ----------
-  // Browser storage here holds a UI preference only (collapsed vs expanded),
-  // mirroring the theme pref pattern. Review state never touches storage.
+  // A UI preference only (collapsed vs expanded), mirroring the theme pref
+  // pattern. Review state never goes through the prefs store.
   const FILES_COLLAPSED_KEY = 'discuss-files-collapsed';
   function isFilesCollapsed() {
-    let stored = null;
-    try { stored = localStorage.getItem(FILES_COLLAPSED_KEY); } catch (_) {}
-    // Anything but the exact stored '1' means expanded (the first-run default).
-    return stored === '1';
+    // Expanded is the first-run default.
+    return window.discussReadPref('filesCollapsed', FILES_COLLAPSED_KEY, false) === true;
   }
   function setFilesCollapsedPref(collapsed) {
-    try { localStorage.setItem(FILES_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
+    window.discussWritePref('filesCollapsed', FILES_COLLAPSED_KEY, collapsed, collapsed ? '1' : '0');
   }
   function applyFilesCollapsed(collapsed, toggle) {
     document.body.classList.toggle('files-collapsed', collapsed);
@@ -4591,8 +4632,11 @@
 
   // ---------- Send-shortcut setting ----------
   const CMD_ENTER_KEY = 'discuss-cmd-enter-to-send';
-  function isCmdEnterRequired() { return localStorage.getItem(CMD_ENTER_KEY) !== 'false'; }
-  function setCmdEnterRequired(v) { localStorage.setItem(CMD_ENTER_KEY, v ? 'true' : 'false'); document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v); }
+  function isCmdEnterRequired() { return window.discussReadPref('cmdEnterToSend', CMD_ENTER_KEY, true) !== false; }
+  function setCmdEnterRequired(v) {
+    window.discussWritePref('cmdEnterToSend', CMD_ENTER_KEY, v, v ? 'true' : 'false');
+    document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v);
+  }
   function enterSendCheckboxHtml() {
     return `<label class="enter-to-send"><input type="checkbox" ${isCmdEnterRequired() ? 'checked' : ''}> ⌘ Enter to send</label>`;
   }
@@ -7624,7 +7668,7 @@
       event.stopPropagation();
       const mode = item.getAttribute('data-mode');
       if (!THEME_MODES.includes(mode)) return;
-      try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+      window.discussWritePref('theme', THEME_STORAGE_KEY, mode, mode);
       applyThemeMode(mode);
       closeMenu();
       btn.focus();
