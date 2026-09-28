@@ -163,6 +163,8 @@ In Claude Code, `Monitor` and `TaskStop` may be deferred tools. Load their schem
 ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 ```
 
+**Check that the monitor can stay up.** A review can last hours. Use Option A only when the loaded monitor tool offers a `persistent` option (or no deadline). Some Claude Code versions have a `Monitor` with only `timeout_ms`, capped at 30 minutes. That monitor stops mid-review and takes discuss down with it. With such a monitor, use **Option A2**. Do not work around the cap with `tail -F` and timed re-arms: each re-arm wakes you and re-reads the whole conversation.
+
 ## Step 1: Launch discuss and choose an event strategy
 
 Always launch through the monitor-type tool first. Only if no such tool is available in the current context (e.g. ToolSearch finds nothing and invoking it returns a tool-not-enabled error) fall back to the **polling fallback** described below. Do not use the poller when a monitor-type tool exists — it delivers events push-style with no polling latency. The rest of the steps are the same once you have events flowing.
@@ -221,6 +223,28 @@ Notes:
 - Launch without `--port`. Discuss asks the OS for a free port, so concurrent sessions do not collide; each session's actual address arrives in its own `session.started` payload. Explicit `--port 7777` remains available only when a predictable exact bind is required, and fails rather than falling back if occupied.
 - If the file does not exist (or an explicit port is occupied), discuss exits immediately without emitting `session.started`. Read the monitor's stderr log to surface the error, then stop.
 - In stdin mode, you typically already have the markdown in hand (you generated it). Keep a copy in your scratchpad if you need it later for anchor snippets — there's no file to re-read.
+
+### Option A2 — background job + event waiter (monitor without `persistent`)
+
+Use this when the monitor-type tool has a deadline and no `persistent` option. Two background jobs replace it. You wake only when a real event arrives.
+
+**1. Start discuss as a background job** (Claude Code: `Bash` with `run_in_background: true`). The command still starts with `discuss`. Write events to a file in your scratchpad:
+
+```bash
+discuss "$ARGUMENTS" > "$SESSION_DIR/events.jsonl" 2> "$SESSION_DIR/stderr.log"
+```
+
+Then read `session.started` from the first line of `events.jsonl` (retry for a few seconds). Retain its `endpoints` as in Step 2. If no line appears, read `stderr.log`, report the error, and stop.
+
+**2. Wait for the next event with a second background job.** This skill's directory contains `wait-event.sh`. It checks the file every 2 seconds and exits on the next event line that needs you. It skips `prompt.suggest_done`.
+
+```bash
+bash <skill-dir>/wait-event.sh "$SESSION_DIR/events.jsonl" 1 "$STATE_URL"
+```
+
+- The first line of stdout is `LINES=<n>`. Handle the event lines after it as in Step 3, then start the waiter again with `<n>` as the second argument.
+- `{"event": "session.done"}`, or a `session.done` event line, means the session ended. Summarize and stop.
+- To stop early, stop both background jobs.
 
 ### Option B — Polling fallback (only when no monitor-type tool is available)
 
@@ -311,6 +335,8 @@ Post a short message to chat:
 Notifications arrive on the monitor's own schedule — you don't poll. Each notification line is one JSON event. Takes and drafts are broadcast via SSE only (not stdout), so your own `/takes` writes never echo back — no self-echo tracking needed.
 
 Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.deleted`. Lifecycle events (`session.started`, `session.done`, `thread.unresolved`, `prompt.suggest_done`) are informational — acknowledge in chat if useful but don't post to the API.
+
+`prompt.suggest_done` means no review page has been open for a while (the reviewer closed the tab). It fires once per quiet stretch. At most, say one short line in chat. Keep waiting. Do not end the session for it.
 
 ### `thread.created` (new thread opened by the user)
 
@@ -409,7 +435,7 @@ Anchors are 1-based indices of commentable block elements (headings, paragraphs,
 - `thread.deleted` → `{threadId}`
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
 - `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, or another agent's)
-- `prompt.suggest_done` → lifecycle; informational
+- `prompt.suggest_done` → `{idle_for_secs}`; lifecycle, informational. Fires once when no review page is open for `idle_timeout_secs`
 
 **Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.
 

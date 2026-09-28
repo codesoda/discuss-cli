@@ -262,16 +262,32 @@ async fn post_api_heartbeat_updates_timestamp_silently() {
         .expect("server shutdown should succeed");
 }
 
+fn idle_test_app_state(bus: Arc<EventBus>, stdout: Arc<Mutex<Vec<u8>>>) -> AppState {
+    AppState::new(
+        State::new_shared(),
+        bus,
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout))),
+    )
+    .with_idle_timeout_secs(1)
+}
+
+async fn stop_server(
+    shutdown_tx: oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<discuss::Result<()>>,
+) {
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 #[tokio::test]
-async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
+async fn idle_timer_emits_prompt_suggest_done_once_per_quiet_stretch() {
     let addr = free_loopback_addr();
     let stdout = Arc::new(Mutex::new(Vec::new()));
-    let app_state = AppState::new(
-        State::new_shared(),
-        Arc::new(EventBus::new(16)),
-        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
-    )
-    .with_idle_timeout_secs(1);
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(serve(addr, app_state, async move {
         let _ = shutdown_rx.await;
@@ -289,20 +305,118 @@ async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
             >= 1
     );
 
+    sleep(Duration::from_millis(2500)).await;
+    assert_eq!(stdout_events(&stdout).len(), 1);
+
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn idle_prompt_fires_again_after_new_activity() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+    wait_for_stdout_events(&stdout, 1, Duration::from_secs(3)).await;
+
+    let response = post_json_path(addr, "/api/heartbeat", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+
     let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(3)).await;
     assert_eq!(events.len(), 2);
-    assert!(
-        events
-            .iter()
-            .all(|event| event["kind"] == EventKind::PromptSuggestDone.to_string())
-    );
 
-    shutdown_tx.send(()).expect("send shutdown signal");
-    timeout(Duration::from_secs(1), server)
-        .await
-        .expect("server exits within timeout")
-        .expect("server task should not panic")
-        .expect("server shutdown should succeed");
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn open_page_event_stream_prevents_idle_prompt() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut page = open_get_path(addr, "/api/events?client=page").await;
+    let headers = read_until(&mut page, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+
+    sleep(Duration::from_secs(3)).await;
+    assert!(stdout_string(&stdout).is_empty());
+
+    drop(page);
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn closed_page_event_stream_emits_one_idle_prompt() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let bus = Arc::new(EventBus::new(16));
+    let app_state = idle_test_app_state(bus.clone(), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut page = open_get_path(addr, "/api/events?client=page").await;
+    let headers = read_until(&mut page, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+    sleep(Duration::from_millis(1500)).await;
+    assert!(stdout_string(&stdout).is_empty());
+
+    drop(page);
+    // The server sees the closed socket on its next write.
+    for _ in 0..3 {
+        bus.publish(BroadcastEvent {
+            kind: "thread.created".to_string(),
+            payload: json!({ "threadId": "u-1" }),
+        });
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(4)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], EventKind::PromptSuggestDone.to_string());
+
+    sleep(Duration::from_millis(2500)).await;
+    assert_eq!(stdout_events(&stdout).len(), 1);
+
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn agent_event_stream_does_not_count_as_open_page() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut agent = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut agent, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(3)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], EventKind::PromptSuggestDone.to_string());
+
+    drop(agent);
+    stop_server(shutdown_tx, server).await;
 }
 
 #[tokio::test]
@@ -5005,6 +5119,13 @@ fn stdout_string(stdout: &Arc<Mutex<Vec<u8>>>) -> String {
     String::from_utf8(bytes).expect("stdout capture should be utf-8")
 }
 
+fn stdout_events(stdout: &Arc<Mutex<Vec<u8>>>) -> Vec<Value> {
+    stdout_string(stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("stdout event should be JSON"))
+        .collect()
+}
+
 async fn wait_for_stdout_events(
     stdout: &Arc<Mutex<Vec<u8>>>,
     expected_count: usize,
@@ -5013,11 +5134,7 @@ async fn wait_for_stdout_events(
     let deadline = tokio::time::Instant::now() + max_wait;
 
     loop {
-        let output = stdout_string(stdout);
-        let events = output
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("stdout event should be JSON"))
-            .collect::<Vec<Value>>();
+        let events = stdout_events(stdout);
 
         if events.len() >= expected_count {
             return events;
@@ -5025,8 +5142,9 @@ async fn wait_for_stdout_events(
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {expected_count} stdout events; saw {}: {output}",
-            events.len()
+            "timed out waiting for {expected_count} stdout events; saw {}: {}",
+            events.len(),
+            stdout_string(stdout)
         );
         sleep(Duration::from_millis(25)).await;
     }

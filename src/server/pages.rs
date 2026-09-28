@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::body::Body;
-use axum::extract::{Path, State as AxumState};
+use axum::extract::{Path, RawQuery, State as AxumState};
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -218,10 +218,19 @@ pub(super) async fn post_api_heartbeat(AxumState(app_state): AxumState<AppState>
     }
 }
 
-pub(super) async fn get_api_events(AxumState(app_state): AxumState<AppState>) -> impl IntoResponse {
+pub(super) async fn get_api_events(
+    AxumState(app_state): AxumState<AppState>,
+    RawQuery(query): RawQuery,
+) -> impl IntoResponse {
     let mut events = app_state.bus.subscribe();
     let mut shutdown = app_state.subscribe_shutdown();
+    // Only the review page counts as open. Agents can read this stream too.
+    let open_page = query
+        .as_deref()
+        .is_some_and(|query| query.split('&').any(|pair| pair == "client=page"))
+        .then(|| app_state.activity.open_page());
     let stream = async_stream::stream! {
+        let _open_page = open_page;
         loop {
             tokio::select! {
                 biased;

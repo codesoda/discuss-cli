@@ -710,7 +710,7 @@ mod tests {
     fn bundled_template_subscribes_to_sse_and_applies_incremental_events() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
-        assert!(page.contains("new EventSource('/api/events')"));
+        assert!(page.contains("new EventSource('/api/events?client=page')"));
         assert!(page.contains("'thread.created'"));
         assert!(page.contains("'thread.deleted'"));
         assert!(page.contains("'thread.resolved'"));

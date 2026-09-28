@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **UI settings are remembered between sessions** — ⌘ Enter to send, the theme, and the file-sidebar collapse state survive closing a review. Each session binds a fresh port, so the browser treated every run as a new origin and started with empty `localStorage`; these preferences now live in `~/.discuss/prefs.json`, seeded into the page at render and written back through `POST /api/prefs`. Settings saved by an earlier build in the browser are not carried over, so each one needs to be set once more.
+- **A quiet review no longer wakes the agent every 10 minutes** — `prompt.suggest_done` now fires only when no review page is open, and once per quiet stretch instead of every `idle_timeout_secs`. The page's `/api/events?client=page` stream marks it open, so a background tab whose heartbeat timers the browser throttles no longer looks closed. Each ping woke a monitoring agent and cost it a full context read.
+- **Skill: a launch route for monitors without `persistent`** — some Claude Code `Monitor` versions stop after at most 30 minutes. The skill now runs discuss as a background job with the new `wait-event.sh` waiter (Option A2) instead of timed `tail -F` re-arms.
 
 ## [0.11.1] - 2026-09-14
 
