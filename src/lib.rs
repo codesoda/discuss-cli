@@ -24,6 +24,7 @@ pub mod history;
 pub mod launch;
 pub mod logging;
 pub mod pr;
+pub mod prefs;
 pub mod proxy;
 pub mod render;
 pub mod server;

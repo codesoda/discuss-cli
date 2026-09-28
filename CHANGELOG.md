@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **UI settings are remembered between sessions** — ⌘ Enter to send, the theme, and the file-sidebar collapse state survive closing a review. Each session binds a fresh port, so the browser treated every run as a new origin and started with empty `localStorage`; these preferences now live in `~/.discuss/prefs.json`, seeded into the page at render and written back through `POST /api/prefs`. Settings saved by an earlier build in the browser are not carried over, so each one needs to be set once more.
+
 ## [0.11.1] - 2026-09-14
 
 ### Added

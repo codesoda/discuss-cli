@@ -14,7 +14,7 @@ use tokio::sync::broadcast;
 use crate::assets;
 use crate::state::{File, FileId, FileKind};
 use crate::update::{self, VersionStatus};
-use crate::{render, template};
+use crate::{prefs, render, template};
 
 use super::app_state::AppState;
 use super::response::{OkResponse, api_error_response, javascript_response};
@@ -63,7 +63,23 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .map(|file| file.html.clone())
         .unwrap_or_default();
 
-    let page = template::render_page(&first_file_html, &initial_state_json, &rendered_files_json);
+    // Demo sessions render with default preferences so recordings do not pick
+    // up whatever the developer has saved.
+    let prefs_json = if app_state.is_offline_demo() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&prefs::load(&app_state.prefs_path))
+                .map_err(|error| format!("failed to serialize preferences: {error}"))?,
+        )
+    };
+
+    let page = template::render_page(
+        &first_file_html,
+        &initial_state_json,
+        &rendered_files_json,
+        prefs_json.as_deref(),
+    );
     Ok(if app_state.is_offline_demo() {
         template::without_external_prism_assets(page)
     } else {

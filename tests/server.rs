@@ -4565,6 +4565,100 @@ async fn pr_routes_are_unavailable_outside_pr_sessions() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn ui_prefs_round_trip_to_disk_and_seed_the_page() {
+    let prefs_dir = tempfile::tempdir().expect("temp dir");
+    let prefs_path = prefs_dir.path().join("prefs.json");
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Review Plan\n\nBody text.")
+        .with_prefs_path(&prefs_path);
+    let (shutdown_tx, shutdown_rx_signal) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx_signal.await;
+    }));
+    wait_for_server(addr).await;
+
+    let saved = post_json_path(addr, "/api/prefs", r#"{"cmdEnterToSend":false}"#).await;
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    let body: Value = serde_json::from_str(response_body(&saved)).expect("prefs response json");
+    assert_eq!(body["prefs"]["cmdEnterToSend"], json!(false));
+
+    // A second setting must not clobber the first.
+    let merged = post_json_path(addr, "/api/prefs", r#"{"theme":"dark"}"#).await;
+    let merged_body: Value = serde_json::from_str(response_body(&merged)).expect("merged json");
+    assert_eq!(merged_body["prefs"]["cmdEnterToSend"], json!(false));
+    assert_eq!(merged_body["prefs"]["theme"], json!("dark"));
+
+    let stored = discuss::prefs::load(&prefs_path);
+    assert_eq!(stored.cmd_enter_to_send, Some(false));
+    assert_eq!(stored.theme, Some(discuss::prefs::Theme::Dark));
+
+    // The page must carry the saved values, since the browser's own storage is
+    // scoped to this session's port and starts empty on the next run.
+    let page = get_root(addr).await;
+    assert!(
+        page.contains(r#""cmdEnterToSend":false"#),
+        "prefs missing from page"
+    );
+    assert!(page.contains("window.__DISCUSS_PREFS__ = {"));
+
+    let bad_theme = post_json_path(addr, "/api/prefs", r#"{"theme":"neon"}"#).await;
+    assert!(bad_theme.starts_with("HTTP/1.1 400"), "{bad_theme}");
+    let unknown_key = post_json_path(addr, "/api/prefs", r#"{"nope":1}"#).await;
+    assert!(unknown_key.starts_with("HTTP/1.1 400"), "{unknown_key}");
+    let empty = post_json_path(addr, "/api/prefs", "{}").await;
+    assert!(empty.starts_with("HTTP/1.1 400"), "{empty}");
+    // The rejected writes must not have touched the stored preferences.
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    // A demo must answer the page coherently without reaching into the user's
+    // home directory, even with a saved prefs file in place.
+    let demo_addr = free_loopback_addr();
+    let demo_state = AppState::for_process()
+        .with_markdown_source("# Demo\n\nBody text.")
+        .with_prefs_path(&prefs_path)
+        .with_offline_demo();
+    let (demo_shutdown_tx, demo_shutdown_rx) = oneshot::channel();
+    let demo_server = tokio::spawn(serve(demo_addr, demo_state, async move {
+        let _ = demo_shutdown_rx.await;
+    }));
+    wait_for_server(demo_addr).await;
+
+    let demo_response = post_json_path(demo_addr, "/api/prefs", r#"{"theme":"light"}"#).await;
+    assert!(demo_response.starts_with("HTTP/1.1 200"), "{demo_response}");
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+    // And the demo page renders with defaults, not the developer's own prefs.
+    assert!(
+        !get_root(demo_addr)
+            .await
+            .contains(r#"<script id="discuss-prefs">"#)
+    );
+
+    demo_shutdown_tx
+        .send(())
+        .expect("send demo shutdown signal");
+    timeout(Duration::from_secs(1), demo_server)
+        .await
+        .expect("demo server exits within timeout")
+        .expect("demo server task should not panic")
+        .expect("demo server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
