@@ -37,32 +37,33 @@ pub(super) async fn post_api_prefs(
         }
     };
 
-    let Value::Object(patch) = body else {
-        return api_error_response(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "prefs patch must be a JSON object",
-        );
+    let patch = match serde_json::from_value::<UiPrefs>(body) {
+        Ok(patch) if !patch.is_empty() => patch,
+        Ok(_) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "prefs patch must set at least one preference",
+            );
+        }
+        Err(error) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                format!("invalid prefs patch: {error}"),
+            );
+        }
     };
-
-    if let Err(message) = prefs::validate_patch(&patch) {
-        return api_error_response(StatusCode::BAD_REQUEST, "validation_error", message);
-    }
 
     // A demo must never reach into the user's home directory, but the page
     // still needs a coherent answer, so merge in memory and discard it.
     if app_state.is_offline_demo() {
-        return (
-            StatusCode::OK,
-            Json(PrefsResponse {
-                prefs: prefs::merge(prefs::UiPrefs::new(), &patch),
-            }),
-        )
-            .into_response();
+        let prefs = UiPrefs::default().merged_with(&patch);
+        return (StatusCode::OK, Json(PrefsResponse { prefs })).into_response();
     }
 
-    match prefs::merge_and_save(&patch) {
-        Ok(merged) => (StatusCode::OK, Json(PrefsResponse { prefs: merged })).into_response(),
+    match prefs::merge_and_save(&app_state.prefs_path, &patch) {
+        Ok(prefs) => (StatusCode::OK, Json(PrefsResponse { prefs })).into_response(),
         Err(error) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",

@@ -6,112 +6,87 @@
 //! user's `~/.discuss` directory, read when the page is rendered and written
 //! back through `POST /api/prefs`.
 
-use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use directories::BaseDirs;
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
 
-/// Overrides the prefs file location. Tests set this so they never read or
-/// write the developer's real preferences.
-pub const PREFS_PATH_ENV: &str = "DISCUSS_PREFS_PATH";
+/// The per-user directory under the home directory that holds discuss data.
+pub const DISCUSS_DIR_NAME: &str = ".discuss";
+const PREFS_FILE_NAME: &str = "prefs.json";
 
-const THEME_KEY: &str = "theme";
-const CMD_ENTER_KEY: &str = "cmdEnterToSend";
-const FILES_COLLAPSED_KEY: &str = "filesCollapsed";
-const THEME_MODES: [&str; 3] = ["light", "dark", "system"];
+/// Serializes every load → merge → save in this process, so two concurrent
+/// patches can't both read the old file and have the later save erase the
+/// other change.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Stored as a JSON object rather than a struct so a file written by a newer
-/// build keeps its extra keys when an older build merges a patch into it.
-pub type UiPrefs = Map<String, Value>;
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Light,
+    Dark,
+    System,
+}
 
-pub fn prefs_path() -> PathBuf {
-    if let Some(path) = env::var_os(PREFS_PATH_ENV) {
-        return PathBuf::from(path);
+/// Both the stored file and a `POST /api/prefs` patch. An unset field means
+/// "keep the first-run default" in the file and "leave unchanged" in a patch.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UiPrefs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<Theme>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd_enter_to_send: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_collapsed: Option<bool>,
+}
+
+impl UiPrefs {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 
+    /// Applies every field `patch` sets and keeps the rest.
+    pub fn merged_with(self, patch: &UiPrefs) -> UiPrefs {
+        UiPrefs {
+            theme: patch.theme.or(self.theme),
+            cmd_enter_to_send: patch.cmd_enter_to_send.or(self.cmd_enter_to_send),
+            files_collapsed: patch.files_collapsed.or(self.files_collapsed),
+        }
+    }
+}
+
+/// Resolved on each call rather than cached, so a test that points `HOME`
+/// somewhere else sees its own directory.
+pub fn default_prefs_path() -> PathBuf {
     BaseDirs::new()
-        .map(|base_dirs| base_dirs.home_dir().join(".discuss").join("prefs.json"))
-        .unwrap_or_else(|| PathBuf::from(".discuss").join("prefs.json"))
+        .map(|base_dirs| base_dirs.home_dir().join(DISCUSS_DIR_NAME))
+        .unwrap_or_else(|| PathBuf::from(DISCUSS_DIR_NAME))
+        .join(PREFS_FILE_NAME)
 }
 
-/// Reads the stored preferences, falling back to an empty set. A missing,
+/// Reads the stored preferences, falling back to defaults. A missing,
 /// unreadable, or corrupt file is not an error: a review must still open.
-pub fn load() -> UiPrefs {
-    load_from(&prefs_path())
+pub fn load(path: &Path) -> UiPrefs {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default()
 }
 
-pub fn load_from(path: &Path) -> UiPrefs {
-    let Ok(contents) = fs::read_to_string(path) else {
-        return UiPrefs::new();
-    };
-
-    match serde_json::from_str::<Value>(&contents) {
-        Ok(Value::Object(prefs)) => prefs,
-        _ => UiPrefs::new(),
-    }
-}
-
-/// Applies `patch` over the stored preferences and returns the merged set.
-///
-/// Read-modify-write so a concurrent session toggling a different setting
-/// keeps its change. `null` in the patch clears a key.
-pub fn merge_and_save(patch: &UiPrefs) -> io::Result<UiPrefs> {
-    merge_and_save_at(&prefs_path(), patch)
-}
-
-pub fn merge_and_save_at(path: &Path, patch: &UiPrefs) -> io::Result<UiPrefs> {
-    let merged = merge(load_from(path), patch);
+/// Applies `patch` over the stored preferences, saves, and returns the merged set.
+pub fn merge_and_save(path: &Path, patch: &UiPrefs) -> io::Result<UiPrefs> {
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let merged = load(path).merged_with(patch);
     write_atomically(path, &merged)?;
     Ok(merged)
 }
 
-/// Merge without touching disk, for demo sessions that must stay out of the
-/// user's home directory while still answering with a coherent value.
-pub fn merge(mut prefs: UiPrefs, patch: &UiPrefs) -> UiPrefs {
-    for (key, value) in patch {
-        if value.is_null() {
-            prefs.remove(key);
-        } else {
-            prefs.insert(key.clone(), value.clone());
-        }
-    }
-
-    prefs
-}
-
-/// Rejects anything the UI would not understand, so a stray client can't turn
-/// the prefs file into a junk drawer.
-pub fn validate_patch(patch: &UiPrefs) -> Result<(), String> {
-    if patch.is_empty() {
-        return Err("prefs patch must set at least one key".to_string());
-    }
-
-    for (key, value) in patch {
-        if value.is_null() {
-            continue;
-        }
-
-        let valid = match key.as_str() {
-            THEME_KEY => value
-                .as_str()
-                .is_some_and(|mode| THEME_MODES.contains(&mode)),
-            CMD_ENTER_KEY | FILES_COLLAPSED_KEY => value.is_boolean(),
-            _ => return Err(format!("unknown preference: {key}")),
-        };
-
-        if !valid {
-            return Err(format!("invalid value for preference: {key}"));
-        }
-    }
-
-    Ok(())
-}
-
-/// Write to a sibling temp file and rename, so an interrupted write can never
-/// leave a half-written prefs file behind.
+/// Write to a sibling temp file and rename, so a reader never sees a
+/// half-written prefs file.
 fn write_atomically(path: &Path, prefs: &UiPrefs) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -121,13 +96,9 @@ fn write_atomically(path: &Path, prefs: &UiPrefs) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(prefs).map_err(io::Error::other)?;
     fs::write(&temp_path, bytes)?;
 
-    match fs::rename(&temp_path, path) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = fs::remove_file(&temp_path);
-            Err(error)
-        }
-    }
+    fs::rename(&temp_path, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp_path);
+    })
 }
 
 #[cfg(test)]
@@ -136,68 +107,76 @@ mod tests {
 
     use serde_json::json;
 
-    fn patch(value: Value) -> UiPrefs {
-        match value {
-            Value::Object(map) => map,
-            _ => panic!("patch fixture must be an object"),
+    fn prefs(value: serde_json::Value) -> UiPrefs {
+        serde_json::from_value(value).expect("valid prefs fixture")
+    }
+
+    #[test]
+    fn merge_applies_only_the_fields_the_patch_sets() {
+        let stored = prefs(json!({"theme": "dark", "cmdEnterToSend": true}));
+
+        let merged = stored.merged_with(&prefs(json!({"cmdEnterToSend": false})));
+
+        assert_eq!(merged.theme, Some(Theme::Dark));
+        assert_eq!(merged.cmd_enter_to_send, Some(false));
+        assert_eq!(merged.files_collapsed, None);
+    }
+
+    #[test]
+    fn accepts_every_known_preference() {
+        let parsed = prefs(json!({
+            "theme": "system",
+            "cmdEnterToSend": false,
+            "filesCollapsed": true
+        }));
+
+        assert_eq!(parsed.theme, Some(Theme::System));
+        assert_eq!(parsed.cmd_enter_to_send, Some(false));
+        assert_eq!(parsed.files_collapsed, Some(true));
+    }
+
+    #[test]
+    fn rejects_unknown_keys_and_bad_values() {
+        for bad in [
+            json!({"nope": 1}),
+            json!({"theme": "neon"}),
+            json!({"cmdEnterToSend": "true"}),
+        ] {
+            assert!(
+                serde_json::from_value::<UiPrefs>(bad.clone()).is_err(),
+                "{bad}"
+            );
         }
     }
 
     #[test]
-    fn merge_applies_only_the_keys_the_patch_names() {
-        let stored = patch(json!({"theme": "dark", "cmdEnterToSend": true}));
+    fn serializes_only_the_fields_that_are_set() {
+        let json = serde_json::to_string(&prefs(json!({"theme": "light"}))).expect("serialize");
 
-        let merged = merge(stored, &patch(json!({"cmdEnterToSend": false})));
-
-        assert_eq!(merged["theme"], json!("dark"));
-        assert_eq!(merged["cmdEnterToSend"], json!(false));
+        assert_eq!(json, r#"{"theme":"light"}"#);
     }
 
     #[test]
-    fn merge_keeps_keys_written_by_a_newer_build() {
-        let stored = patch(json!({"somethingNewer": {"nested": 1}}));
-
-        let merged = merge(stored, &patch(json!({"theme": "light"})));
-
-        assert_eq!(merged["somethingNewer"], json!({"nested": 1}));
-        assert_eq!(merged["theme"], json!("light"));
-    }
-
-    #[test]
-    fn merge_treats_null_as_clearing_the_key() {
-        let stored = patch(json!({"theme": "dark"}));
-
-        let merged = merge(stored, &patch(json!({"theme": null})));
-
-        assert!(!merged.contains_key("theme"));
-    }
-
-    #[test]
-    fn validate_accepts_every_known_preference() {
-        assert!(
-            validate_patch(&patch(json!({
-                "theme": "system",
-                "cmdEnterToSend": false,
-                "filesCollapsed": true
-            })))
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn missing_file_loads_as_empty_prefs() {
+    fn missing_file_loads_as_defaults() {
         let dir = tempfile::tempdir().expect("temp dir");
 
-        assert!(load_from(&dir.path().join("prefs.json")).is_empty());
+        assert!(load(&dir.path().join("prefs.json")).is_empty());
     }
 
     #[test]
-    fn corrupt_file_loads_as_empty_prefs_instead_of_failing() {
+    fn corrupt_file_loads_as_defaults_instead_of_failing() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("prefs.json");
         fs::write(&path, "{not json").expect("write corrupt prefs");
 
-        assert!(load_from(&path).is_empty());
+        assert!(load(&path).is_empty());
+    }
+
+    #[test]
+    fn default_path_is_in_the_discuss_directory() {
+        let path = default_prefs_path();
+
+        assert!(path.ends_with(Path::new(DISCUSS_DIR_NAME).join(PREFS_FILE_NAME)));
     }
 
     #[test]
@@ -205,12 +184,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("nested").join("prefs.json");
 
-        merge_and_save_at(&path, &patch(json!({"theme": "dark"}))).expect("first save");
-        let merged = merge_and_save_at(&path, &patch(json!({"cmdEnterToSend": false})))
-            .expect("second save");
+        merge_and_save(&path, &prefs(json!({"theme": "dark"}))).expect("first save");
+        let merged =
+            merge_and_save(&path, &prefs(json!({"cmdEnterToSend": false}))).expect("second save");
 
-        assert_eq!(merged["theme"], json!("dark"));
-        assert_eq!(load_from(&path)["cmdEnterToSend"], json!(false));
+        assert_eq!(merged.theme, Some(Theme::Dark));
+        assert_eq!(load(&path).cmd_enter_to_send, Some(false));
         assert!(
             fs::read_dir(path.parent().expect("parent"))
                 .expect("read dir")
@@ -221,10 +200,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unknown_keys_and_bad_values() {
-        assert!(validate_patch(&patch(json!({"nope": 1}))).is_err());
-        assert!(validate_patch(&patch(json!({"theme": "neon"}))).is_err());
-        assert!(validate_patch(&patch(json!({"cmdEnterToSend": "true"}))).is_err());
-        assert!(validate_patch(&UiPrefs::new()).is_err());
+    fn concurrent_saves_keep_every_change() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("prefs.json");
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| merge_and_save(&path, &prefs(json!({"theme": "dark"}))));
+            scope.spawn(|| merge_and_save(&path, &prefs(json!({"cmdEnterToSend": false}))));
+            scope.spawn(|| merge_and_save(&path, &prefs(json!({"filesCollapsed": true}))));
+        });
+
+        assert_eq!(
+            load(&path),
+            prefs(json!({"theme": "dark", "cmdEnterToSend": false, "filesCollapsed": true}))
+        );
     }
 }

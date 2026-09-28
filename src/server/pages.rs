@@ -66,17 +66,19 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
     // Demo sessions render with default preferences so recordings do not pick
     // up whatever the developer has saved.
     let prefs_json = if app_state.is_offline_demo() {
-        "{}".to_string()
+        None
     } else {
-        serde_json::to_string(&prefs::load())
-            .map_err(|error| format!("failed to serialize preferences: {error}"))?
+        Some(
+            serde_json::to_string(&prefs::load(&app_state.prefs_path))
+                .map_err(|error| format!("failed to serialize preferences: {error}"))?,
+        )
     };
 
-    let page = template::render_page_with_prefs(
+    let page = template::render_page(
         &first_file_html,
         &initial_state_json,
         &rendered_files_json,
-        &prefs_json,
+        prefs_json.as_deref(),
     );
     Ok(if app_state.is_offline_demo() {
         template::without_external_prism_assets(page)

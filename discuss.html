@@ -59,9 +59,9 @@
 
 <!-- Preference plumbing. Every session binds a fresh port, so browser storage
      is scoped to one run and forgets everything between reviews. The CLI owns
-     these values (~/.discuss/prefs.json) and injects them above as
-     window.__DISCUSS_PREFS__; browser storage stays as a same-session mirror
-     so a toggle is instant and a failed write never loses the click. -->
+     these values (~/.discuss/prefs.json) and injects them just below as
+     window.__DISCUSS_PREFS__; each change updates that in-page copy at once
+     and is posted back to the CLI. -->
 <script id="discuss-prefs-client">
 (function () {
   function prefs() {
@@ -71,23 +71,13 @@
     return window.__DISCUSS_PREFS__;
   }
 
-  // Saved value wins. A value left in this browser by an older build is the
-  // fallback, so an existing choice survives the upgrade instead of resetting.
-  window.discussReadPref = function (key, legacyKey, fallback) {
+  window.discussReadPref = function (key, fallback) {
     var saved = prefs();
-    if (Object.prototype.hasOwnProperty.call(saved, key) && saved[key] !== null) {
-      return saved[key];
-    }
-    var legacy = null;
-    try { legacy = localStorage.getItem(legacyKey); } catch (_) {}
-    if (legacy === null) return fallback;
-    if (typeof fallback === 'boolean') return legacy === 'true' || legacy === '1';
-    return legacy;
+    return Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : fallback;
   };
 
-  window.discussWritePref = function (key, legacyKey, value, legacyValue) {
+  window.discussWritePref = function (key, value) {
     prefs()[key] = value;
-    try { localStorage.setItem(legacyKey, legacyValue); } catch (_) {}
     var body = {};
     body[key] = value;
     try {
@@ -104,7 +94,7 @@
 <!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
 <script id="discuss-theme-bootstrap">
 (function () {
-  var stored = window.discussReadPref('theme', 'discuss-theme', null);
+  var stored = window.discussReadPref('theme', null);
   var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
   var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
@@ -3763,13 +3753,12 @@
   // ---------- File sidebar (multi-file sessions) ----------
   // A UI preference only (collapsed vs expanded), mirroring the theme pref
   // pattern. Review state never goes through the prefs store.
-  const FILES_COLLAPSED_KEY = 'discuss-files-collapsed';
   function isFilesCollapsed() {
     // Expanded is the first-run default.
-    return window.discussReadPref('filesCollapsed', FILES_COLLAPSED_KEY, false) === true;
+    return window.discussReadPref('filesCollapsed', false) === true;
   }
   function setFilesCollapsedPref(collapsed) {
-    window.discussWritePref('filesCollapsed', FILES_COLLAPSED_KEY, collapsed, collapsed ? '1' : '0');
+    window.discussWritePref('filesCollapsed', collapsed);
   }
   function applyFilesCollapsed(collapsed, toggle) {
     document.body.classList.toggle('files-collapsed', collapsed);
@@ -4631,10 +4620,9 @@
   });
 
   // ---------- Send-shortcut setting ----------
-  const CMD_ENTER_KEY = 'discuss-cmd-enter-to-send';
-  function isCmdEnterRequired() { return window.discussReadPref('cmdEnterToSend', CMD_ENTER_KEY, true) !== false; }
+  function isCmdEnterRequired() { return window.discussReadPref('cmdEnterToSend', true) !== false; }
   function setCmdEnterRequired(v) {
-    window.discussWritePref('cmdEnterToSend', CMD_ENTER_KEY, v, v ? 'true' : 'false');
+    window.discussWritePref('cmdEnterToSend', v);
     document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v);
   }
   function enterSendCheckboxHtml() {
@@ -7608,7 +7596,6 @@
   });
 
   // ---------- Theme toggle ----------
-  const THEME_STORAGE_KEY = 'discuss-theme';
   const THEME_MODES = ['system', 'light', 'dark'];
   const themeMediaQuery = window.matchMedia
     ? window.matchMedia('(prefers-color-scheme: dark)')
@@ -7668,7 +7655,7 @@
       event.stopPropagation();
       const mode = item.getAttribute('data-mode');
       if (!THEME_MODES.includes(mode)) return;
-      window.discussWritePref('theme', THEME_STORAGE_KEY, mode, mode);
+      window.discussWritePref('theme', mode);
       applyThemeMode(mode);
       closeMenu();
       btn.focus();

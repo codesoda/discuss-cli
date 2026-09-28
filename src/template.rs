@@ -14,30 +14,21 @@ const MERMAID_SHIM_SCRIPT_CLOSE: &str = "</script>";
 const RENDERED_FILES_SCRIPT_OPEN: &str = "<script id=\"discuss-rendered-files\">";
 const RENDERED_FILES_SCRIPT_CLOSE: &str = "</script>";
 
+/// `prefs_json` carries the cross-session UI preferences read from disk. When
+/// present, it is injected ahead of the pre-paint theme bootstrap, which needs
+/// the saved theme before the first paint. `None` injects nothing and the page
+/// uses its first-run defaults.
 pub fn render_page(
     rendered_markdown: &str,
     initial_state_json: &str,
     rendered_files_json: &str,
-) -> String {
-    render_page_with_prefs(
-        rendered_markdown,
-        initial_state_json,
-        rendered_files_json,
-        "{}",
-    )
-}
-
-/// `prefs_json` carries the cross-session UI preferences read from disk. It is
-/// injected ahead of the pre-paint theme bootstrap, which needs the saved
-/// theme before the first paint.
-pub fn render_page_with_prefs(
-    rendered_markdown: &str,
-    initial_state_json: &str,
-    rendered_files_json: &str,
-    prefs_json: &str,
+    prefs_json: Option<&str>,
 ) -> String {
     let page = inject_doc_content(TEMPLATE, rendered_markdown);
-    let page = inject_prefs(&page, prefs_json);
+    let page = match prefs_json {
+        Some(prefs_json) => inject_prefs(&page, prefs_json),
+        None => page,
+    };
     let page = inject_initial_state(&page, initial_state_json);
     let page = inject_rendered_files(&page, rendered_files_json);
     inject_mermaid_shim(&page)
@@ -202,7 +193,7 @@ mod tests {
 
     #[test]
     fn injects_rendered_markdown_inside_doc_content() {
-        let page = render_page("<h1>Injected</h1>\n<p>Body</p>\n", "{}", "[]");
+        let page = render_page("<h1>Injected</h1>\n<p>Body</p>\n", "{}", "[]", None);
 
         assert_eq!(
             doc_content_inner(&page),
@@ -212,7 +203,7 @@ mod tests {
 
     #[test]
     fn seeds_initial_state_json_before_main_script() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         let state_script_start = page
             .find(INITIAL_STATE_SCRIPT_OPEN)
@@ -227,7 +218,7 @@ mod tests {
 
     #[test]
     fn seeds_prefs_before_the_pre_paint_theme_bootstrap() {
-        let page = render_page_with_prefs("<p>Doc</p>", "{}", "[]", r#"{"theme":"dark"}"#);
+        let page = render_page("<p>Doc</p>", "{}", "[]", Some(r#"{"theme":"dark"}"#));
 
         let prefs_start = page
             .find(PREFS_SCRIPT_OPEN)
@@ -246,24 +237,27 @@ mod tests {
 
     #[test]
     fn ui_preferences_are_written_back_to_the_cli_not_just_the_browser() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
-        // localStorage is scoped to this session's port, so it can only ever
-        // be a same-session mirror; the CLI holds the durable copy.
-        assert!(page.contains("window.discussReadPref = function (key, legacyKey, fallback)"));
+        // localStorage is scoped to this session's port, so the CLI is the
+        // only store of UI preferences.
+        assert!(page.contains("window.discussReadPref = function (key, fallback)"));
         assert!(page.contains("fetch('/api/prefs'"));
-        assert!(page.contains("window.discussReadPref('theme', 'discuss-theme', null)"));
-        assert!(page.contains("window.discussWritePref('theme', THEME_STORAGE_KEY, mode, mode)"));
-        assert!(page.contains("window.discussReadPref('cmdEnterToSend', CMD_ENTER_KEY, true)"));
+        assert!(page.contains("window.discussReadPref('theme', null)"));
+        assert!(page.contains("window.discussWritePref('theme', mode)"));
+        assert!(page.contains("window.discussReadPref('cmdEnterToSend', true)"));
+        assert!(page.contains("window.discussWritePref('cmdEnterToSend', v)"));
+        // No saved preferences means no seed; the page uses its defaults.
+        assert!(!page.contains(PREFS_SCRIPT_OPEN));
     }
 
     #[test]
     fn prefs_json_is_safe_inside_script_tag() {
-        let page = render_page_with_prefs(
+        let page = render_page(
             "<p>Doc</p>",
             "{}",
             "[]",
-            r#"{"theme":"</script><p>break</p>"}"#,
+            Some(r#"{"theme":"</script><p>break</p>"}"#),
         );
 
         assert!(page.contains(r#"{"theme":"\u003c/script>\u003cp>break\u003c/p>"}"#));
@@ -273,7 +267,7 @@ mod tests {
     fn preserves_template_markup_outside_injection_points() {
         let rendered_markdown = "<h1>Injected</h1>\n";
         let expected_without_state = inject_doc_content(TEMPLATE, rendered_markdown);
-        let page = render_page(rendered_markdown, "{}", "[]");
+        let page = render_page(rendered_markdown, "{}", "[]", Some("{}"));
 
         assert_eq!(without_injected_scripts(&page), expected_without_state);
     }
@@ -294,7 +288,12 @@ mod tests {
 
     #[test]
     fn seeds_rendered_files_json_before_main_script() {
-        let page = render_page("<p>Doc</p>", "{}", r#"[{"id":"f-1","html":"<h1>hi</h1>"}]"#);
+        let page = render_page(
+            "<p>Doc</p>",
+            "{}",
+            r#"[{"id":"f-1","html":"<h1>hi</h1>"}]"#,
+            None,
+        );
 
         let files_script_start = page
             .find(RENDERED_FILES_SCRIPT_OPEN)
@@ -312,7 +311,12 @@ mod tests {
 
     #[test]
     fn initial_state_json_is_safe_inside_script_tag() {
-        let page = render_page("<p>Doc</p>", r#"{"text":"</script><p>break</p>"}"#, "[]");
+        let page = render_page(
+            "<p>Doc</p>",
+            r#"{"text":"</script><p>break</p>"}"#,
+            "[]",
+            None,
+        );
 
         assert!(page.contains(r#"{"text":"\u003c/script>\u003cp>break\u003c/p>"}"#));
         assert_eq!(page.matches(INITIAL_STATE_SCRIPT_OPEN).count(), 1);
@@ -320,7 +324,7 @@ mod tests {
 
     #[test]
     fn bundled_template_wires_prism_for_syntax_highlighting() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism.min.css"));
         assert!(page.contains("https://unpkg.com/prismjs@1.30.0/themes/prism-tomorrow.min.css"));
@@ -343,7 +347,7 @@ mod tests {
 
     #[test]
     fn offline_demo_page_removes_every_public_prism_request() {
-        let normal = render_page("<p>Doc</p>", "{}", "[]");
+        let normal = render_page("<p>Doc</p>", "{}", "[]", None);
         let offline = without_external_prism_assets(normal);
 
         assert!(!offline.contains("https://unpkg.com"));
@@ -354,7 +358,7 @@ mod tests {
 
     #[test]
     fn bundled_template_skips_prism_for_mermaid_blocks() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("function isMermaidPre(pre)"));
         assert!(page.contains("language-mermaid"));
@@ -365,7 +369,7 @@ mod tests {
 
     #[test]
     fn bundled_template_includes_theme_toggle_with_system_default() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains(r#"id="theme-toggle""#));
         assert!(page.contains("theme-icon-system"));
@@ -373,7 +377,6 @@ mod tests {
         assert!(page.contains("theme-icon-dark"));
         assert!(page.contains("function applyThemeMode(mode)"));
         assert!(page.contains("function initThemeToggle()"));
-        assert!(page.contains("'discuss-theme'"));
         assert!(page.contains("'(prefers-color-scheme: dark)'"));
         assert!(page.contains(r#"html[data-theme="dark"]"#));
         assert!(page.contains("link[data-prism-theme]"));
@@ -394,6 +397,7 @@ mod tests {
             "<pre><code class=\"language-mermaid\">flowchart TD</code></pre>",
             "{}",
             "[]",
+            None,
         );
 
         let shim_script_start = page
@@ -414,6 +418,7 @@ mod tests {
             r#"<div class="html-review"><iframe class="prototype-frame" sandbox="allow-scripts allow-same-origin"></iframe></div>"#,
             "{}",
             "[]",
+            None,
         );
 
         assert!(page.contains(r#"id="inspect-toggle""#));
@@ -432,7 +437,7 @@ mod tests {
 
     #[test]
     fn bundled_template_hydrates_state_from_seed_or_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         let seed_check = page
             .find("if (stateSeed)")
@@ -446,29 +451,15 @@ mod tests {
         assert!(page.contains("raw.threads"));
         assert!(page.contains("raw.replies"));
         assert!(page.contains("draft.updatedAt"));
-        // localStorage may only mirror UI preferences (theme, ⌘-Enter-to-send,
-        // sidebar collapse), never document/thread state. The old
-        // state-in-localStorage pattern used STORAGE_KEY = 'discuss-state' —
-        // that must stay removed. Preference reads and writes now go through
-        // the shared helper, which names its argument `legacyKey`.
-        for (offset, _) in page.match_indices("localStorage") {
-            let window_end = (offset + 80).min(page.len());
-            let context = &page[offset..window_end];
-            assert!(
-                context.contains("legacyKey")
-                    || context.contains("discuss-theme")
-                    || context.contains("THEME_STORAGE_KEY")
-                    || context.contains("CMD_ENTER_KEY")
-                    || context.contains("FILES_COLLAPSED_KEY"),
-                "localStorage may only persist UI preferences; saw: {context}",
-            );
-        }
-        assert!(!page.contains("STORAGE_KEY = 'discuss-state'"));
+        // Browser storage is scoped to one session's port, so the page keeps
+        // nothing there: review state flows through the server, and UI
+        // preferences through `/api/prefs`.
+        assert!(!page.contains("localStorage"));
     }
 
     #[test]
     fn bundled_template_does_not_resegment_markdown_anchors() {
-        let page = render_page("<p data-anchor-idx=\"1\">Doc</p>", "{}", "[]");
+        let page = render_page("<p data-anchor-idx=\"1\">Doc</p>", "{}", "[]", None);
 
         assert!(!page.contains("COMMENTABLE_SELECTOR"));
         assert!(!page.contains("assignAnchorIndices"));
@@ -478,7 +469,7 @@ mod tests {
 
     #[test]
     fn bundled_template_has_accessible_collapsible_file_sidebar() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         // Toggle markup + accessibility wiring.
         assert!(page.contains("file-sidebar-toggle"));
@@ -537,7 +528,7 @@ mod tests {
 
     #[test]
     fn bundled_template_groups_files_into_collapsible_folder_tree() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("function buildFileTree(files)"));
         assert!(page.contains("function appendFileTree(container, node)"));
@@ -552,7 +543,7 @@ mod tests {
 
     #[test]
     fn bundled_template_tracks_viewed_pr_files_and_advances() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("viewedFiles: Array.isArray(rawSession.viewedFiles)"));
         assert!(page.contains("function installPrFileViewedControl()"));
@@ -579,7 +570,7 @@ mod tests {
 
     #[test]
     fn bundled_template_moves_diff_counts_into_file_header() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("stats.className = 'diff-file-stats'"));
         assert!(page.contains("metadataText.match(/^\\+(\\d+)\\s+[−-](\\d+)"));
@@ -593,7 +584,7 @@ mod tests {
 
     #[test]
     fn bundled_template_uses_explicit_whole_file_comment_control() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         assert!(page.contains("comment.className = 'diff-file-comment'"));
         assert!(page.contains(
@@ -611,7 +602,7 @@ mod tests {
 
     #[test]
     fn bundled_template_has_self_contained_github_diff_colors() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
         for token in [
             "--diff-file-header-bg",
@@ -640,24 +631,17 @@ mod tests {
     }
 
     #[test]
-    fn file_sidebar_collapse_pref_defaults_to_expanded_and_persists_ui_pref_only() {
-        let page = render_page("<p>Doc</p>", "{}", "[]");
+    fn file_sidebar_collapse_pref_defaults_to_expanded_and_saves_through_prefs() {
+        let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
-        assert!(page.contains("const FILES_COLLAPSED_KEY = 'discuss-files-collapsed'"));
         // Unset reads as expanded: the first-run default.
-        assert!(page.contains(
-            "window.discussReadPref('filesCollapsed', FILES_COLLAPSED_KEY, false) === true"
-        ));
-        assert!(page.contains(
-            "window.discussWritePref('filesCollapsed', FILES_COLLAPSED_KEY, collapsed, collapsed ? '1' : '0')"
-        ));
-        // Only the UI pref is stored - never review state.
-        assert!(!page.contains("localStorage.setItem('discuss-state'"));
+        assert!(page.contains("window.discussReadPref('filesCollapsed', false) === true"));
+        assert!(page.contains("window.discussWritePref('filesCollapsed', collapsed)"));
     }
 
     #[test]
     fn bundled_template_links_thread_summary_to_thread_cards() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("class=\"toggle thread-summary-toggle\""));
         assert!(page.contains("function threadSummaryEntries(state)"));
@@ -668,7 +652,7 @@ mod tests {
 
     #[test]
     fn bundled_template_supports_image_pin_threads() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("function normalizeImageAnchor(raw)"));
         assert!(page.contains("function openImagePinEditor(imageAnchor)"));
@@ -680,7 +664,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_thread_mutations_to_rest_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("await apiJson('/api/threads'"));
         assert!(page.contains("await apiJson(threadApiPath(threadId, '/replies')"));
@@ -693,7 +677,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_draft_mutations_to_rest_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("function persistNewThreadDraft"));
         assert!(page.contains("function queueDraftRequest"));
@@ -707,7 +691,7 @@ mod tests {
 
     #[test]
     fn bundled_template_surfaces_rest_mutation_failures_inline() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains(".mutation-error"));
         assert!(page.contains("function showMutationError"));
@@ -724,7 +708,7 @@ mod tests {
 
     #[test]
     fn bundled_template_subscribes_to_sse_and_applies_incremental_events() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("new EventSource('/api/events')"));
         assert!(page.contains("'thread.created'"));
@@ -743,7 +727,7 @@ mod tests {
 
     #[test]
     fn bundled_template_sends_browser_heartbeat() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("const HEARTBEAT_INTERVAL_MS = 30000"));
         assert!(page.contains("fetch('/api/heartbeat'"));
@@ -762,7 +746,7 @@ mod tests {
 
     #[test]
     fn bundled_template_interleaves_takes_and_replies_chronologically() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("return sortCommentsByCreatedAt(items);"));
         assert!(page.contains("function sortCommentsByCreatedAt(items)"));
@@ -773,7 +757,7 @@ mod tests {
 
     #[test]
     fn bundled_template_marks_thread_contributor_state() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains(".thread-marker.kind-mixed"));
         assert!(page.contains("function markerKindForThread(state, threadId, prep)"));
@@ -785,7 +769,7 @@ mod tests {
 
     #[test]
     fn bundled_template_has_accessible_pr_publication_dialog_and_endpoints() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains(r#"id="pr-modal" hidden"#));
         assert!(
@@ -813,7 +797,7 @@ mod tests {
 
     #[test]
     fn bundled_template_exposes_demo_scenarios_and_labels_local_pr_simulation() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains(r#"id="demo-scenarios" aria-label="Demo scenarios""#));
         assert!(page.contains("state.demoScenarios = Array.isArray(raw.demoScenarios)"));
@@ -827,7 +811,7 @@ mod tests {
 
     #[test]
     fn bundled_template_edits_every_pr_item_and_previews_raw_gfm_first() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("include.checked = item.include === true;"));
         assert!(
@@ -862,7 +846,7 @@ mod tests {
 
     #[test]
     fn bundled_template_hydrates_pr_and_imported_prepopulated_threads_and_handles_pr_sse() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("state.prSession = normalizePrSession(raw.prSession);"));
         assert!(page.contains("function syncPrepopulatedFromState(state)"));
@@ -893,7 +877,7 @@ mod tests {
 
     #[test]
     fn bundled_template_finishes_session_through_done_api() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains(">Finish review</button>"));
         assert!(page.contains("You can close this tab."));
@@ -909,7 +893,7 @@ mod tests {
 
     #[test]
     fn bundled_template_shows_version_history_and_update_copy() {
-        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]");
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
         assert!(page.contains("<h1>Discuss</h1>"));
         assert!(!page.contains("Contextual Discussion"));

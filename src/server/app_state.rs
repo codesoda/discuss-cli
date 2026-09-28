@@ -15,6 +15,7 @@ use crate::Config;
 use crate::events::EventEmitter;
 use crate::history;
 use crate::pr::{GithubPrUrl, PrPhase, PrReviewState};
+use crate::prefs;
 use crate::sse::EventBus;
 use crate::state::{
     DemoScenarioLink, File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id,
@@ -51,6 +52,7 @@ pub struct AppState {
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
     pub(super) history_dir: Arc<PathBuf>,
+    pub(super) prefs_path: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
     done_started: Arc<AtomicBool>,
     finalization: Arc<Mutex<Option<FinalizationClaim>>>,
@@ -85,6 +87,7 @@ impl AppState {
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
             history_dir: Arc::new(history::default_history_dir()),
+            prefs_path: Arc::new(prefs::default_prefs_path()),
             no_save: Arc::new(AtomicBool::new(false)),
             done_started: Arc::new(AtomicBool::new(false)),
             finalization: Arc::new(Mutex::new(None)),
@@ -266,6 +269,11 @@ impl AppState {
 
     pub fn with_history_dir(mut self, history_dir: impl Into<PathBuf>) -> Self {
         self.history_dir = Arc::new(history_dir.into());
+        self
+    }
+
+    pub fn with_prefs_path(mut self, prefs_path: impl Into<PathBuf>) -> Self {
+        self.prefs_path = Arc::new(prefs_path.into());
         self
     }
 
