@@ -13,6 +13,7 @@ use clap::CommandFactory;
 use crate::state::{DemoScenarioLink, File, FileId, FileKind, Source};
 
 pub mod assets;
+pub mod block_map;
 pub mod blocks;
 pub mod cli;
 pub mod config;

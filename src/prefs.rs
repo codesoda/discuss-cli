@@ -42,6 +42,10 @@ pub struct UiPrefs {
     pub cmd_enter_to_send: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_collapsed: Option<bool>,
+    /// Whether the document opens in edit mode (live block editing) rather
+    /// than review mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_mode: Option<bool>,
 }
 
 impl UiPrefs {
@@ -55,6 +59,7 @@ impl UiPrefs {
             theme: patch.theme.or(self.theme),
             cmd_enter_to_send: patch.cmd_enter_to_send.or(self.cmd_enter_to_send),
             files_collapsed: patch.files_collapsed.or(self.files_collapsed),
+            edit_mode: patch.edit_mode.or(self.edit_mode),
         }
     }
 }
@@ -120,6 +125,7 @@ mod tests {
         assert_eq!(merged.theme, Some(Theme::Dark));
         assert_eq!(merged.cmd_enter_to_send, Some(false));
         assert_eq!(merged.files_collapsed, None);
+        assert_eq!(merged.edit_mode, None);
     }
 
     #[test]
@@ -127,12 +133,14 @@ mod tests {
         let parsed = prefs(json!({
             "theme": "system",
             "cmdEnterToSend": false,
-            "filesCollapsed": true
+            "filesCollapsed": true,
+            "editMode": true
         }));
 
         assert_eq!(parsed.theme, Some(Theme::System));
         assert_eq!(parsed.cmd_enter_to_send, Some(false));
         assert_eq!(parsed.files_collapsed, Some(true));
+        assert_eq!(parsed.edit_mode, Some(true));
     }
 
     #[test]

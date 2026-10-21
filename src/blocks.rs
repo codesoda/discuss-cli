@@ -14,6 +14,10 @@ pub struct Block {
     pub snippet: String,
     /// Heading path down to this block, e.g. "Rollout plan › Phases".
     pub breadcrumb: String,
+    /// 1-based inclusive source lines this block came from, in whole-file
+    /// coordinates — the same units as `lineRange` on threads.
+    pub line_start: usize,
+    pub line_end: usize,
 }
 
 /// Returns metadata from the same AST plan that stamps the rendered markdown.
@@ -25,6 +29,8 @@ pub fn markdown_blocks(markdown: &str) -> Vec<Block> {
             index: block.index,
             snippet: block.snippet,
             breadcrumb: block.breadcrumb,
+            line_start: block.line_start,
+            line_end: block.line_end,
         })
         .collect()
 }

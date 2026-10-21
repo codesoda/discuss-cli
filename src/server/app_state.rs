@@ -2,25 +2,53 @@
 //! shutdown primitives it owns.
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::Config;
-use crate::events::EventEmitter;
+use crate::events::{Event, EventEmitter, EventKind};
 use crate::history;
 use crate::pr::{GithubPrUrl, PrPhase, PrReviewState};
 use crate::prefs;
-use crate::sse::EventBus;
+use crate::sse::{BroadcastEvent, EventBus};
 use crate::state::{
     DemoScenarioLink, File, FileId, FileKind, SharedState, Source, State, ThreadId, default_file_id,
 };
 use crate::verdict::VerdictConfig;
+
+/// How long after the last block edit the file is written. A burst of edits
+/// becomes one disk write per file.
+const SOURCE_WRITE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Write-behind bookkeeping for persisting user block edits to their files.
+#[derive(Debug, Default)]
+struct SourceSyncState {
+    /// Per file: the content we believe is on disk — what we loaded at
+    /// launch, last wrote, or an agent last pushed. The external-change guard
+    /// compares the file against this before every write.
+    last_synced: HashMap<FileId, Arc<str>>,
+    /// Per file: bumped per scheduled write; a sleeping writer only runs if
+    /// it is still the newest, which debounces rapid edits into one write.
+    write_generations: HashMap<FileId, u64>,
+}
+
+/// The on-disk path a file's edits persist to: markdown files loaded from a
+/// real (absolute) path. Stdin docs (`<stdin>`), diff panes, images and HTML
+/// prototypes have no writable markdown source.
+pub(super) fn persistable_file_path(file: &File) -> Option<PathBuf> {
+    if file.kind != FileKind::Markdown {
+        return None;
+    }
+    let path = Path::new(&file.path);
+    path.is_absolute().then(|| path.to_path_buf())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PrExecutionMode {
@@ -48,6 +76,7 @@ pub struct AppState {
     pub bus: Arc<EventBus>,
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     pub(super) source: Arc<std::sync::RwLock<Source>>,
+    source_sync: Arc<Mutex<SourceSyncState>>,
     pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
@@ -83,6 +112,7 @@ impl AppState {
             bus,
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
+            source_sync: Arc::new(Mutex::new(SourceSyncState::default())),
             file_bytes: Arc::new(HashMap::new()),
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
@@ -117,6 +147,15 @@ impl AppState {
     }
 
     pub fn with_source(self, source: Source) -> Self {
+        if let Ok(mut sync) = self.source_sync.lock() {
+            sync.last_synced.clear();
+            for file in &source.files {
+                if persistable_file_path(file).is_some() {
+                    sync.last_synced
+                        .insert(file.id.clone(), Arc::from(file.content.as_str()));
+                }
+            }
+        }
         if let Ok(mut current) = self.source.write() {
             *current = source;
         }
@@ -219,6 +258,148 @@ impl AppState {
                 .find(|file| &file.id == file_id)
                 .cloned()
         })
+    }
+
+    /// Whether user edits to this file reach its path on disk. Diff panes,
+    /// stdin docs, and --no-save runs live only in this process.
+    pub(super) fn file_persisted(&self, file: &File) -> bool {
+        !self.no_save() && persistable_file_path(file).is_some()
+    }
+
+    /// An agent pushed this content through `POST /api/source`: it owns the
+    /// file, so treat its push as what is now on disk. Without this a user
+    /// edit after any agent push would trip the external-change guard.
+    pub(super) fn note_agent_synced(&self, file_id: &FileId, content: &str) {
+        if let Ok(mut sync) = self.source_sync.lock()
+            && sync.last_synced.contains_key(file_id)
+        {
+            sync.last_synced.insert(file_id.clone(), Arc::from(content));
+        }
+    }
+
+    /// Debounced write-behind: bump the file's generation and let only the
+    /// newest scheduled writer actually persist.
+    pub(super) fn schedule_source_write(&self, file: &File) {
+        if self.no_save() {
+            return;
+        }
+        let Some(path) = persistable_file_path(file) else {
+            return;
+        };
+        let file_id = file.id.clone();
+        let generation = {
+            let Ok(mut sync) = self.source_sync.lock() else {
+                return;
+            };
+            let slot = sync.write_generations.entry(file_id.clone()).or_insert(0);
+            *slot += 1;
+            *slot
+        };
+        let app_state = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(SOURCE_WRITE_DEBOUNCE).await;
+            let still_newest = app_state
+                .source_sync
+                .lock()
+                .map(|sync| sync.write_generations.get(&file_id) == Some(&generation))
+                .unwrap_or(false);
+            if still_newest {
+                app_state.persist_source(file_id, path).await;
+            }
+        });
+    }
+
+    async fn persist_source(self, file_id: FileId, path: PathBuf) {
+        // The newest content wins: read it at write time, not schedule time.
+        let Some(file) = self.file(&file_id) else {
+            return;
+        };
+        let current: Arc<str> = Arc::from(file.content.as_str());
+        let last_synced = match self.source_sync.lock() {
+            Ok(sync) => sync.last_synced.get(&file_id).cloned(),
+            Err(_) => {
+                self.emit_save_failed("io_error", "synced source lock poisoned".into(), &path);
+                return;
+            }
+        };
+
+        // External-change guard: never clobber an edit made in another app.
+        // A missing file is ours to recreate; anything else unreadable is an
+        // error worth surfacing.
+        match tokio::fs::read_to_string(&path).await {
+            Ok(on_disk) => {
+                if last_synced.as_deref() != Some(on_disk.as_str()) {
+                    self.emit_save_failed(
+                        "external_change",
+                        format!(
+                            "{} changed outside discuss; edits stay in memory until the review is restarted",
+                            path.display()
+                        ),
+                        &path,
+                    );
+                    return;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to read {}: {error}", path.display()),
+                    &path,
+                );
+                return;
+            }
+        }
+
+        // Atomic replace: temp file in the same directory, then rename, so a
+        // crash mid-write can never truncate the document.
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "source".to_string());
+        let temp_path =
+            path.with_file_name(format!(".{file_name}.{}.discuss-tmp", std::process::id()));
+        if let Err(error) = tokio::fs::write(&temp_path, current.as_bytes()).await {
+            self.emit_save_failed(
+                "io_error",
+                format!("failed to write {}: {error}", temp_path.display()),
+                &path,
+            );
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return;
+        }
+        if let Err(error) = tokio::fs::rename(&temp_path, &path).await {
+            self.emit_save_failed(
+                "io_error",
+                format!("failed to replace {}: {error}", path.display()),
+                &path,
+            );
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return;
+        }
+        if let Ok(mut sync) = self.source_sync.lock() {
+            sync.last_synced.insert(file_id, current);
+        }
+    }
+
+    fn emit_save_failed(&self, reason: &str, message: String, path: &Path) {
+        tracing::warn!(reason, %message, "source save failed");
+        let payload = serde_json::json!({
+            "reason": reason,
+            "message": message,
+            "path": path.to_string_lossy(),
+        });
+        self.bus.publish(BroadcastEvent {
+            kind: EventKind::SourceSaveFailed.to_string(),
+            payload: payload.clone(),
+        });
+        if let Err(error) = self.emitter.emit(&Event {
+            kind: EventKind::SourceSaveFailed,
+            at: Utc::now(),
+            payload,
+        }) {
+            tracing::warn!(error = %error, "failed to emit source.save_failed event");
+        }
     }
 
     pub(super) fn files_count(&self) -> usize {

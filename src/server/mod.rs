@@ -5,6 +5,7 @@
 
 mod anchors;
 mod app_state;
+mod block_edit;
 mod blocks;
 pub mod demo;
 mod done;
@@ -44,6 +45,7 @@ use crate::{DiscussError, Result};
 pub use app_state::AppState;
 
 use anchors::post_api_anchors_resolve;
+use block_edit::{get_api_block, patch_api_block};
 use blocks::get_api_file_blocks;
 use done::post_api_done;
 use drafts::{
@@ -239,6 +241,10 @@ fn build_router(app_state: AppState) -> Router {
             post(post_api_drafts_followup).delete(delete_api_drafts_followup),
         )
         .route("/api/source", post(post_api_source))
+        .route(
+            "/api/blocks/{anchor_idx}",
+            get(get_api_block).patch(patch_api_block),
+        )
         .route("/api/anchors/resolve", post(post_api_anchors_resolve))
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
