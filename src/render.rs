@@ -4,12 +4,35 @@ use std::collections::HashMap;
 use std::fmt::{self, Write};
 
 use comrak::html::{ChildRendering, Context, format_document_with_formatter, format_node_default};
-use comrak::nodes::{AstNode, NodeValue};
+use comrak::nodes::{AstNode, NodeValue, Sourcepos};
 use comrak::options::Plugins;
 use comrak::{Arena, Options, parse_document};
 
 const SNIPPET_MAX_BYTES: usize = 300;
 const ANCHOR_MARKER_PREFIX: &str = "<!--discuss-anchor-";
+
+/// What kind of source block a commentable anchor element came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BlockKind {
+    /// The YAML front-matter block (rendered as a collapsible `<details>`
+    /// whose inner `<pre>` gets a commentable `.pre-wrap`).
+    Frontmatter,
+    Heading,
+    Paragraph,
+    /// One `<li>` — list items are individually commentable, their parent
+    /// list is not.
+    ListItem,
+    BlockQuote,
+    CodeBlock,
+    /// The whole table (its `.table-wrap` anchor).
+    Table,
+    /// One `<tr>` inside a table — the header row or one body row.
+    TableRow,
+    /// One footnote definition — rendered as an `<li>` in the footnotes
+    /// section at the end of the document, in reference order.
+    FootnoteDefinition,
+}
 
 pub fn render(markdown: &str) -> String {
     render_markdown(markdown).html
@@ -48,6 +71,12 @@ pub(crate) struct RenderedBlock {
     pub(crate) index: usize,
     pub(crate) snippet: String,
     pub(crate) breadcrumb: String,
+    /// 1-based first source line (inclusive), in whole-file coordinates.
+    pub(crate) line_start: usize,
+    /// 1-based last source line (inclusive). An empty front-matter block has
+    /// `line_end == line_start - 1`, meaning "insert before `line_start`".
+    pub(crate) line_end: usize,
+    pub(crate) kind: BlockKind,
 }
 
 pub(crate) struct RenderedMarkdown {
@@ -67,6 +96,12 @@ struct PlannedBlock {
     target: AnchorTarget,
     snippet: String,
     breadcrumb: String,
+    kind: BlockKind,
+    /// 1-based inclusive source lines in whole-file coordinates. Comrak's
+    /// sourcepos is body-relative; the plan converts it when front matter
+    /// precedes the body.
+    line_start: usize,
+    line_end: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -86,17 +121,23 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
     let mut footnotes = Vec::new();
     let mut heading_stack: Vec<(u8, String)> = Vec::new();
 
-    let (frontmatter, body) = if let Some((frontmatter, body)) = split_frontmatter(markdown) {
-        planned.push(PlannedBlock {
-            node_id: None,
-            target: AnchorTarget::PreWrapper,
-            snippet: truncate_snippet(frontmatter.trim()),
-            breadcrumb: String::new(),
-        });
-        (Some(frontmatter), body)
-    } else {
-        (None, markdown)
-    };
+    let (frontmatter, body, body_line_offset) =
+        if let Some((frontmatter, body)) = split_frontmatter(markdown) {
+            // Opening fence + YAML lines + closing fence precede the body.
+            let yaml_lines = frontmatter.matches('\n').count();
+            planned.push(PlannedBlock {
+                node_id: None,
+                target: AnchorTarget::PreWrapper,
+                snippet: truncate_snippet(frontmatter.trim()),
+                breadcrumb: String::new(),
+                kind: BlockKind::Frontmatter,
+                line_start: 2,
+                line_end: 1 + yaml_lines,
+            });
+            (Some(frontmatter), body, yaml_lines + 2)
+        } else {
+            (None, markdown, 0)
+        };
 
     let options = render_options();
     let arena = Arena::new();
@@ -104,6 +145,7 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
 
     for node in root.children() {
         let node_key = node_id(node);
+        let sourcepos = node.data.borrow().sourcepos;
         match &node.data.borrow().value {
             NodeValue::Heading(heading) => {
                 // h6 is deliberately neither commentable nor part of the
@@ -126,6 +168,9 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                     }),
                     snippet: truncate_snippet(&text),
                     breadcrumb: breadcrumb(&heading_stack),
+                    kind: BlockKind::Heading,
+                    line_start: sourcepos.start.line + body_line_offset,
+                    line_end: sourcepos.end.line + body_line_offset,
                 });
             }
             NodeValue::Paragraph => planned.push(planned_node(
@@ -133,12 +178,16 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                 node_key,
                 AnchorTarget::Element("<p"),
                 &heading_stack,
+                BlockKind::Paragraph,
+                body_line_offset,
             )),
             NodeValue::BlockQuote => planned.push(planned_node(
                 node,
                 node_key,
                 AnchorTarget::Element("<blockquote"),
                 &heading_stack,
+                BlockKind::BlockQuote,
+                body_line_offset,
             )),
             NodeValue::Table(_) => {
                 // Keep the table-level anchor first so existing table threads
@@ -148,6 +197,8 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                     node_key,
                     AnchorTarget::TableWrapper,
                     &heading_stack,
+                    BlockKind::Table,
+                    body_line_offset,
                 ));
                 for (row_offset, row) in node.children().enumerate() {
                     let is_header = matches!(row.data.borrow().value, NodeValue::TableRow(true));
@@ -163,6 +214,8 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                         node_id(row),
                         AnchorTarget::Element("<tr"),
                         &row_breadcrumb,
+                        BlockKind::TableRow,
+                        body_line_offset,
                     ));
                 }
             }
@@ -171,6 +224,9 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                 target: AnchorTarget::PreWrapper,
                 snippet: truncate_snippet(code_block.literal.trim_end()),
                 breadcrumb: breadcrumb(&heading_stack),
+                kind: BlockKind::CodeBlock,
+                line_start: sourcepos.start.line + body_line_offset,
+                line_end: sourcepos.end.line + body_line_offset,
             }),
             NodeValue::List(_) => {
                 // Only direct children of a root list are outermost anchors.
@@ -184,6 +240,8 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                             node_id(item),
                             AnchorTarget::Element("<li"),
                             &heading_stack,
+                            BlockKind::ListItem,
+                            body_line_offset,
                         ));
                     }
                 }
@@ -196,6 +254,8 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                     node_key,
                     AnchorTarget::Element("<li"),
                     &heading_stack,
+                    BlockKind::FootnoteDefinition,
+                    body_line_offset,
                 ));
             }
             // Thematic breaks and raw HTML blocks are not commentable.
@@ -203,6 +263,7 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
         }
     }
     planned.extend(footnotes);
+    trim_trailing_blank_lines(markdown, &mut planned);
 
     let mut anchors = HashMap::new();
     let blocks = planned
@@ -223,6 +284,9 @@ pub(crate) fn render_markdown(markdown: &str) -> RenderedMarkdown {
                 index,
                 snippet: block.snippet.clone(),
                 breadcrumb: block.breadcrumb.clone(),
+                line_start: block.line_start,
+                line_end: block.line_end,
+                kind: block.kind,
             }
         })
         .collect();
@@ -251,12 +315,35 @@ fn planned_node<'a>(
     node_id: usize,
     target: AnchorTarget,
     heading_stack: &[(u8, String)],
+    kind: BlockKind,
+    body_line_offset: usize,
 ) -> PlannedBlock {
+    let sourcepos: Sourcepos = node.data.borrow().sourcepos;
     PlannedBlock {
         node_id: Some(node_id),
         target,
         snippet: truncate_snippet(&plain_text(node)),
         breadcrumb: breadcrumb(heading_stack),
+        kind,
+        line_start: sourcepos.start.line + body_line_offset,
+        line_end: sourcepos.end.line + body_line_offset,
+    }
+}
+
+/// Comrak lets some blocks absorb the blank line that follows them (a list's
+/// final item, indented code). Trim trailing blank lines from every planned
+/// range so an editor never presents them as part of the block — deleting one
+/// in a textarea could merge adjacent blocks.
+fn trim_trailing_blank_lines(markdown: &str, planned: &mut [PlannedBlock]) {
+    let lines: Vec<&str> = markdown.split_inclusive('\n').collect();
+    for block in planned {
+        while block.line_end > block.line_start
+            && lines
+                .get(block.line_end - 1)
+                .is_some_and(|line| line.trim().is_empty())
+        {
+            block.line_end -= 1;
+        }
     }
 }
 

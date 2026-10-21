@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{Event, EventKind};
 use crate::sse::BroadcastEvent;
-use crate::state::{FileId, FileKind, LineRange, ThreadId};
+use crate::state::{File, FileId, FileKind, LineRange, Thread, ThreadId};
 
 use super::app_state::AppState;
 use super::pages::render_file_html;
@@ -232,8 +232,28 @@ pub(super) async fn post_api_source(
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();
+    app_state.note_agent_synced(&file_id, &markdown);
+    source_updated_response(
+        &app_state,
+        &updated_file,
+        markdown,
+        &threads,
+        source_version,
+    )
+}
 
-    let rendered_html = render_file_html(&updated_file);
+/// Render the updated file, broadcast `source.updated` over SSE and stdout,
+/// and return the payload — the shared tail of every source-mutating
+/// endpoint (`POST /api/source`, `PATCH /api/blocks/{idx}`).
+pub(super) fn source_updated_response(
+    app_state: &AppState,
+    updated_file: &File,
+    markdown: String,
+    threads: &[Thread],
+    source_version: u64,
+) -> Response {
+    let file_id = updated_file.id.clone();
+    let rendered_html = render_file_html(updated_file);
     let thread_anchors = threads
         .iter()
         .filter(|thread| thread.file_id == file_id)
