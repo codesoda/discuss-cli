@@ -3,6 +3,7 @@
 //! Route handlers live in focused submodules (`source`, `threads`, `drafts`,
 //! `done`, `pages`) and share the helpers defined here.
 
+mod agent_status;
 mod anchors;
 mod app_state;
 mod block_edit;
@@ -14,6 +15,7 @@ mod files;
 mod pages;
 mod pr;
 mod prefs;
+mod proposals;
 mod response;
 mod source;
 mod threads;
@@ -31,7 +33,7 @@ use axum::http::Request;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use chrono::Utc;
 use tokio::net::TcpListener;
 use tokio::time::MissedTickBehavior;
@@ -44,6 +46,7 @@ use crate::{DiscussError, Result};
 
 pub use app_state::AppState;
 
+use agent_status::{get_api_agent_status, post_api_agent_status};
 use anchors::post_api_anchors_resolve;
 use block_edit::{get_api_block, patch_api_block};
 use blocks::get_api_file_blocks;
@@ -63,6 +66,10 @@ use pr::{
     post_api_pr_publication_result, post_api_pr_publish, post_api_pr_summary,
 };
 use prefs::post_api_prefs;
+use proposals::{
+    get_api_proposals, post_api_proposal_accept, post_api_proposal_discard, post_api_proposals,
+    post_api_rewrite, put_api_proposals_hold,
+};
 use response::{api_error_response, not_found};
 use source::post_api_source;
 use threads::{
@@ -244,6 +251,21 @@ fn build_router(app_state: AppState) -> Router {
         .route(
             "/api/blocks/{anchor_idx}",
             get(get_api_block).patch(patch_api_block),
+        )
+        .route(
+            "/api/proposals",
+            get(get_api_proposals).post(post_api_proposals),
+        )
+        .route("/api/proposals/hold", put(put_api_proposals_hold))
+        .route("/api/proposals/{id}/accept", post(post_api_proposal_accept))
+        .route(
+            "/api/proposals/{id}/discard",
+            post(post_api_proposal_discard),
+        )
+        .route("/api/rewrite", post(post_api_rewrite))
+        .route(
+            "/api/agent/status",
+            get(get_api_agent_status).post(post_api_agent_status),
         )
         .route("/api/anchors/resolve", post(post_api_anchors_resolve))
         .route("/api/threads", post(post_api_threads))

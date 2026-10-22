@@ -284,7 +284,11 @@ fn uneditable_file_response(file: &File) -> Response {
 
 /// The source lines a carried anchor range spans in the new document, when
 /// both endpoints resolve to mapped blocks.
-fn line_range_for(map: &BlockMap, anchor_start: usize, anchor_end: usize) -> Option<LineRange> {
+pub(super) fn line_range_for(
+    map: &BlockMap,
+    anchor_start: usize,
+    anchor_end: usize,
+) -> Option<LineRange> {
     let start_block = map.get(anchor_start)?;
     let end_block = map.get(anchor_end)?;
     let start = u32::try_from(start_block.line_start).ok()?;
