@@ -6,6 +6,7 @@
 mod agent_status;
 mod anchors;
 mod app_state;
+mod audio;
 mod block_edit;
 mod blocks;
 pub mod demo;
@@ -48,6 +49,7 @@ pub use app_state::AppState;
 
 use agent_status::{get_api_agent_status, post_api_agent_status};
 use anchors::post_api_anchors_resolve;
+use audio::{MAX_AUDIO_BYTES, get_api_audio, post_api_audio};
 use block_edit::{get_api_block, patch_api_block};
 use blocks::get_api_file_blocks;
 use done::post_api_done;
@@ -268,6 +270,11 @@ fn build_router(app_state: AppState) -> Router {
             get(get_api_agent_status).post(post_api_agent_status),
         )
         .route("/api/anchors/resolve", post(post_api_anchors_resolve))
+        .route(
+            "/api/audio",
+            post(post_api_audio).layer(DefaultBodyLimit::max(MAX_AUDIO_BYTES)),
+        )
+        .route("/api/audio/{id}", get(get_api_audio))
         .route("/api/threads", post(post_api_threads))
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))

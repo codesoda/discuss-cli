@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Turn off folding sections** — the theme menu has a "Fold sections" switch, remembered across sessions. Editing a heading no longer folds its section shut.
 - **A tidier top bar** — one primary action, quiet tool buttons, a one-line brand, and a narrower comment pane that remembers the width you drag it to.
 - **Finish review closes the tab** — after a successful finish the review tab closes itself. If the browser refuses (it only allows this for tabs the CLI opened), the done banner stays up as before.
+- **Hold-to-talk voice notes** — in markdown and diff files, press and hold still on a block for a quarter second (or hover it and hold `V`), talk, and let go. The clip is uploaded to `POST /api/audio`, saved to a per-process temp folder, and attached to a new thread that plays back in its panel. `thread.created` carries `audioId` and `audioPath` so the agent can transcribe the clip locally; discuss itself does no speech-to-text. Moving the pointer before the hold fires keeps normal click and select behaviour, and Esc cancels a recording. Closes [#65](https://github.com/codesoda/discuss-cli/issues/65).
 
 ### Fixed
 

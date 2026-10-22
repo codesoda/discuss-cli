@@ -17,6 +17,7 @@ use crate::state::{
 };
 
 use super::app_state::AppState;
+use super::audio::audio_path_for_id;
 use super::resolve_file_id;
 use super::response::{OkResponse, api_error_response};
 
@@ -62,6 +63,10 @@ pub(super) struct CreateThreadRequest {
     /// computed against an outdated document are rejected instead of drifting.
     #[serde(default)]
     source_version: Option<u64>,
+    /// Voice note clip returned by `POST /api/audio`. Markdown and diff
+    /// threads only.
+    #[serde(default)]
+    audio_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -348,6 +353,28 @@ pub(super) async fn post_api_threads(
             }
         };
 
+    let audio = match request.audio_id {
+        None => None,
+        Some(_) if !matches!(file_kind, FileKind::Markdown | FileKind::Diff) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "validation_error",
+                "audioId is only supported for markdown and diff files",
+            );
+        }
+        Some(audio_id) => match audio_path_for_id(&audio_id) {
+            Some(path) => Some((audio_id, path.display().to_string())),
+            None => {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "validation_error",
+                    format!("unknown audioId `{audio_id}`"),
+                );
+            }
+        },
+    };
+    let (audio_id, audio_path) = audio.unzip();
+
     if request.kind == RequestThreadKind::Agent && text.trim().is_empty() {
         return api_error_response(
             StatusCode::BAD_REQUEST,
@@ -418,6 +445,8 @@ pub(super) async fn post_api_threads(
             line_range,
             orphaned: false,
             element_anchor,
+            audio_id,
+            audio_path,
         };
         state.add_thread(thread.clone());
         // Still under the write lock so no snapshot can observe an agent

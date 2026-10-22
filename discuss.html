@@ -2331,6 +2331,34 @@
     resize: vertical;
   }
   #rewrite-popover .rw-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+  /* ---------- Voice notes (hold to talk) ---------- */
+  body.voice-holding, body.voice-holding * { user-select: none !important; -webkit-user-select: none !important; }
+  #doc-content [data-anchor-idx].voice-target {
+    background: var(--accent-soft);
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+  }
+  #voice-badge {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font: 600 12px/1.4 system-ui, sans-serif;
+    color: var(--danger-ink);
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  #voice-badge.shown { display: inline-flex; }
+  #voice-badge.busy { color: var(--ink-soft); background: var(--card); border-color: var(--line-strong); }
+  #voice-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); animation: voice-pulse 1s ease-in-out infinite; }
+  #voice-badge.busy .dot { animation: none; background: var(--muted); }
+  @keyframes voice-pulse { 50% { opacity: 0.3; } }
+  .thread .voice-note-audio { width: 100%; height: 32px; margin: 4px 0 8px; }
 </style>
 </head>
 <body>
@@ -2516,6 +2544,7 @@
 <div id="selection-popup">💬 Comment</div>
 <div id="thread-tooltip"></div>
 <div id="toast-host"></div>
+<div id="voice-badge" role="status" aria-live="polite"><span class="dot"></span><span class="label"></span></div>
 
 <!-- ==================== PREPOPULATED THREADS ==================== -->
 <!-- Replace with your own seed data, or leave as [] for a blank review. -->
@@ -2715,6 +2744,7 @@
         lineRange: normalizeLineRange(t.lineRange),
         orphaned: !!t.orphaned,
         elementAnchor: normalizeElementAnchor(t.elementAnchor),
+        audioId: typeof t.audioId === 'string' ? t.audioId : null,
       }))
       .filter(t => t.id && (t.imageAnchor || t.elementAnchor || t.orphaned || (Number.isFinite(t.anchorStart) && Number.isFinite(t.anchorEnd))));
   }
@@ -5239,6 +5269,7 @@
       <div class="thread-body">
         ${isAgentThread ? '<div class="thread-sub placeholder">Initial take — reply below to steer.</div>' : ''}
         <div class="section-mini-label">${isAgentThread ? 'Discussion' : 'Your notes'}</div>
+        ${t.audioId ? `<audio class="voice-note-audio" controls preload="none" src="/api/audio/${encodeURIComponent(t.audioId)}"></audio>` : ''}
         <div class="user-comment-list"></div>
         <div class="resolution-banner"></div>
         <div class="followup">
@@ -7520,6 +7551,279 @@
   document.addEventListener('mousedown', (e) => {
     if (rewritePopover && !rewritePopover.hidden && !e.target.closest('#rewrite-wrap')) setRewriteOpen(false);
   });
+
+  // ---------- Voice notes: hold on a block, talk, let go ----------
+  // Hold still on a block for VOICE_HOLD_MS (or hover it and hold V) to
+  // record. Releasing uploads the clip and creates a thread whose
+  // thread.created event carries audioPath; the agent transcribes it.
+  const VOICE_HOLD_MS = 250;
+  const VOICE_MOVE_SLOP_PX = 4;
+  const VOICE_MIN_MS = 400;
+  const VOICE_STREAM_IDLE_MS = 60000;
+  const voiceBadge = document.getElementById('voice-badge');
+  const voice = {
+    pending: null,      // { timer, x, y, anchorEl } while waiting for the hold
+    recording: null,    // { recorder, chunks, anchorEl, startedAt, cancelled }
+    stream: null,
+    streamIdleTimer: null,
+    suppressClick: false,
+    hoverAnchorEl: null,
+    keyHeld: false,
+    lastPointer: { x: 0, y: 0 },
+  };
+
+  function voiceSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  }
+  function voiceAnchorFor(target) {
+    if (reviewComplete) return null;
+    const kind = fileKind();
+    if (kind !== 'markdown' && kind !== 'diff') return null;
+    if (!target || !target.closest) return null;
+    if (target.closest('a, button, input, textarea, select, audio, .thread, .new-thread-editor, .thread-marker')) return null;
+    const anchorEl = target.closest('#doc-content [data-anchor-idx]');
+    if (!anchorEl) return null;
+    if (kind === 'diff' && anchorEl.tagName === 'H3' && anchorEl.parentElement?.id === 'doc-content') return null;
+    return anchorEl;
+  }
+  function showVoiceBadge(text, { busy = false } = {}) {
+    voiceBadge.querySelector('.label').textContent = text;
+    voiceBadge.classList.toggle('busy', busy);
+    voiceBadge.classList.add('shown');
+    voiceBadge.style.left = `${voice.lastPointer.x + 14}px`;
+    voiceBadge.style.top = `${voice.lastPointer.y + 14}px`;
+  }
+  function hideVoiceBadge(delayMs = 0) {
+    setTimeout(() => voiceBadge.classList.remove('shown'), delayMs);
+  }
+  async function getVoiceStream() {
+    clearTimeout(voice.streamIdleTimer);
+    if (voice.stream && voice.stream.getAudioTracks().some(track => track.readyState === 'live')) {
+      return voice.stream;
+    }
+    voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return voice.stream;
+  }
+  function releaseVoiceStreamLater() {
+    clearTimeout(voice.streamIdleTimer);
+    voice.streamIdleTimer = setTimeout(() => {
+      if (voice.recording || !voice.stream) return;
+      voice.stream.getTracks().forEach(track => track.stop());
+      voice.stream = null;
+    }, VOICE_STREAM_IDLE_MS);
+  }
+  function cancelVoicePending() {
+    if (!voice.pending) return;
+    clearTimeout(voice.pending.timer);
+    voice.pending = null;
+  }
+
+  async function startVoiceRecording(anchorEl) {
+    if (voice.recording) return;
+    const recording = { recorder: null, chunks: [], anchorEl, startedAt: 0, cancelled: false, released: false };
+    voice.recording = recording;
+    document.body.classList.add('voice-holding');
+    window.getSelection()?.removeAllRanges?.();
+    anchorEl.classList.add('voice-target');
+    showVoiceBadge('Listening…');
+    let stream;
+    try {
+      stream = await getVoiceStream();
+    } catch (error) {
+      console.error('Microphone unavailable:', error);
+      finishVoiceUi(recording);
+      voice.recording = null;
+      showVoiceBadge('Mic blocked', { busy: true });
+      hideVoiceBadge(2000);
+      return;
+    }
+    // Released (or cancelled) while the permission prompt was up.
+    if (recording.released || recording.cancelled) {
+      finishVoiceUi(recording);
+      voice.recording = null;
+      hideVoiceBadge();
+      releaseVoiceStreamLater();
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    recording.recorder = recorder;
+    recorder.addEventListener('dataavailable', event => {
+      if (event.data && event.data.size) recording.chunks.push(event.data);
+    });
+    recorder.addEventListener('stop', () => onVoiceRecorderStop(recording));
+    recording.startedAt = performance.now();
+    recorder.start();
+  }
+
+  function stopVoiceRecording({ cancel = false } = {}) {
+    const recording = voice.recording;
+    if (!recording) return;
+    recording.released = true;
+    recording.cancelled = recording.cancelled || cancel;
+    if (recording.recorder && recording.recorder.state !== 'inactive') {
+      recording.durationMs = performance.now() - recording.startedAt;
+      recording.recorder.stop();
+    }
+  }
+
+  function finishVoiceUi(recording) {
+    document.body.classList.remove('voice-holding');
+    recording.anchorEl.classList.remove('voice-target');
+  }
+
+  async function onVoiceRecorderStop(recording) {
+    voice.recording = null;
+    finishVoiceUi(recording);
+    releaseVoiceStreamLater();
+    if (recording.cancelled) {
+      showVoiceBadge('Cancelled', { busy: true });
+      hideVoiceBadge(800);
+      return;
+    }
+    if ((recording.durationMs || 0) < VOICE_MIN_MS || !recording.chunks.length) {
+      showVoiceBadge('Too short', { busy: true });
+      hideVoiceBadge(800);
+      return;
+    }
+    const mimeType = (recording.recorder.mimeType || recording.chunks[0].type || 'audio/webm');
+    const blob = new Blob(recording.chunks, { type: mimeType });
+    const idx = parseInt(recording.anchorEl.getAttribute('data-anchor-idx'), 10);
+    showVoiceBadge('Saving…', { busy: true });
+    try {
+      await createVoiceThread(idx, blob, recording.durationMs);
+      hideVoiceBadge();
+    } catch (error) {
+      console.error('Failed to save voice note:', error);
+      showVoiceBadge("Couldn't save voice note", { busy: true });
+      hideVoiceBadge(2500);
+    }
+  }
+
+  async function createVoiceThread(idx, blob, durationMs) {
+    const fileId = activeFileId;
+    const uploadResponse = await fetch('/api/audio', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm', Accept: 'application/json' },
+      body: blob,
+    });
+    if (!uploadResponse.ok) throw new Error(`POST /api/audio returned ${uploadResponse.status}`);
+    const upload = await uploadResponse.json();
+    const seconds = Math.max(1, Math.round(durationMs / 1000));
+    const text = `🎤 Voice note (${seconds}s)`;
+    const snippet = snippetOfRange(idx, idx);
+    const created = await apiJson('/api/threads', {
+      body: {
+        fileId,
+        anchorStart: idx,
+        anchorEnd: idx,
+        snippet,
+        text,
+        audioId: upload.audioId,
+        sourceVersion: loadState().sourceVersion || 0,
+      },
+    });
+    if (!created) return;
+    const serverId = String(created.id);
+    const createdAt = created.createdAt || new Date().toISOString();
+    const thread = {
+      id: serverId,
+      fileId,
+      anchorStart: idx,
+      anchorEnd: idx,
+      snippet,
+      text,
+      breadcrumb: '',
+      createdAt,
+      kind: 'user',
+      audioId: upload.audioId,
+    };
+    const s = cloneState(loadState());
+    if (!s.userThreads.some(t => String(t.id) === serverId)) {
+      s.userThreads.push({ ...thread, lineRange: null });
+      s.threads.push({ ...thread });
+    }
+    if (!s.followups[serverId]) s.followups[serverId] = [];
+    if (!s.followups[serverId].some(item => item.kind === 'thread')) {
+      s.followups[serverId].push({ text, addedAt: createdAt, kind: 'thread' });
+    }
+    setCurrentState(s);
+    if (activeFileId !== fileId) return;
+    renderAllThreads();
+    const el = document.querySelector(`.thread[data-thread-id="${serverId}"]`);
+    if (el) openThread(el, { scroll: false });
+    scheduleReposition();
+  }
+
+  document.addEventListener('mousemove', (e) => {
+    voice.lastPointer = { x: e.clientX, y: e.clientY };
+    if (voice.pending && Math.hypot(e.clientX - voice.pending.x, e.clientY - voice.pending.y) > VOICE_MOVE_SLOP_PX) {
+      cancelVoicePending();
+    }
+    if (voice.recording) {
+      voiceBadge.style.left = `${e.clientX + 14}px`;
+      voiceBadge.style.top = `${e.clientY + 14}px`;
+    }
+  }, true);
+  document.addEventListener('mouseover', (e) => {
+    voice.hoverAnchorEl = voiceAnchorFor(e.target);
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (!voiceSupported() || voice.recording) return;
+    const anchorEl = voiceAnchorFor(e.target);
+    if (!anchorEl) return;
+    voice.lastPointer = { x: e.clientX, y: e.clientY };
+    cancelVoicePending();
+    voice.pending = {
+      x: e.clientX,
+      y: e.clientY,
+      anchorEl,
+      timer: setTimeout(() => {
+        voice.pending = null;
+        voice.suppressClick = true;
+        startVoiceRecording(anchorEl);
+      }, VOICE_HOLD_MS),
+    };
+  }, true);
+  document.addEventListener('mouseup', () => {
+    cancelVoicePending();
+    if (voice.recording && !voice.keyHeld) stopVoiceRecording();
+  }, true);
+  // The hold's own mouseup produces a click; don't let it open the editor.
+  document.addEventListener('click', (e) => {
+    if (!voice.suppressClick) return;
+    voice.suppressClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+  window.addEventListener('blur', () => {
+    cancelVoicePending();
+    if (voice.recording) stopVoiceRecording({ cancel: true });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && (voice.recording || voice.pending)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cancelVoicePending();
+      stopVoiceRecording({ cancel: true });
+      voice.keyHeld = false;
+      return;
+    }
+    if ((e.key === 'v' || e.key === 'V') && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const active = document.activeElement;
+      if (active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName))) return;
+      if (!voiceSupported() || voice.recording || !voice.hoverAnchorEl) return;
+      e.preventDefault();
+      voice.keyHeld = true;
+      startVoiceRecording(voice.hoverAnchorEl);
+    }
+  }, true);
+  document.addEventListener('keyup', (e) => {
+    if ((e.key === 'v' || e.key === 'V') && voice.keyHeld) {
+      voice.keyHeld = false;
+      stopVoiceRecording();
+    }
+  }, true);
 
   // ---------- Click dispatch ----------
   document.addEventListener('click', (e) => {
