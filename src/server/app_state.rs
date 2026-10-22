@@ -77,6 +77,9 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     pub(super) source: Arc<std::sync::RwLock<Source>>,
     source_sync: Arc<Mutex<SourceSyncState>>,
+    pub(super) proposals: Arc<Mutex<super::proposals::ProposalStore>>,
+    pub(super) agent_status: Arc<Mutex<super::agent_status::AgentStatusStore>>,
+    hold_agent_edits: Arc<AtomicBool>,
     pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
@@ -113,6 +116,9 @@ impl AppState {
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
             source_sync: Arc::new(Mutex::new(SourceSyncState::default())),
+            proposals: Arc::new(Mutex::new(Default::default())),
+            agent_status: Arc::new(Mutex::new(Default::default())),
+            hold_agent_edits: Arc::new(AtomicBool::new(false)),
             file_bytes: Arc::new(HashMap::new()),
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
@@ -456,6 +462,21 @@ impl AppState {
     pub fn with_prefs_path(mut self, prefs_path: impl Into<PathBuf>) -> Self {
         self.prefs_path = Arc::new(prefs_path.into());
         self
+    }
+
+    /// When on, agent `POST /api/source` pushes become proposals that wait
+    /// for the reviewer instead of changing the document straight away.
+    pub fn with_hold_agent_edits(self, hold: bool) -> Self {
+        self.hold_agent_edits.store(hold, Ordering::Relaxed);
+        self
+    }
+
+    pub(super) fn hold_agent_edits(&self) -> bool {
+        self.hold_agent_edits.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_hold_agent_edits(&self, hold: bool) {
+        self.hold_agent_edits.store(hold, Ordering::Relaxed);
     }
 
     pub fn with_no_save(self, no_save: bool) -> Self {

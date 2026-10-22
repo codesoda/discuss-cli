@@ -165,8 +165,9 @@
     --diff-add-ink: #116329;
     --diff-delete-bg: #ffebe9;
     --diff-delete-ink: #82071e;
-    --header-h: 54px;
-    --left-w: 60%;
+    --header-h: 48px;
+    --side-w: 340px;
+    --left-w: calc(100% - var(--files-w) - var(--divider-w) - var(--side-w));
     --divider-w: 6px;
     --files-w: 0px;
     --left-gutter: 44px;
@@ -302,6 +303,24 @@
     cursor: pointer;
   }
   header .meta { color: var(--muted); font-size: 13px; }
+  .agent-status { display: inline-flex; gap: 6px; min-width: 0; }
+  .agent-status[hidden] { display: none; }
+  .agent-status-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    max-width: 260px; padding: 3px 10px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--context); color: var(--ink-soft); font-size: 12px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .agent-spinner {
+    flex: none; width: 10px; height: 10px; border-radius: 50%;
+    border: 1.5px solid var(--line-strong); border-top-color: var(--accent);
+    animation: agent-spin 0.8s linear infinite;
+  }
+  @keyframes agent-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .agent-spinner { animation-duration: 2.4s; } }
+  .agent-pending { display: flex; align-items: center; gap: 7px; padding: 4px 2px; color: var(--muted); font-size: 12px; }
+  .agent-pending.stale .agent-spinner { display: none; }
   header .thread-summary { position: relative; }
   header .thread-summary-popover {
     position: absolute;
@@ -379,6 +398,44 @@
   html[data-theme="dark"] header .toggle:hover { background: var(--accent-soft); }
   header .toggle.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   header .thread-summary-toggle[aria-expanded="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+  /* ---------- Header bar: one primary action, quiet tools ---------- */
+  header { gap: 4px; padding: 0 14px 0 20px; border-bottom-color: var(--line); }
+  /* Brand is a quiet single line: "Discuss v0.11.1". */
+  header h1 { font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+  header .header-version { font-size: 12px; color: var(--muted); opacity: 0.7; margin: 0 6px 0 -1px; white-space: nowrap; }
+  header .meta { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  header .meta:empty { display: none; }
+  header .agent-status { margin-left: 6px; }
+  header .header-sep { flex: none; width: 1px; height: 18px; margin: 0 6px; background: var(--line); }
+  header .toggle {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 30px; padding: 0 10px;
+    border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: var(--ink-soft);
+    font-size: 13px; font-weight: 500; white-space: nowrap;
+  }
+  header .toggle:hover,
+  html[data-theme="dark"] header .toggle:hover { background: var(--context); color: var(--ink); }
+  header .toggle.on,
+  header .toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  header .thread-summary-toggle { border-color: var(--line); }
+  header .thread-summary-toggle[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  /* Hold edits reads as a switch: the dot is the state, the label stays put. */
+  header #hold-toggle::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--line-strong); transition: background 0.15s;
+  }
+  header #hold-toggle.on { background: transparent; color: var(--ink-soft); }
+  header #hold-toggle.on:hover { background: var(--context); color: var(--ink); }
+  header #hold-toggle.on::before { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  header .header-icon-link,
+  header .theme-toggle { width: 30px; height: 30px; border: 0; background: transparent; color: var(--muted); }
+  header .theme-toggle:hover,
+  header .header-icon-link:hover { background: var(--context); color: var(--ink); }
+  header .theme-toggle .theme-icon { width: 16px; height: 16px; }
+  header .done-control { margin-left: 8px; }
+  header #finish-review { height: 30px; padding: 0 14px; font-weight: 600; border-radius: 6px; }
   header .thread-summary-toggle .caret { font-size: 9px; }
   #inspect-toggle { display: none; }
   body.html-file #inspect-toggle { display: inline-flex; }
@@ -466,6 +523,7 @@
   header .theme-menu-item.active .theme-icon { color: var(--accent); }
   header .theme-menu-item .check { margin-left: auto; color: var(--accent); width: 14px; height: 14px; }
   header .theme-menu-item:not(.active) .check { visibility: hidden; }
+  header .theme-menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
   #finish-review {
     font: inherit;
     padding: 7px 14px;
@@ -737,10 +795,8 @@
       var(--bg) var(--files-w),
       var(--card) var(--files-w),
       var(--card) calc(var(--files-w) + var(--left-w)),
-      var(--line-strong) calc(var(--files-w) + var(--left-w)),
-      var(--line-strong) calc(var(--files-w) + var(--left-w) + var(--divider-w)),
-      var(--bg) calc(var(--files-w) + var(--left-w) + var(--divider-w)),
-      var(--bg) 100%
+      var(--card) calc(var(--files-w) + var(--left-w) + var(--divider-w)),
+      var(--card) 100%
     );
   }
 
@@ -972,10 +1028,10 @@
   #divider { align-self: stretch; }
   .pane-left, .pane-right { min-width: 0; }
   .pane-left {
-    padding: 28px var(--left-gutter) 80px 36px;
+    padding: 48px calc(var(--left-gutter) + 24px) 120px 56px;
     background: var(--card);
-    border-right: 1px solid var(--line);
   }
+  #doc-content { max-width: 680px; margin: 0 auto; }
   body.html-file .pane-left { padding: 0; }
   body.html-file #doc-content { display: none; }
   #html-frames { display: none; }
@@ -990,12 +1046,12 @@
   .live-review .prototype-frame { height: calc(100% - 34px); }
   body.html-file .heading-minimap { display: none; }
   .pane-right {
-    padding: 28px 24px 80px 24px;
-    background: var(--bg);
+    padding: 48px 28px 80px 28px;
+    background: var(--card);
     position: relative;
   }
   #divider {
-    background: var(--line-strong);
+    background: linear-gradient(to right, transparent calc(50% - 0.5px), var(--line) calc(50% - 0.5px), var(--line) calc(50% + 0.5px), transparent calc(50% + 0.5px));
     cursor: col-resize;
     position: relative;
     transition: background 0.12s;
@@ -1015,16 +1071,29 @@
   body.dragging, body.dragging * { user-select: none !important; cursor: col-resize !important; }
 
   /* --- Left-pane content --- */
-  #doc-content h1 { font-size: 22px; margin: 0 0 16px 0; font-weight: 700; }
-  #doc-content h2 { font-size: 19px; margin: 24px 0 10px 0; font-weight: 600; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-  #doc-content h3 { font-size: 16px; margin: 18px 0 8px 0; font-weight: 600; color: var(--ink-soft); }
-  #doc-content h4 { font-size: 14px; margin: 14px 0 6px 0; font-weight: 600; color: var(--ink-softer); }
-  #doc-content p { margin: 8px 0; }
-  #doc-content ul, #doc-content ol { padding-left: 22px; margin: 8px 0; }
-  #doc-content li { margin: 3px 0; }
+  #doc-content {
+    font-size: 16px;
+    line-height: 1.7;
+    letter-spacing: -0.003em;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "kern", "liga";
+    hanging-punctuation: first;
+  }
+  #doc-content h1, #doc-content h2, #doc-content h3, #doc-content h4 { line-height: 1.25; letter-spacing: -0.015em; text-wrap: balance; }
+  #doc-content h1 { font-size: 30px; margin: 0 0 20px 0; font-weight: 700; letter-spacing: -0.022em; }
+  #doc-content h2 { font-size: 21px; margin: 40px 0 12px 0; font-weight: 650; }
+  #doc-content h3 { font-size: 17px; margin: 28px 0 8px 0; font-weight: 600; color: var(--ink-soft); }
+  #doc-content h4 { font-size: 15px; margin: 20px 0 6px 0; font-weight: 600; color: var(--ink-softer); }
+  #doc-content p { margin: 0 0 14px 0; text-wrap: pretty; }
+  #doc-content hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
+  #doc-content ul, #doc-content ol { padding-left: 24px; margin: 0 0 14px 0; }
+  #doc-content li { margin: 6px 0; padding-left: 2px; }
+  #doc-content li::marker { color: var(--muted); }
+  #doc-content strong { font-weight: 650; }
   #doc-content code {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: 0.84em;
     background: var(--context);
     padding: 1px 5px;
     border-radius: 3px;
@@ -1034,7 +1103,40 @@
     margin: 10px 0;
   }
   #doc-content .pre-wrap pre { margin: 0; }
-  #doc-content .table-wrap { position: relative; }
+  /* No overflow clipping here: the comment marker sits outside the table's right edge. */
+  #doc-content .table-wrap { position: relative; margin: 14px 0; }
+  #doc-content table {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  #doc-content th,
+  #doc-content td {
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+    overflow-wrap: break-word;
+    hanging-punctuation: none;
+  }
+  #doc-content th.cell-nowrap,
+  #doc-content td.cell-nowrap { white-space: nowrap; }
+  #doc-content tr:last-child > td { border-bottom: none; }
+  #doc-content th {
+    background: var(--context);
+    color: var(--ink-soft);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  #doc-content thead tr:first-child > th:first-child { border-top-left-radius: 8px; }
+  #doc-content thead tr:first-child > th:last-child { border-top-right-radius: 8px; }
+  #doc-content th[align="right"], #doc-content td[align="right"] { text-align: right; }
+  #doc-content th[align="center"], #doc-content td[align="center"] { text-align: center; }
   #doc-content pre {
     background: var(--pre-bg);
     padding: 10px 12px;
@@ -1267,11 +1369,12 @@
     padding: 0;
     border-radius: 3px;
     opacity: 0;
-    transition: margin-left 0.15s, opacity 0.15s, background 0.12s;
+    transition: opacity 0.15s, background 0.12s;
   }
-  #doc-content details.collapsible-section:hover .section-toggle,
-  #doc-content details.collapsible-section:not([open]) .section-toggle {
-    margin-left: 0;
+  /* The toggle sits in the gutter and only fades in over its own heading,
+     so headings never shift. */
+  #doc-content details.collapsible-section > summary:hover > .section-toggle,
+  #doc-content details.collapsible-section:not([open]) > summary > .section-toggle {
     opacity: 1;
   }
   .section-toggle:hover {
@@ -1536,14 +1639,14 @@
     position: absolute;
     right: calc(-1 * (var(--left-gutter) - 10px));
     top: 1px;
-    width: 20px;
+    width: 22px;
     height: 20px;
-    border-radius: 50%;
-    border: 2px solid white;
-    box-shadow: 0 0 0 1px var(--line-strong), 0 1px 2px rgba(0,0,0,0.08);
+    /* Speech-bubble shape: round except the tail corner. */
+    border-radius: 10px 10px 10px 3px;
+    border: 1px solid transparent;
     cursor: pointer;
-    font-size: 10px;
-    color: white;
+    font-size: 10.5px;
+    color: var(--accent-ink);
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -1553,15 +1656,15 @@
     user-select: none;
     line-height: 1;
   }
-  .thread-marker:hover {
-    transform: scale(1.15);
-    box-shadow: 0 0 0 1px var(--line-strong), 0 2px 6px rgba(0,0,0,0.18);
-  }
-  .thread-marker.kind-prepopulated { background: var(--marker-blue); }
-  .thread-marker.kind-mixed { background: var(--marker-blue); }
-  .thread-marker.kind-pending { background: var(--marker-yellow); color: #5a4500; }
-  .thread-marker.kind-user { background: var(--marker-pink); }
-  .thread-marker.active { transform: scale(1.2); box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0,0,0,0.2); }
+  .thread-marker:hover { transform: translateY(-1px); box-shadow: 0 2px 6px var(--grip); }
+  /* Your comment, waiting on Claude: quiet outline. */
+  .thread-marker.kind-user { background: var(--card); border-color: var(--line-strong); color: var(--ink-soft); }
+  /* Claude has spoken: the one that wants your eye. */
+  .thread-marker.kind-pending { background: var(--accent); color: var(--accent-ink); }
+  /* Seeded notes and back-and-forth: soft tint. */
+  .thread-marker.kind-prepopulated,
+  .thread-marker.kind-mixed { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent); }
+  .thread-marker.active { box-shadow: 0 0 0 2px var(--card), 0 0 0 3.5px var(--accent); }
   .thread-marker-stack {
     position: absolute;
     right: calc(-1 * (var(--left-gutter) - 10px));
@@ -1699,6 +1802,7 @@
   /* The toggle only applies to markdown files; it hides on diff, image, and
      HTML prototype panes, where clicks keep commenting. */
   body.edit-file-readonly #edit-mode-toggle { display: none; }
+  body.edit-file-readonly #rewrite-wrap { display: none; }
   body.edit-mode:not(.edit-file-readonly) #doc-content [data-anchor-idx] { cursor: text; }
   body.edit-mode:not(.edit-file-readonly) #doc-content [data-anchor-idx]:hover {
     outline: 1px dashed var(--accent-dashed);
@@ -2025,16 +2129,14 @@
   pre.line-numbers .line-numbers-rows > span.has-thread-line:hover::after {
     left: calc(100% + 10px);
   }
-  .thread-marker.is-resolved { background: #2e7d32 !important; color: white !important; }
+  .thread-marker.is-resolved { background: transparent !important; border-color: var(--line) !important; color: var(--ok-ink) !important; }
 
   /* Draft marker (new-thread draft — user started typing a new comment
-     but hasn't saved). Teal + dashed to read as "in progress". */
+     but hasn't saved). A plain bubble with an accent "…" reads as "in progress". */
   .thread-marker.kind-draft {
-    background: #0d9488;
-    color: white;
-    border-style: dashed;
-    border-color: white;
-    box-shadow: 0 0 0 1.5px #0d9488, 0 1px 2px rgba(0,0,0,0.08);
+    background: var(--card);
+    color: var(--accent);
+    border-color: var(--accent-dashed-strong);
     font-size: 13px;
     font-weight: 700;
     padding-bottom: 2px;
@@ -2102,6 +2204,133 @@
     from { opacity: 0; transform: translateY(-3px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+
+  /* ---------- Held-back rewrites ---------- */
+  #proposal-ribbon {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+    padding: 6px 8px 6px 12px;
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 2px 10px var(--grip);
+    color: var(--ink);
+    font-size: 13px;
+  }
+  #proposal-ribbon[hidden] { display: none; }
+  #proposal-ribbon .proposal-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--ink-soft);
+  }
+  #proposal-ribbon .proposal-text strong { color: var(--ink); font-weight: 600; }
+  #proposal-ribbon button.proposal-link {
+    border: none;
+    background: none;
+    padding: 0 2px;
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    flex: 0 0 auto;
+  }
+  #proposal-ribbon button.proposal-update kbd {
+    font: inherit;
+    font-size: 11px;
+    opacity: 0.75;
+    margin-left: 4px;
+  }
+  #proposal-ribbon button.proposal-dismiss {
+    border: none;
+    background: none;
+    padding: 2px 6px;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+  }
+  #proposal-ribbon button.proposal-dismiss:hover { color: var(--ink); }
+  #proposal-ribbon button,
+  .proposal-card button,
+  #rewrite-popover button {
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 10px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    color: var(--ink);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #proposal-ribbon button.primary,
+  #rewrite-popover button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  #proposal-ribbon button:disabled { opacity: 0.5; cursor: default; }
+  #doc-content .proposal-old {
+    text-decoration: line-through;
+    text-decoration-color: var(--danger-border);
+    opacity: 0.55;
+  }
+  #doc-content .proposal-old.kept { text-decoration: none; opacity: 1; }
+  .proposal-card {
+    list-style: none;
+    margin: 6px 0 14px;
+    padding: 8px 12px 10px;
+    border-left: 3px solid var(--accent);
+    background: var(--context);
+    border-radius: 4px;
+  }
+  .proposal-card.skipped { border-left-color: var(--line-strong); }
+  .proposal-card.skipped .proposal-new { opacity: 0.45; text-decoration: line-through; }
+  .proposal-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .proposal-card-head .spacer { flex: 1; }
+  .proposal-card button.on { background: var(--ok-ink); color: var(--accent-ink); border-color: var(--ok-ink); }
+  .proposal-card button.off.on { background: var(--danger); border-color: var(--danger); }
+  .proposal-new > :first-child { margin-top: 4px; }
+  .proposal-new > :last-child { margin-bottom: 0; }
+  .proposal-empty { font-style: italic; color: var(--muted); font-size: 13px; }
+  #rewrite-wrap { position: relative; }
+  #rewrite-popover {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    width: 300px;
+    padding: 10px;
+    background: var(--card);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px var(--grip);
+    z-index: 60;
+  }
+  #rewrite-popover[hidden] { display: none; }
+  #rewrite-popover textarea {
+    width: 100%;
+    min-height: 70px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--field);
+    color: var(--ink);
+    resize: vertical;
+  }
+  #rewrite-popover .rw-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -2110,19 +2339,30 @@
   <h1>Discuss</h1>
   <span class="header-version" id="header-version" hidden></span>
   <div class="meta" id="meta-status">Loading…</div>
+  <span class="agent-status" id="agent-status" role="status" aria-live="polite" hidden></span>
   <div class="pr-header" id="pr-header" aria-live="polite" hidden></div>
   <nav class="demo-scenarios" id="demo-scenarios" aria-label="Demo scenarios" hidden></nav>
   <span class="spacer"></span>
-  <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
-  </a>
   <span class="thread-summary" id="thread-summary-wrap">
     <button class="toggle thread-summary-toggle" id="thread-summary-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="thread-summary-popover" title="Jump to a thread" hidden></button>
     <div class="thread-summary-popover" id="thread-summary-popover" role="region" aria-label="Threads" hidden></div>
   </span>
+  <span id="rewrite-wrap">
+    <button class="toggle" id="rewrite-toggle" type="button" title="Ask Claude to rewrite this document. The new version waits for your OK." aria-haspopup="dialog" aria-expanded="false">Rewrite</button>
+    <div id="rewrite-popover" role="dialog" aria-label="Ask for a rewrite" hidden>
+      <textarea id="rewrite-instruction" placeholder="How should Claude rewrite it? (optional)"></textarea>
+      <div class="rw-foot">
+        <button type="button" id="rewrite-cancel">Cancel</button>
+        <button type="button" class="primary" id="rewrite-send">Ask Claude</button>
+      </div>
+    </div>
+  </span>
+  <span class="header-sep" aria-hidden="true"></span>
+  <button class="toggle" id="hold-toggle" type="button" title="Hold Claude's edits: every change Claude makes waits in a ribbon for your OK" aria-pressed="false">Hold edits</button>
   <button class="toggle" id="edit-mode-toggle" title="Edit mode: click any block to edit its markdown (E)" aria-pressed="false">Edit</button>
   <button class="toggle" id="show-all" title="Pin every thread open at once">Show all</button>
   <button class="toggle" id="inspect-toggle" title="Inspect prototype elements (I)" aria-pressed="false">Inspect</button>
+  <span class="header-sep" aria-hidden="true"></span>
   <span class="theme-menu" id="theme-menu">
     <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Color theme" aria-haspopup="menu" aria-expanded="false" title="Color theme">
       <svg class="theme-icon theme-icon-system" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
@@ -2145,8 +2385,18 @@
         <span>Dark</span>
         <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
       </button>
+      <div class="theme-menu-sep" role="separator"></div>
+      <button class="theme-menu-item" id="fold-sections-toggle" role="menuitemcheckbox" type="button">
+        <svg class="theme-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        <span>Fold sections</span>
+        <svg class="check" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </button>
     </div>
   </span>
+  <span class="header-sep" aria-hidden="true"></span>
+  <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
+  </a>
   <span class="done-control" id="done-control">
     <button id="finish-review" title="Finish the review and send the transcript to the agent">Finish review</button>
   </span>
@@ -2188,6 +2438,7 @@
     <nav class="file-sidebar" id="file-sidebar" aria-label="Files under review"></nav>
     <div class="file-sidebar-resizer" id="file-sidebar-resizer" role="separator" tabindex="0" aria-label="Resize file list" aria-controls="file-sidebar" aria-orientation="vertical" aria-valuemin="160" aria-valuemax="480" aria-valuenow="236"></div>
     <div class="pane-left" id="pane-left">
+      <div id="proposal-ribbon" role="region" aria-label="Proposed rewrite" aria-live="polite" hidden></div>
       <!-- ==================== REPLACE THIS BLOCK WITH YOUR CONTENT ==================== -->
       <section id="doc-content">
         <h1>Sample discussion document</h1>
@@ -2255,9 +2506,7 @@
     <div id="divider"></div>
     <div class="pane-right" id="pane-right">
       <div class="empty-state" id="empty-state">
-        <b>Click a marker in the left margin</b> to open a comment.<br>
-        Blue = pre-seeded · Yellow = agent take pending your reply · Pink = your thread.<br><br>
-        <b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.
+        Click on an element to comment, click-and-hold to talk.
       </div>
       <div id="threads-host"></div>
     </div>
@@ -2689,6 +2938,11 @@
     'pr.publication.failed',
     'pr.publication.succeeded',
     'source.save_failed',
+    'proposal.created',
+    'proposal.accepted',
+    'proposal.discarded',
+    'proposal.hold_changed',
+    'agent.status',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
@@ -2746,7 +3000,7 @@
 
     const source = new EventSource('/api/events');
     eventSource = source;
-    source.onopen = () => { reconcilePrSessionFromServer(); };
+    source.onopen = () => { reconcilePrSessionFromServer(); refreshAgentStatuses(); };
     SSE_EVENT_KINDS.forEach(kind => {
       source.addEventListener(kind, (event) => {
         const payload = parseEventPayload(kind, event);
@@ -2820,6 +3074,19 @@
       case 'anchors.resolved':
         applyAnchorsResolvedEvent(payload);
         break;
+      case 'proposal.created':
+        applyProposalCreated(payload);
+        break;
+      case 'proposal.accepted':
+      case 'proposal.discarded':
+        applyProposalGone(payload);
+        break;
+      case 'proposal.hold_changed':
+        setHoldUi(!!payload.holdAgentEdits);
+        break;
+      case 'agent.status':
+        setAgentStatuses(payload.statuses);
+        break;
       case 'pr.imported':
         if (!prImportReloaded && loadState().prSession?.phase === 'loading') {
           prImportReloaded = true;
@@ -2841,6 +3108,88 @@
       case 'pr.publication.succeeded':
         applyPrPublicationSucceededEvent(payload);
         break;
+    }
+    renderAgentActivity();
+  }
+
+  // ---------- Agent working indicator ----------
+  // A thread whose latest word is the reviewer's shows "Claude is on it…"
+  // until a take lands, fading to "No reply yet" after AGENT_REPLY_WAIT_MS.
+  // Longer jobs come from POST /api/agent/status and show in the header.
+  const AGENT_REPLY_WAIT_MS = 5 * 60 * 1000;
+  let agentStatuses = [];
+  let agentActivityTimer = null;
+
+  function agentStatusForThread(threadId) {
+    return agentStatuses.find(status => status.threadId === threadId) || null;
+  }
+
+  // Time of the reviewer's unanswered comment, or null when Claude spoke last.
+  function awaitingAgentSince(state, threadId) {
+    if (state.resolutions[threadId]) return null;
+    const comments = commentsForThread(state, threadId);
+    const last = comments[comments.length - 1];
+    if (!last || last.kind === 'take') return null;
+    const at = commentTimestamp(last);
+    return at === Number.MAX_SAFE_INTEGER ? null : at;
+  }
+
+  function agentPendingHtml(threadId, since) {
+    const status = agentStatusForThread(threadId);
+    const stale = !status && Date.now() - since > AGENT_REPLY_WAIT_MS;
+    const label = status ? status.label : (stale ? 'No reply yet' : 'Claude is on it\u2026');
+    return `<div class="agent-pending${stale ? ' stale' : ''}" data-since="${since}"><span class="agent-spinner" aria-hidden="true"></span>${escapeHtml(label)}</div>`;
+  }
+
+  function setAgentStatuses(statuses) {
+    const before = new Set(agentStatuses.map(status => status.threadId).filter(Boolean));
+    agentStatuses = Array.isArray(statuses) ? statuses.filter(status => status && status.label) : [];
+    agentStatuses.forEach(status => { if (status.threadId) before.add(status.threadId); });
+    before.forEach(threadId => refreshThreadFromState(threadId));
+    renderAgentActivity();
+  }
+
+  async function refreshAgentStatuses() {
+    try {
+      const response = await fetch('/api/agent/status', { headers: { Accept: 'application/json' } });
+      if (response.ok) setAgentStatuses((await response.json()).statuses);
+    } catch (error) {
+      console.warn('Failed to load agent status:', error);
+    }
+  }
+
+  function renderAgentActivity() {
+    const el = document.getElementById('agent-status');
+    if (!el) return;
+    const state = loadState();
+    const now = Date.now();
+    const chips = agentStatuses.map(status => status.label);
+    const waiting = (state.userThreads || []).filter(thread => {
+      const id = String(thread.id);
+      const since = awaitingAgentSince(state, id);
+      return since !== null && now - since <= AGENT_REPLY_WAIT_MS && !agentStatusForThread(id);
+    }).length;
+    if (waiting) chips.push(`Replying to ${waiting} comment${waiting > 1 ? 's' : ''}`);
+    el.replaceChildren(...chips.map(label => {
+      const chip = document.createElement('span');
+      chip.className = 'agent-status-chip';
+      chip.title = label;
+      const spinner = document.createElement('span');
+      spinner.className = 'agent-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      chip.append(spinner, label);
+      return chip;
+    }));
+    el.hidden = chips.length === 0 || reviewComplete;
+    document.querySelectorAll('.agent-pending[data-since]').forEach(pending => {
+      const threadEl = pending.closest('[data-thread-id]');
+      if (!threadEl || agentStatusForThread(threadEl.dataset.threadId)) return;
+      if (now - Number(pending.dataset.since) <= AGENT_REPLY_WAIT_MS || pending.classList.contains('stale')) return;
+      pending.outerHTML = agentPendingHtml(threadEl.dataset.threadId, Number(pending.dataset.since));
+    });
+    clearTimeout(agentActivityTimer);
+    if (!reviewComplete && (chips.length || document.querySelector('.agent-pending:not(.stale)'))) {
+      agentActivityTimer = setTimeout(renderAgentActivity, 15000);
     }
   }
 
@@ -2908,6 +3257,7 @@
       editorStash = stashBlockEditorForRerender();
       doc.innerHTML = payload.renderedHtml;
       wrapCollapsibleSectionsDom();
+      fitTableColumnsDom();
       buildHeadingMinimap();
     }
 
@@ -2935,6 +3285,7 @@
       // Anchors for a background file were updated; only the sidebar badges
       // and meta counts can change until the user switches to it.
       renderMetaStatus();
+      renderProposalUi();
       return;
     }
 
@@ -2942,6 +3293,7 @@
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
     renderAllThreads();
     restoreBlockEditorAfterRerender(editorStash);
+    renderProposalUi();
     scheduleReposition();
     setTimeout(scheduleReposition, 600);
   }
@@ -3147,6 +3499,13 @@
       btn.classList.add('ok');
     }
     showDoneBanner(verdictSummary);
+  }
+
+  // Browsers only let a page close a tab it opened, or one with a single
+  // history entry (how the CLI opens it). If the close is refused, the
+  // done banner stays up and says the tab can be closed.
+  function closeReviewTab() {
+    setTimeout(() => window.close(), 600);
   }
 
   function blockCompletedInteraction(event) {
@@ -3712,7 +4071,12 @@
   // DOM pass runs on every document swap (file switch, live source update);
   // the doc-level listeners persist across innerHTML swaps and are attached
   // exactly once at boot.
+  function foldSectionsEnabled() {
+    return window.discussReadPref('foldSections', true) !== false;
+  }
+
   function wrapCollapsibleSectionsDom() {
+    if (!foldSectionsEnabled()) return;
     const doc = document.getElementById('doc-content');
     if (!doc || doc.querySelector(':scope > .image-review')) return;
 
@@ -3742,6 +4106,52 @@
     wrapLevel(doc, 'H1', ['H1']);
   }
 
+  // A column whose every cell is short keeps to one line; the browser then
+  // gives the spare width to the long prose columns instead of squeezing it.
+  const TABLE_NOWRAP_MAX_CHARS = 24;
+  function fitTableColumnsDom() {
+    document.querySelectorAll('#doc-content table').forEach(table => {
+      const columns = [];
+      for (const row of table.rows) {
+        [...row.cells].forEach((cell, i) => (columns[i] = columns[i] || []).push(cell));
+      }
+      for (const cells of columns) {
+        const short = cells.every(c => c.textContent.trim().length <= TABLE_NOWRAP_MAX_CHARS);
+        cells.forEach(c => c.classList.toggle('cell-nowrap', short));
+      }
+    });
+  }
+
+  function unwrapCollapsibleSectionsDom() {
+    // Innermost first, so nested sections unwrap into their parent cleanly.
+    [...document.querySelectorAll('#doc-content details.collapsible-section')].reverse().forEach(details => {
+      const summary = details.querySelector(':scope > summary');
+      const heading = summary && summary.querySelector(':scope > h1, :scope > h2');
+      const parent = details.parentNode;
+      if (heading) parent.insertBefore(heading, details);
+      [...details.childNodes].forEach(node => {
+        if (node !== summary) parent.insertBefore(node, details);
+      });
+      details.remove();
+    });
+  }
+
+  function setFoldSections(on) {
+    window.discussWritePref('foldSections', on);
+    if (on) wrapCollapsibleSectionsDom(); else unwrapCollapsibleSectionsDom();
+    syncFoldSectionsItem();
+    refreshMarkerAggregation();
+    scheduleReposition();
+  }
+
+  function syncFoldSectionsItem() {
+    const item = document.getElementById('fold-sections-toggle');
+    if (!item) return;
+    const on = foldSectionsEnabled();
+    item.classList.toggle('active', on);
+    item.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+
   function attachCollapsibleSectionListeners() {
     const doc = document.getElementById('doc-content');
     if (!doc) return;
@@ -3764,6 +4174,7 @@
     }, true);
   }
   wrapCollapsibleSectionsDom();
+  fitTableColumnsDom();
   attachCollapsibleSectionListeners();
 
   // ---------- Marker aggregation for collapsed sections ----------
@@ -4438,6 +4849,7 @@
     renderAllThreads();
     syncEditReadonlyClass();
     restoreBlockEditorAfterRerender(blockEditorStashes.get(id) || null);
+    renderProposalUi();
     const workspace = document.querySelector('.workspace');
     if (workspace) workspace.scrollTo({ top: 0 });
     updateFileSidebar();
@@ -4459,6 +4871,7 @@
       return;
     }
     wrapCollapsibleSectionsDom();
+    fitTableColumnsDom();
     buildHeadingMinimap();
     highlightCodeBlocks();
     installPrFileViewedControl();
@@ -4863,6 +5276,8 @@
       const metaPrefix = it.kind === 'take' ? 'Agent take · ' : '';
       return `<div class="user-comment" data-kind="${escapeHtml(it.kind || 'reply')}">${escapeHtml(it.text)}<div class="meta">${escapeHtml(metaPrefix)}${new Date(it.addedAt).toLocaleString()}</div></div>`;
     }).join('');
+    const since = awaitingAgentSince(s, threadId);
+    if (since !== null) list.insertAdjacentHTML('beforeend', agentPendingHtml(threadId, since));
   }
 
   function commentsForThread(state, threadId) {
@@ -5245,13 +5660,12 @@
       : null;
     const segments = [];
     if (totalThreads === 0) {
-      segments.push(isImageFile() ? 'Click the image to drop a pin' : 'Click any element · drag-select for multi-element');
+      if (isImageFile()) segments.push('Click the image to drop a pin');
       if (draftSeg) segments.push(draftSeg);
     } else {
       if (openWalkedThrough) segments.push(`${openWalkedThrough} discussed, awaiting resolve`);
       if (openPending) segments.push(`<span class="meta-stat-pending">${openPending} pending discussion</span>`);
       if (draftSeg) segments.push(draftSeg);
-      segments.push('click a marker to open');
     }
     el.innerHTML = segments.join(' · ');
     const summaryToggle = document.getElementById('thread-summary-toggle');
@@ -5384,7 +5798,7 @@
     if (!anyOpen && isImageFile()) {
       emptyState.innerHTML = '<b>Click the image to drop a pin</b>, then type your comment.<br>Click a numbered pin to reopen its thread.';
     } else if (!anyOpen) {
-      emptyState.innerHTML = '<b>Click a marker in the left margin</b> to open a comment.<br>Blue = pre-seeded · Yellow = agent take pending your reply · Pink = your thread.<br><br><b>To add your own comment:</b> click any element — or drag-select across multiple elements — then type your note.';
+      emptyState.textContent = 'Click on an element to comment, click-and-hold to talk.';
     }
   }
 
@@ -6541,7 +6955,11 @@
     if (!editMode || reviewComplete) return;
     if (!activeFileIsEditable()) return; // diff/image/HTML pane: commenting works as usual
     if (!e.target.closest('#pane-left')) return; // header, threads, toasts work as usual
+    if (e.target.closest('.section-toggle')) return; // folding still works while editing
+    // Headings sit inside a section's <summary>; its default click would fold the section shut.
+    if (e.target.closest('#doc-content summary')) e.preventDefault();
     if (e.target.closest('.block-editor')) return;
+    if (e.target.closest('#proposal-ribbon, .proposal-card')) return;
     e.stopImmediatePropagation();
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
     if (anchorEl) {
@@ -6787,6 +7205,322 @@
   // not written back.
   setEditMode(window.discussReadPref('editMode', false) === true, { persist: false });
 
+  // ---------- Held-back rewrites ----------
+  // Claude can propose a whole new document. It waits in a ribbon above the
+  // doc; nothing on screen or on disk changes until the reviewer accepts all
+  // of it, or reviews it block by block and applies some.
+  const proposalsByFile = new Map(); // fileId -> proposal
+  const hunkChoice = new Map(); // hunk id -> false when skipped
+  let proposalReview = false;
+  let proposalBusy = false;
+
+  function activeProposal() {
+    return proposalsByFile.get(String(activeFileId)) || null;
+  }
+  function proposalIsStale(p) {
+    return p.baseVersion !== (loadState().sourceVersion || 0);
+  }
+  function resetProposalReview() {
+    proposalReview = false;
+    hunkChoice.clear();
+  }
+
+  async function loadProposals() {
+    try {
+      const response = await fetch('/api/proposals', { headers: { Accept: 'application/json' } });
+      if (!response.ok) return;
+      const data = await response.json();
+      setHoldUi(!!data.holdAgentEdits);
+      proposalsByFile.clear();
+      (data.proposals || []).forEach(p => proposalsByFile.set(String(p.fileId), p));
+      renderProposalUi();
+    } catch (error) {
+      console.warn('Failed to load proposals:', error);
+    }
+  }
+
+  function applyProposalCreated(p) {
+    if (!p || !Array.isArray(p.hunks)) return;
+    const fileId = String(p.fileId);
+    const previous = proposalsByFile.get(fileId);
+    proposalsByFile.set(fileId, p);
+    if (!previous || previous.proposalId !== p.proposalId) {
+      if (fileId === String(activeFileId)) resetProposalReview();
+      if (previous) showNoticeToast('Claude replaced its proposal', 'The ribbon shows the newest version.');
+    }
+    renderProposalUi();
+  }
+
+  function applyProposalGone(payload) {
+    const fileId = String(payload.fileId);
+    const current = proposalsByFile.get(fileId);
+    if (!current || current.proposalId !== payload.proposalId) return;
+    proposalsByFile.delete(fileId);
+    if (fileId === String(activeFileId)) resetProposalReview();
+    renderProposalUi();
+  }
+
+  const UPDATE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '\u2318\u21a9' : 'Ctrl+\u21a9';
+
+  // Cmd/Ctrl+Enter outside a text field applies the waiting suggestion.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    const el = document.activeElement;
+    if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+    const button = document.querySelector('#proposal-ribbon:not([hidden]) button.proposal-update');
+    if (!button || button.disabled) return;
+    e.preventDefault();
+    button.click();
+  });
+
+  function proposalButton(label, onClick, { primary = false, disabled = false, title = '' } = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    if (primary) button.className = 'primary';
+    if (title) button.title = title;
+    button.disabled = disabled || proposalBusy;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function clearProposalMarks() {
+    document.querySelectorAll('#doc-content .proposal-card').forEach(el => el.remove());
+    document.querySelectorAll('#doc-content .proposal-old').forEach(el => {
+      el.classList.remove('proposal-old', 'kept');
+    });
+  }
+
+  function renderProposalUi() {
+    const ribbon = document.getElementById('proposal-ribbon');
+    if (!ribbon) return;
+    clearProposalMarks();
+    const p = activeProposal();
+    if (!p || reviewComplete) {
+      ribbon.hidden = true;
+      ribbon.replaceChildren();
+      return;
+    }
+    const stale = proposalIsStale(p);
+    if (stale) proposalReview = false;
+    const total = p.hunks.length;
+    const chosen = p.hunks.filter(h => hunkChoice.get(h.id) !== false).length;
+    const what = p.origin === 'source' ? 'an edit' : 'a rewrite';
+
+    const applyChosen = () => acceptProposal(p, proposalReview
+      ? p.hunks.filter(h => hunkChoice.get(h.id) !== false).map(h => h.id)
+      : null);
+    const text = document.createElement('span');
+    text.className = 'proposal-text';
+    const lead = document.createElement('strong');
+    const items = [text];
+    if (stale) {
+      lead.textContent = 'The doc changed since Claude wrote this. ';
+      text.append(lead, p.summary || '');
+      items.push(proposalButton('Ask Claude to redo', () => discardProposal(p, true), { primary: true }));
+    } else {
+      lead.textContent = 'Claude suggests: ';
+      text.append(lead, p.summary || `${what.replace(/^an? /, '')} to this doc`);
+      const changes = `${total} change${total === 1 ? '' : 's'}`;
+      const link = proposalButton(proposalReview ? 'Hide changes' : changes, () => {
+        proposalReview = !proposalReview;
+        renderProposalUi();
+        if (proposalReview) scrollToFirstHunk();
+      }, { title: proposalReview ? 'Hide the changes' : 'Show each change in place; skip any you don\u2019t want' });
+      link.classList.add('proposal-link');
+      items.push(link);
+      const label = proposalReview && chosen < total ? `Update document (${chosen} of ${total})` : 'Update document';
+      const update = proposalButton(label, applyChosen, { primary: true, disabled: chosen === 0, title: `Update document (${UPDATE_SHORTCUT})` });
+      update.classList.add('proposal-update');
+      const kbd = document.createElement('kbd');
+      kbd.textContent = UPDATE_SHORTCUT;
+      update.append(' ', kbd);
+      items.push(update);
+    }
+    const dismiss = proposalButton('\u00d7', () => discardProposal(p, false), { title: 'Discard this suggestion' });
+    dismiss.classList.add('proposal-dismiss');
+    dismiss.setAttribute('aria-label', 'Discard this suggestion');
+    items.push(dismiss);
+    ribbon.classList.toggle('stale', stale);
+    ribbon.replaceChildren(...items);
+    ribbon.hidden = false;
+    if (proposalReview) markProposalHunks(p);
+    scheduleReposition();
+  }
+
+  // The proposal's HTML comes from the same renderer as the document, so it
+  // carries anchor stamps; strip them so threads never bind to a preview.
+  function proposalHtmlFragment(html) {
+    const template = document.createElement('template');
+    template.innerHTML = html || '';
+    template.content.querySelectorAll('[data-anchor-idx]').forEach(el => el.removeAttribute('data-anchor-idx'));
+    template.content.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    return template.content;
+  }
+
+  function placeProposalCard(doc, afterEl, card) {
+    if (!afterEl) {
+      doc.prepend(card);
+      return;
+    }
+    // Headings live inside a collapsible section's <summary>; put the card
+    // just below that row and open the section so the card shows.
+    const summary = afterEl.closest('#doc-content summary');
+    if (summary) {
+      if (summary.parentElement) summary.parentElement.open = true;
+      summary.after(card);
+      return;
+    }
+    const target = afterEl.closest('.table-wrap') || afterEl;
+    target.after(card);
+  }
+
+  function markProposalHunks(p) {
+    const doc = document.getElementById('doc-content');
+    if (!doc) return;
+    p.hunks.forEach(h => {
+      const apply = hunkChoice.get(h.id) !== false;
+      const olds = [];
+      if (h.oldAnchorStart != null) {
+        for (let i = h.oldAnchorStart; i <= h.oldAnchorEnd; i++) {
+          const el = doc.querySelector(`[data-anchor-idx="${i}"]`);
+          if (el) olds.push(el);
+        }
+      }
+      olds.forEach(el => {
+        el.classList.add('proposal-old');
+        el.classList.toggle('kept', !apply);
+      });
+      const afterEl = olds.length
+        ? olds[olds.length - 1]
+        : (h.insertAfter > 0 ? doc.querySelector(`[data-anchor-idx="${h.insertAfter}"]`) : null);
+      const card = document.createElement(afterEl && afterEl.tagName === 'LI' && !afterEl.closest('.table-wrap') ? 'li' : 'div');
+      card.className = 'proposal-card' + (apply ? '' : ' skipped');
+      card.dataset.hunkId = String(h.id);
+
+      const head = document.createElement('div');
+      head.className = 'proposal-card-head';
+      const label = document.createElement('span');
+      const isEmpty = !String(h.newMarkdown || '').trim();
+      label.textContent = isEmpty ? 'Removes the block above' : (olds.length ? 'Replaces the block above' : 'Adds');
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      const use = proposalButton('✓ Use', () => { hunkChoice.delete(h.id); renderProposalUi(); });
+      use.classList.toggle('on', apply);
+      use.setAttribute('aria-pressed', String(apply));
+      const skip = proposalButton('✗ Skip', () => { hunkChoice.set(h.id, false); renderProposalUi(); });
+      skip.classList.add('off');
+      skip.classList.toggle('on', !apply);
+      skip.setAttribute('aria-pressed', String(!apply));
+      head.append(label, spacer, use, skip);
+
+      const body = document.createElement('div');
+      if (isEmpty) {
+        body.className = 'proposal-empty';
+        body.textContent = apply ? 'This block will be removed.' : 'This block stays.';
+      } else {
+        body.className = 'proposal-new';
+        body.appendChild(proposalHtmlFragment(h.newHtml));
+      }
+      card.append(head, body);
+      placeProposalCard(doc, afterEl, card);
+    });
+  }
+
+  function scrollToFirstHunk() {
+    const first = document.querySelector('#doc-content .proposal-old, #doc-content .proposal-card');
+    if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  async function acceptProposal(p, hunkIds) {
+    if (proposalBusy) return;
+    proposalBusy = true;
+    renderProposalUi();
+    try {
+      const result = await apiJson(`/api/proposals/${encodeURIComponent(p.proposalId)}/accept`, {
+        body: hunkIds ? { hunkIds } : {},
+      });
+      if (result) applyProposalGone(result);
+    } catch (error) {
+      showNoticeToast('Couldn’t apply the rewrite', error.message || '');
+      if (error.status === 409 || error.status === 404) loadProposals();
+    } finally {
+      proposalBusy = false;
+      renderProposalUi();
+    }
+  }
+
+  async function discardProposal(p, redo) {
+    if (proposalBusy) return;
+    proposalBusy = true;
+    renderProposalUi();
+    try {
+      const result = await apiJson(`/api/proposals/${encodeURIComponent(p.proposalId)}/discard`, {
+        body: { redo },
+      });
+      if (result) applyProposalGone(result);
+      if (redo) showNoticeToast('Asked Claude to redo it', 'The new version will wait here for your OK.');
+    } catch (error) {
+      showNoticeToast('Couldn’t discard the rewrite', error.message || '');
+      if (error.status === 404) loadProposals();
+    } finally {
+      proposalBusy = false;
+      renderProposalUi();
+    }
+  }
+
+  const holdToggle = document.getElementById('hold-toggle');
+  function setHoldUi(on) {
+    if (!holdToggle) return;
+    holdToggle.classList.toggle('on', on);
+    holdToggle.setAttribute('aria-pressed', String(on));
+    holdToggle.textContent = 'Hold edits';
+    holdToggle.title = on
+      ? 'On: Claude\u2019s changes wait for your OK. Click to let them apply straight away.'
+      : 'Off: Claude\u2019s changes apply straight away. Click to hold them for your OK.';
+  }
+  holdToggle?.addEventListener('click', async () => {
+    const next = !holdToggle.classList.contains('on');
+    setHoldUi(next);
+    try {
+      await apiJson('/api/proposals/hold', { method: 'PUT', body: { hold: next } });
+    } catch (error) {
+      setHoldUi(!next);
+      showNoticeToast('Couldn’t change the hold switch', error.message || '');
+    }
+  });
+
+  const rewriteToggle = document.getElementById('rewrite-toggle');
+  const rewritePopover = document.getElementById('rewrite-popover');
+  const rewriteInstruction = document.getElementById('rewrite-instruction');
+  function setRewriteOpen(open) {
+    if (!rewritePopover) return;
+    rewritePopover.hidden = !open;
+    rewriteToggle.setAttribute('aria-expanded', String(open));
+    if (open) rewriteInstruction.focus();
+  }
+  async function sendRewriteRequest() {
+    const instruction = rewriteInstruction.value.trim();
+    try {
+      await apiJson('/api/rewrite', { body: { instruction, fileId: String(activeFileId) } });
+      rewriteInstruction.value = '';
+      setRewriteOpen(false);
+      showNoticeToast('Asked Claude to rewrite', 'The new version will wait above the doc for your OK.');
+    } catch (error) {
+      showNoticeToast('Couldn’t ask for a rewrite', error.message || '');
+    }
+  }
+  rewriteToggle?.addEventListener('click', () => setRewriteOpen(rewritePopover.hidden));
+  document.getElementById('rewrite-cancel')?.addEventListener('click', () => setRewriteOpen(false));
+  document.getElementById('rewrite-send')?.addEventListener('click', sendRewriteRequest);
+  rewriteInstruction?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); setRewriteOpen(false); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendRewriteRequest(); }
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (rewritePopover && !rewritePopover.hidden && !e.target.closest('#rewrite-wrap')) setRewriteOpen(false);
+  });
+
   // ---------- Click dispatch ----------
   document.addEventListener('click', (e) => {
     if (e.target.closest('#finish-review')) return;
@@ -6805,6 +7539,10 @@
     if (e.target.closest('#selection-popup')) return;
     if (e.target.closest('#toast-host')) return;
     if (e.target.closest('.diff-file-actions')) return;
+    if (e.target.closest('#proposal-ribbon')) return;
+    if (e.target.closest('.proposal-card')) return;
+    if (e.target.closest('#rewrite-wrap')) return;
+    if (e.target.closest('#hold-toggle')) return;
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
@@ -6924,24 +7662,25 @@
   });
   fileResizer.addEventListener('dblclick', () => resizeFileSidebar(236));
 
-  // Divider drag
+  // Divider drag sets the comment pane's width, remembered across sessions.
+  const savedSideWidth = Number(window.discussReadPref('threadPaneWidth', 0));
+  if (savedSideWidth >= 260) document.documentElement.style.setProperty('--side-w', savedSideWidth + 'px');
   const divider = document.getElementById('divider');
   divider.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     divider.classList.add('dragging');
     document.body.classList.add('dragging');
     const startX = e.clientX;
-    const startLeft = paneLeft.getBoundingClientRect().width;
+    const startSide = document.getElementById('pane-right').getBoundingClientRect().width;
     const totalWidth = document.getElementById('workspace-grid').getBoundingClientRect().width;
+    let side = startSide;
     function onMove(ev) {
-      const dx = ev.clientX - startX;
-      let newLeft = startLeft + dx;
-      newLeft = Math.max(280, Math.min(newLeft, totalWidth - 320));
-      const pct = (newLeft / totalWidth) * 100;
-      document.documentElement.style.setProperty('--left-w', pct + '%');
+      side = Math.round(Math.max(260, Math.min(startSide - (ev.clientX - startX), totalWidth - 320)));
+      document.documentElement.style.setProperty('--side-w', side + 'px');
       reposition();
     }
     function onUp() {
+      if (side !== startSide) window.discussWritePref('threadPaneWidth', side);
       divider.classList.remove('dragging');
       document.body.classList.remove('dragging');
       document.removeEventListener('pointermove', onMove);
@@ -7743,6 +8482,7 @@
       verdictModalState.submitting = false;
       closeVerdictModal({ restoreFocus: false });
       markReviewComplete({ label: option.label, feedback });
+      closeReviewTab();
     } catch (error) {
       console.error('Failed to finish review:', error);
       setVerdictSubmitting(false);
@@ -7896,6 +8636,7 @@
     try {
       await apiJson('/api/done');
       markReviewComplete();
+      closeReviewTab();
     } catch (error) {
       console.error('Failed to finish review:', error);
       btn.disabled = false;
@@ -7999,7 +8740,7 @@
       icon.hidden = !icon.classList.contains('theme-icon-' + mode);
     });
     // The menu shows a checkmark next to the active option.
-    document.querySelectorAll('.theme-menu-item').forEach(item => {
+    document.querySelectorAll('.theme-menu-item[data-mode]').forEach(item => {
       const isActive = item.getAttribute('data-mode') === mode;
       item.classList.toggle('active', isActive);
       item.setAttribute('aria-checked', isActive ? 'true' : 'false');
@@ -8010,6 +8751,7 @@
     const list = document.getElementById('theme-menu-list');
     if (!btn || !list) return;
     applyThemeMode(currentThemeMode());
+    syncFoldSectionsItem();
 
     function openMenu() {
       list.hidden = false;
@@ -8029,6 +8771,10 @@
       const item = event.target.closest('.theme-menu-item');
       if (!item) return;
       event.stopPropagation();
+      if (item.id === 'fold-sections-toggle') {
+        setFoldSections(!foldSectionsEnabled());
+        return;
+      }
       const mode = item.getAttribute('data-mode');
       if (!THEME_MODES.includes(mode)) return;
       window.discussWritePref('theme', mode);
@@ -8133,6 +8879,7 @@
     renderAllThreads();
     scheduleReposition();
     resumePrSessionUi();
+    loadProposals();
     startEventStream();
     startHeartbeat();
     setTimeout(scheduleReposition, 600);

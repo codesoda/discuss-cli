@@ -380,7 +380,9 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
-| POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
+| POST | `/api/source` | `{markdown, fileId?, threadAnchors, summary?}` | Live source update with re-anchoring (see below). With the hold switch on, a Markdown push returns `202 {held: true, proposal}` and nothing changes yet |
+| GET | `/api/proposals` | — | `{holdAgentEdits, sourceVersion, proposals}`: the proposal waiting on each file, if any |
+| POST | `/api/proposals` | `{markdown, summary, baseVersion, fileId?}` | Propose a full rewrite. Nothing changes until the user accepts (see below) |
 | GET | `/api/blocks/{idx}` | — (`?fileId=` with multiple files) | One block's markdown source, line range and `sourceVersion` (used by the browser's edit mode) |
 | PATCH | `/api/blocks/{idx}` | `{markdown, sourceVersion, fileId?}` | Replace one block; the server re-anchors that file's threads itself (see below) |
 | POST | `/api/done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
@@ -409,6 +411,34 @@ The browser has an edit mode: the user clicks a block, edits its markdown, and t
 - **The file on disk follows the session.** Each applied edit is written back to the edited file atomically (debounced ~500 ms). If a file changes *outside* discuss, writes to it stop rather than clobber it and `source.save_failed {reason: "external_change"}` is emitted — from then on the in-session document (from `source.updated` and the PATCH responses) is the truth, not the file. Your own `POST /api/source` pushes count as in-session, so a user edit after your push still persists. With `--no-save` or stdin input, edits stay in memory and the user sees a "not saved to file" hint.
 - You normally have no reason to call `PATCH /api/blocks/{idx}` yourself — `POST /api/source` with explicit re-anchors is your protocol; the block endpoint exists so the browser doesn't have to re-anchor.
 
+### Rewrites wait for the user's OK (proposals)
+
+When the user asks you to rewrite a document, or a large part of it, **propose** it. Never `POST /api/source` a rewrite and never write the file yourself.
+
+1. Read the current markdown and `sourceVersion` from the latest `source.updated` payload or `/api/state`.
+2. `POST /api/proposals` with `{markdown: "...entire new document...", summary: "one short line for the ribbon", baseVersion: <that sourceVersion>, fileId?}`. You don't send thread anchors: the server diffs old and new block by block and re-anchors threads itself when the user accepts.
+3. The browser shows a ribbon above the doc. The user can accept all, review and pick blocks, or discard. The doc and the file stay as they were until then. Keep handling threads while you wait.
+
+Rules:
+
+- **One proposal per file.** A new one replaces the waiting one.
+- `409 stale_source_version` means the doc changed while you wrote. Re-read and propose again. `422 no_changes` means your markdown matches the doc.
+- **The hold switch** ("Hold edits" in the header) is on by default for file sessions. While it is on, your ordinary `POST /api/source` pushes on Markdown files come back `202 {held: true, proposal}` and also wait in the ribbon. Add `summary` to those pushes so the ribbon says what changed.
+
+### Show the user you're working (`POST /api/agent/status`)
+
+Threads already show "Claude is on it…" by themselves until your take lands, so short replies need nothing extra. Before a job that takes more than a few seconds (a search, a data query, a rewrite), set a status so the header shows a spinner pill:
+
+```bash
+curl -s -X POST "$API_BASE/api/agent/status" -H 'Content-Type: application/json' \
+  -d '{"id":"quotes","label":"Finding customer quotes","threadId":"u-3"}'
+```
+
+- `label` is a few plain words. `id` defaults to `"main"`; give jobs their own ids to show several at once.
+- `threadId` ties the status to a thread: the thread shows your label, and your next take on it clears the status.
+- Clear it with `{"id":"quotes","done":true}` when the job doesn't end in a take. Statuses expire after 10 minutes anyway.
+- `GET /api/agent/status` lists the current ones. Statuses go to the browser only, never to stdout.
+
 ## Stdout event kinds
 
 - `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
@@ -420,9 +450,12 @@ The browser has an edit mode: the user clicks a block, edits its markdown, and t
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
 - `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, another agent's, or a user block edit in the browser)
 - `source.save_failed` → `{reason, message, path}` — a user edit could not be written back to its source file (`reason`: `"external_change"` or `"io_error"`); the in-session document remains the truth
+- `rewrite.requested` → `{fileId, instruction, sourceVersion}` — the user pressed **Rewrite** in the browser. `instruction` may be empty; then rewrite for clarity and brevity. Answer with `POST /api/proposals`, never `/api/source`
+- `proposal.accepted` → `{proposalId, fileId, acceptedHunkIds, rejectedHunks: [{id, oldMarkdown, newMarkdown}], sourceVersion}` — the accepted blocks are now in the doc and on disk (a `source.updated` arrives too). The user turned down `rejectedHunks`: don't push those changes again unless asked
+- `proposal.discarded` → `{proposalId, fileId, reason: "user", redoRequested, summary}` — the user threw the proposal away. With `redoRequested: true` the doc moved on under it: re-read the latest doc and propose again with the same intent
 - `prompt.suggest_done` → lifecycle; informational
 
-**Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.
+**Not on stdout:** `take.added`, `draft.updated`, `draft.cleared`, `proposal.created`, `proposal.hold_changed` — these are SSE-only (browser UI), so they never surface here.
 
 ## Authoring markdown for syntax highlighting
 

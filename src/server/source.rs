@@ -16,6 +16,7 @@ use crate::state::{File, FileId, FileKind, LineRange, Thread, ThreadId};
 
 use super::app_state::AppState;
 use super::pages::render_file_html;
+use super::proposals::create_proposal;
 use super::resolve_file_id;
 use super::response::api_error_response;
 
@@ -26,6 +27,9 @@ pub(super) struct SourceUpdateRequest {
     #[serde(default)]
     file_id: Option<FileId>,
     thread_anchors: Vec<ThreadAnchorUpdate>,
+    /// One line for the ribbon when the push is held as a proposal.
+    #[serde(default)]
+    summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +145,31 @@ pub(super) async fn post_api_source(
             "validation_error",
             "live source updates are not supported for image or HTML files",
         );
+    }
+
+    // Hold switch: the push waits in the ribbon like any proposal. The
+    // agent's threadAnchors are not needed; accept re-anchors mechanically.
+    if app_state.hold_agent_edits() && app_state.file_kind(&file_id) == Some(FileKind::Markdown) {
+        let base_version = app_state
+            .state
+            .read()
+            .map(|state| state.source_version())
+            .unwrap_or(0);
+        return match create_proposal(
+            &app_state,
+            file_id,
+            &request.markdown,
+            request.summary.unwrap_or_default(),
+            base_version,
+            "source",
+        ) {
+            Ok(proposal) => (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({"held": true, "proposal": proposal})),
+            )
+                .into_response(),
+            Err(response) => *response,
+        };
     }
 
     let markdown = request.markdown;
