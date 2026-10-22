@@ -134,6 +134,12 @@ pub struct Thread {
     pub orphaned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element_anchor: Option<ElementAnchor>,
+    /// Voice note clip id (`v-N.ext`), served at `/api/audio/{id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_id: Option<String>,
+    /// Absolute path of the voice note clip, for the agent to transcribe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -302,6 +308,8 @@ mod tests {
             line_range: None,
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");
@@ -339,6 +347,8 @@ mod tests {
             line_range: None,
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize agent thread");
@@ -368,6 +378,8 @@ mod tests {
             line_range: None,
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize image thread");
@@ -398,6 +410,8 @@ mod tests {
             line_range: Some(LineRange { start: 3, end: 5 }),
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         };
 
         let value = serde_json::to_value(&thread).expect("serialize thread");

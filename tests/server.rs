@@ -5874,6 +5874,8 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         line_range: None,
         orphaned: false,
         element_anchor: None,
+        audio_id: None,
+        audio_path: None,
     }
 }
 

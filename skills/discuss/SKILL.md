@@ -317,6 +317,7 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` / `elementAnchor` from the payload.
 2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through the `files` field fetched from `endpoints.state` and inspect `imageAnchor`'s percentage coordinates. For static HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml`. For live threads, also use `elementAnchor.route` and `elementAnchor.accessibleName`; selectors are route-scoped and must not be interpreted against a different SPA route.
 3. Read the user's comment in `text`.
+   - **Voice notes:** when the payload has `audioPath`, the user held on the block and talked; `text` is only a "🎤 Voice note" placeholder. Transcribe the file locally (`discuss-transcribe "$AUDIO_PATH"` if it exists, otherwise any local speech-to-text such as mlx-whisper or whisper.cpp; never upload the audio). Start the take with `Heard: "…"` so the user can catch a bad transcription, then answer it like a typed comment. Read for intent and ignore ums and false starts. If no local transcriber is available, say so in the take.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
 5. Post it as a **take**, not a reply. Replace `{threadId}` in the retained `endpoints.addTakeTemplate` value:
 
@@ -375,6 +376,8 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
 | GET | `/api/files/{fileId}/blocks` | — | Server's commentable-block segmentation `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` for computing anchors (markdown/diff only) |
 | POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors; optional `kind: "agent"` stores `text` as the opening take and returns `takeId` | Create a thread. User threads are rare via API; `kind: "agent"` is how you pre-annotate. `fileId` required with multiple files. |
+| POST | `/api/audio` | raw audio body (`audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav`) | Browser voice-note upload; returns `{audioId, audioPath}`. Pass `audioId` to `POST /api/threads` (markdown/diff only) |
+| GET | `/api/audio/{audioId}` | — | Play back a saved voice note |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind = "user"` or `"agent"`; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
@@ -443,7 +446,7 @@ curl -s -X POST "$API_BASE/api/agent/status" -H 'Content-Type: application/json'
 
 - `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, audioId?, audioPath?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
