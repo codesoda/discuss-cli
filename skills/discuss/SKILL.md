@@ -163,7 +163,7 @@ In Claude Code, `Monitor` and `TaskStop` may be deferred tools. Load their schem
 ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 ```
 
-**Check that the monitor can stay up.** A review can last hours. Use Option A only when the loaded monitor tool offers a `persistent` option (or no deadline). Some Claude Code versions have a `Monitor` with only `timeout_ms`, capped at 30 minutes. That monitor stops mid-review and takes discuss down with it. With such a monitor, use **Option A2**. Do not work around the cap with `tail -F` and timed re-arms: each re-arm wakes you and re-reads the whole conversation.
+**Check that the monitor can stay up.** A review can last hours. Use Option A only when the loaded monitor tool offers a `persistent` option (or no deadline). Some Claude Code versions have a `Monitor` with only `timeout_ms`, capped at 30 minutes. That monitor stops mid-review and takes discuss down with it. With such a monitor, use **Option A2**. Do not work around the cap with `tail -F` and timed re-arms: each re-arm wakes you and re-reads the whole conversation. Never pass the event stream through `grep --line-buffered` either: macOS grep holds back the last line until another arrives, so the reviewer's newest comment never reaches you and the browser shows "Claude is on it…" forever.
 
 ## Step 1: Launch discuss and choose an event strategy
 
