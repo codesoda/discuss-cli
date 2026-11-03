@@ -2705,7 +2705,7 @@
     }
     if (eventSource || eventReconnectTimer) return;
 
-    const source = new EventSource('/api/events');
+    const source = new EventSource('/api/events?client=page');
     eventSource = source;
     source.onopen = () => { reconcilePrSessionFromServer(); };
     SSE_EVENT_KINDS.forEach(kind => {

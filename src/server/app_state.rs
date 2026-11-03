@@ -513,7 +513,20 @@ pub(super) struct ActivityTracker {
 pub(super) struct ActivityState {
     last_heartbeat_at: Instant,
     last_mutation_at: Instant,
+    last_page_change_at: Instant,
+    open_pages: usize,
     last_idle_emit_at: Option<Instant>,
+}
+
+/// Counts one open review page while it lives. Drop marks the page closed.
+pub(super) struct OpenPageGuard {
+    activity: ActivityTracker,
+}
+
+impl Drop for OpenPageGuard {
+    fn drop(&mut self) {
+        self.activity.change_open_pages(false);
+    }
 }
 
 impl ActivityTracker {
@@ -524,6 +537,8 @@ impl ActivityTracker {
             inner: Arc::new(Mutex::new(ActivityState {
                 last_heartbeat_at: now,
                 last_mutation_at: now,
+                last_page_change_at: now,
+                open_pages: 0,
                 last_idle_emit_at: None,
             })),
         }
@@ -558,6 +573,28 @@ impl ActivityTracker {
             .map_err(|_| "activity lock poisoned".to_string())
     }
 
+    pub(super) fn open_page(&self) -> OpenPageGuard {
+        self.change_open_pages(true);
+
+        OpenPageGuard {
+            activity: self.clone(),
+        }
+    }
+
+    fn change_open_pages(&self, opened: bool) {
+        match self.inner.lock() {
+            Ok(mut state) => {
+                state.open_pages = if opened {
+                    state.open_pages.saturating_add(1)
+                } else {
+                    state.open_pages.saturating_sub(1)
+                };
+                state.last_page_change_at = Instant::now();
+            }
+            Err(_) => tracing::warn!("activity lock poisoned; open page count not updated"),
+        }
+    }
+
     pub(super) fn record_idle_prompt_if_due(
         &self,
         now: Instant,
@@ -567,19 +604,27 @@ impl ActivityTracker {
             .inner
             .lock()
             .map_err(|_| "activity lock poisoned".to_string())?;
-        let last_activity_at = state.last_heartbeat_at.max(state.last_mutation_at);
+        // An open review page is not idle, even when its tab throttles heartbeats.
+        if state.open_pages > 0 {
+            return Ok(None);
+        }
+
+        let last_activity_at = state
+            .last_heartbeat_at
+            .max(state.last_mutation_at)
+            .max(state.last_page_change_at);
         let idle_for = now.saturating_duration_since(last_activity_at);
 
         if idle_for < idle_timeout {
             return Ok(None);
         }
 
-        if let Some(last_idle_emit_at) = state.last_idle_emit_at {
-            let already_emitted_for_current_window = last_idle_emit_at >= last_activity_at
-                && now.saturating_duration_since(last_idle_emit_at) < idle_timeout;
-            if already_emitted_for_current_window {
-                return Ok(None);
-            }
+        // Emit one prompt per quiet stretch. New activity starts a new stretch.
+        if state
+            .last_idle_emit_at
+            .is_some_and(|last_idle_emit_at| last_idle_emit_at >= last_activity_at)
+        {
+            return Ok(None);
         }
 
         state.last_idle_emit_at = Some(now);
