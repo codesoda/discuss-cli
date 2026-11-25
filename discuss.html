@@ -6740,6 +6740,7 @@
   }, true);
 
   async function openBlockEditor(anchorIdx, targetEl, { draft = null, priorOriginal } = {}) {
+    if (blockEditorStashes.get(activeFileId)?.pending) return;
     if (blockEditor) {
       if (blockEditor.anchorIdx === anchorIdx && blockEditor.fileId === activeFileId) return;
       commitBlockEditor('switch-block');
@@ -6791,6 +6792,7 @@
       committing: false,
       cancelled: false,
     };
+    blockEditorStashes.delete(fileId);
     if (priorOriginal !== undefined && block.markdown !== priorOriginal) {
       setBlockEditorError('Document changed under you — review before saving.');
     }
@@ -6877,7 +6879,15 @@
       if (blockEditor === editor) closeBlockEditor(false);
       if (payload) applySourceUpdatedEvent(payload);
     } catch (error) {
-      if (!blockEditor || blockEditor !== editor) return; // re-render took over
+      if (blockEditor !== editor) {
+        const stash = blockEditorStashes.get(editor.fileId);
+        if (stash?.pending === editor) {
+          stash.pending = null;
+          restoreBlockEditorAfterRerender(stash);
+          showNoticeToast('Block was not saved', 'Your draft is retained; return to its file to retry.');
+        }
+        return;
+      }
       editor.committing = false;
       editor.textarea.disabled = false;
       if (error.code === 'stale_source_version' && retryCount === 0) {
@@ -6919,11 +6929,8 @@
   // user's draft alive across it: remember it per file, re-open afterwards.
   function stashBlockEditorForRerender() {
     if (!blockEditor) return null;
-    if (blockEditor.committing) {
-      closeBlockEditor(false); // our own commit landing; new render shows it
-      return null;
-    }
     const stash = {
+      pending: blockEditor.committing ? blockEditor : null,
       fileId: blockEditor.fileId,
       anchorIdx: blockEditor.anchorIdx,
       draft: blockEditor.textarea.value,
@@ -6935,9 +6942,9 @@
   }
 
   function restoreBlockEditorAfterRerender(stash) {
-    if (!stash || !editMode) return;
+    if (!stash || stash.pending || !editMode) return;
     if (stash.fileId !== activeFileId) return; // restored when its file is switched back to
-    blockEditorStashes.delete(stash.fileId);
+    // Keep the stash until the asynchronous open succeeds.
     const el = document.querySelector(`#doc-content [data-anchor-idx="${stash.anchorIdx}"]`);
     if (!el) {
       console.warn('discuss: block being edited disappeared; draft:', stash.draft);

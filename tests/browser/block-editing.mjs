@@ -109,6 +109,37 @@ test('failed saves retain input and provide a working Retry closure', async () =
   assert.equal(patches, 2);
 });
 
+test('failed in-flight PATCH retains its draft across rerenders and file switches', async () => {
+  for (const activeFileId of ['f-1', 'f-2']) {
+    let rejectPatch;
+    let reopened;
+    const editor = {
+      textarea: { value: 'unsaved draft' }, original: 'original',
+      fileId: 'f-1', anchorIdx: 2, sourceVersion: 0,
+    };
+    const stashes = new Map();
+    const context = vm.createContext({
+      blockEditor: editor, blockEditorStashes: stashes, activeFileId, editMode: true,
+      setBlockEditorError() {}, showNoticeToast() {},
+      apiJson: () => new Promise((resolve, reject) => { rejectPatch = reject; }),
+      closeBlockEditor: () => { context.blockEditor = null; },
+      document: { querySelector: () => ({}) },
+      openBlockEditor: (idx, el, options) => { reopened = options; },
+    });
+    vm.runInContext(between('  async function commitBlockEditor', '  function showNoticeToast'), context);
+    const request = vm.runInContext("commitBlockEditor('shortcut')", context);
+    vm.runInContext('restoreBlockEditorAfterRerender(stashBlockEditorForRerender())', context);
+    assert.equal(stashes.get('f-1').draft, 'unsaved draft');
+    assert.equal(reopened, undefined, 'pending request must not reopen an editable draft');
+    rejectPatch(new Error('offline'));
+    await request;
+    assert.equal(stashes.get('f-1').draft, 'unsaved draft');
+    assert.equal(stashes.get('f-1').pending, null);
+    if (activeFileId === 'f-1') assert.equal(reopened.draft, 'unsaved draft');
+    else assert.equal(reopened, undefined);
+  }
+});
+
 test('out-of-order source events update each file without lowering the session version', () => {
   const source = between('  const appliedSourceVersions = new Map();', '  // ---------- Version badge');
   let state = { sourceVersion: 0, userThreads: [
