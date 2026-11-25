@@ -165,7 +165,9 @@ async fn run_pr_session<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let bundle = pr::load_pr(&identity, unified).await?;
+    // Keep the loader's large joined command futures off the caller's stack,
+    // especially the smaller default Windows executable stack in debug builds.
+    let bundle = Box::pin(pr::load_pr(&identity, unified)).await?;
     let files_count = bundle.files.len() + 1;
     let import_body = serde_json::to_vec(&bundle).map_err(|error| DiscussError::PrError {
         message: format!("could not encode the loaded PR: {error}"),
@@ -1036,6 +1038,19 @@ fn map_file_read_error(path: &Path, source: io::Error) -> DiscussError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pr_startup_future_size() {
+        let identity =
+            crate::pr::GithubPrUrl::parse("https://github.com/codesoda/discuss-cli/pull/64")
+                .unwrap();
+        let config = crate::Config::default();
+        let future = super::run_pr_session(identity.clone(), 10, &config, std::future::pending());
+        assert!(
+            std::mem::size_of_val(&future) < 16 * 1024,
+            "PR startup future is {} bytes",
+            std::mem::size_of_val(&future)
+        );
+    }
     use super::*;
 
     use tempfile::tempdir;
