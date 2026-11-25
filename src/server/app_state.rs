@@ -77,6 +77,7 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     pub(super) source: Arc<std::sync::RwLock<Source>>,
     source_sync: Arc<Mutex<SourceSyncState>>,
+    source_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
@@ -113,6 +114,7 @@ impl AppState {
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
             source_sync: Arc::new(Mutex::new(SourceSyncState::default())),
+            source_write_lock: Arc::new(tokio::sync::Mutex::new(())),
             file_bytes: Arc::new(HashMap::new()),
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
@@ -310,6 +312,9 @@ impl AppState {
     }
 
     async fn persist_source(self, file_id: FileId, path: PathBuf) {
+        // Debouncing only cancels sleeping writers. Serialize writers already
+        // doing I/O too, including their snapshots and last_synced updates.
+        let _write_guard = self.source_write_lock.lock().await;
         // The newest content wins: read it at write time, not schedule time.
         let Some(file) = self.file(&file_id) else {
             return;
@@ -837,6 +842,46 @@ impl ShutdownSignal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_source_writers_snapshot_after_acquiring_the_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("review.md");
+        std::fs::write(&path, "original").unwrap();
+        let app = AppState::for_process().with_source(Source {
+            files: vec![File {
+                id: default_file_id(),
+                path: path.to_string_lossy().into_owned(),
+                kind: FileKind::Markdown,
+                content: "original".into(),
+            }],
+        });
+        let mut events = app.bus.subscribe();
+        let guard = app.source_write_lock.lock().await;
+        let mut writers = Vec::new();
+        for _ in 0..8 {
+            writers.push(tokio::spawn(
+                app.clone().persist_source(default_file_id(), path.clone()),
+            ));
+        }
+        tokio::task::yield_now().await;
+        assert!(writers.iter().all(|writer| !writer.is_finished()));
+        app.source.write().unwrap().files[0].content = "latest".into();
+        drop(guard);
+        for writer in writers {
+            writer.await.unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "latest");
+        assert_eq!(
+            app.source_sync.lock().unwrap().last_synced[&default_file_id()].as_ref(),
+            "latest"
+        );
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn pr_execution_mode_is_exclusive_and_demo_is_offline() {
