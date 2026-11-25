@@ -191,14 +191,27 @@ pub fn splice(
         &markdown[byte_at(line_end + 1)..]
     };
 
-    let mut result = String::with_capacity(prefix.len() + replacement.len() + suffix.len() + 1);
+    // Textareas send LF even when the source uses CRLF. Use the source's
+    // first line ending for inserted text without changing surrounding bytes.
+    let eol = if markdown
+        .find('\n')
+        .is_some_and(|i| i > 0 && markdown.as_bytes()[i - 1] == b'\r')
+    {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let normalized = replacement.replace("\r\n", "\n").replace('\r', "\n");
+    let replacement = normalized.replace('\n', eol);
+    let replacement = replacement.as_str();
+    let mut result = String::with_capacity(prefix.len() + replacement.len() + suffix.len() + 2);
     result.push_str(prefix);
     result.push_str(replacement);
     if !replacement.is_empty()
         && !replacement.ends_with('\n')
         && (!suffix.is_empty() || markdown.ends_with('\n'))
     {
-        result.push('\n');
+        result.push_str(eol);
     }
     result.push_str(suffix);
     Ok(result)
@@ -232,6 +245,18 @@ impl std::error::Error for SpliceError {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn splice_preserves_crlf_for_changed_text() {
+        assert_eq!(
+            super::splice("before\r\nold\r\nafter\r\n", 2, 2, "new\ntext").unwrap(),
+            "before\r\nnew\r\ntext\r\nafter\r\n"
+        );
+        assert_eq!(
+            super::splice("old\r\n", 1, 1, "new\r\n").unwrap(),
+            "new\r\n"
+        );
+        assert_eq!(super::splice("old\n", 1, 1, "new\r\n").unwrap(), "new\n");
+    }
     use super::*;
     use crate::render::render;
 

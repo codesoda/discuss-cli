@@ -27,7 +27,7 @@ test('edit clicks prevent link navigation, while read-only panes keep normal cli
       openBlockEditor: () => { opened = true; },
     });
     handler({
-      target: { closest: selector => selector === '.block-editor' ? null : anchor },
+      target: { closest: selector => selector.startsWith('.block-editor') ? null : anchor },
       preventDefault: () => { prevented = true; },
       stopImmediatePropagation: () => { stopped = true; },
     });
@@ -35,6 +35,24 @@ test('edit clicks prevent link navigation, while read-only panes keep normal cli
     assert.equal(stopped, editable);
     assert.equal(opened, editable);
   }
+});
+
+test('edit mode leaves document controls clickable and samples prose typography', () => {
+  const source = between('  // Capture-phase so edit-mode clicks', '  async function openBlockEditor');
+  let handler;
+  vm.runInNewContext(source, {
+    editMode: true, reviewComplete: false, activeFileIsEditable: () => true,
+    document: { addEventListener: (_, fn) => { handler = fn; } },
+    openBlockEditor: () => assert.fail('control opened editor'),
+  });
+  for (const control of ['.thread-marker', '.thread-marker-stack', '.section-toggle']) {
+    handler({
+      target: { closest: selector => selector === '#pane-left' || selector.split(', ').includes(control) ? {} : null },
+      preventDefault: () => assert.fail('control default blocked'),
+      stopImmediatePropagation: () => assert.fail('control propagation blocked'),
+    });
+  }
+  assert.ok(page.includes("const sample = targetEl.querySelector('pre') || targetEl;"));
 });
 
 test('unchanged CRLF textarea content closes without a PATCH', async () => {

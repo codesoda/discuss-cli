@@ -6741,7 +6741,7 @@
     if (!editMode || reviewComplete) return;
     if (!activeFileIsEditable()) return; // diff/image/HTML pane: commenting works as usual
     if (!e.target.closest('#pane-left')) return; // header, threads, toasts work as usual
-    if (e.target.closest('.block-editor')) return;
+    if (e.target.closest('.block-editor, .thread-marker, .thread-marker-stack, .section-toggle')) return;
     e.preventDefault(); // stop link navigation as well as comment handlers
     e.stopImmediatePropagation();
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
@@ -6784,7 +6784,7 @@
     // Inherit the block's own typography so editing feels in-place — the
     // syntax shows, the shape doesn't jump. Code-ish blocks sample the inner
     // <pre> and get the mono stack.
-    const sample = targetEl.querySelector('pre, code') || targetEl;
+    const sample = targetEl.querySelector('pre') || targetEl;
     const cs = getComputedStyle(sample);
     ['fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'letterSpacing'].forEach(p => {
       textarea.style[p] = cs[p];
