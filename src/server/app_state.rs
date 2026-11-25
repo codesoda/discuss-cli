@@ -348,10 +348,10 @@ impl AppState {
             }
         };
 
-        // External-change guard: never clobber an edit made in another app.
+        // Detect external changes before staging and again before replacement.
         // A missing file is ours to recreate; anything else unreadable is an
         // error worth surfacing.
-        match tokio::fs::read_to_string(&path).await {
+        let disk_before = match tokio::fs::read_to_string(&path).await {
             Ok(on_disk) => {
                 if last_synced.as_deref() != Some(on_disk.as_str()) {
                     self.emit_save_failed(
@@ -364,8 +364,9 @@ impl AppState {
                     );
                     return;
                 }
+                Some(on_disk)
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => {
                 self.emit_save_failed(
                     "io_error",
@@ -374,7 +375,7 @@ impl AppState {
                 );
                 return;
             }
-        }
+        };
 
         // Atomic replace: temp file in the same directory, then rename, so a
         // crash mid-write can never truncate the document.
@@ -427,14 +428,32 @@ impl AppState {
             let _ = tokio::fs::remove_file(&temp_path).await;
             return;
         }
-        if let Err(error) = tokio::fs::rename(&temp_path, &path).await {
-            self.emit_save_failed(
-                "io_error",
-                format!("failed to replace {}: {error}", path.display()),
-                &path,
-            );
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return;
+        let destination = path.clone();
+        let replaced = tokio::task::spawn_blocking(move || {
+            replace_source_if_unchanged(&temp, &destination, disk_before.as_deref())
+        })
+        .await;
+        match replaced {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                self.emit_save_failed(
+                    "external_change",
+                    format!(
+                        "{} changed while saving; edits remain in memory",
+                        path.display()
+                    ),
+                    &path,
+                );
+                return;
+            }
+            error => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to replace {}: {error:?}", path.display()),
+                    &path,
+                );
+                return;
+            }
         }
         if let Ok(mut sync) = self.source_sync.lock() {
             sync.last_synced.insert(file_id, current);
@@ -859,9 +878,46 @@ impl ShutdownSignal {
     }
 }
 
+// Recheck after staging, without an async scheduling gap before rename.
+// This is best-effort: portable filesystems offer no content compare-and-swap
+// against uncooperative external writers in the final read/rename interval.
+fn replace_source_if_unchanged(
+    temp: &Path,
+    path: &Path,
+    expected: Option<&str>,
+) -> io::Result<bool> {
+    let actual = match std::fs::read_to_string(path) {
+        Ok(content) => Some(content),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if actual.as_deref() != expected {
+        return Ok(false);
+    }
+    std::fs::rename(temp, path)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_source_check_rejects_changes_after_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        let temp = dir.path().join("staged.md");
+        std::fs::write(&path, "original").unwrap();
+        let expected = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&temp, "user edit").unwrap();
+        std::fs::write(&path, "external edit").unwrap();
+        assert!(!replace_source_if_unchanged(&temp, &path, Some(&expected)).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external edit");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!replace_source_if_unchanged(&temp, &path, Some(&expected)).unwrap());
+        assert!(replace_source_if_unchanged(&temp, &path, None).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "user edit");
+    }
 
     #[tokio::test]
     async fn queued_source_writers_snapshot_after_acquiring_the_write_lock() {
