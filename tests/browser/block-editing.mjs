@@ -109,13 +109,42 @@ test('failed saves retain input and provide a working Retry closure', async () =
   assert.equal(patches, 2);
 });
 
+test('out-of-order source events update each file without lowering the session version', () => {
+  const source = between('  const appliedSourceVersions = new Map();', '  // ---------- Version badge');
+  let state = { sourceVersion: 0, userThreads: [
+    { id: 'a', anchorStart: 1, anchorEnd: 1 },
+    { id: 'b', anchorStart: 1, anchorEnd: 1 },
+  ] };
+  const html = new Map();
+  const context = vm.createContext({
+    document: { getElementById: () => ({}) },
+    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html,
+    loadState: () => state,
+    cloneState: value => structuredClone(value),
+    setCurrentState: value => { state = value; }, renderMetaStatus() {},
+  });
+  vm.runInContext(source, context);
+  for (const [fileId, version, anchor] of [['b', 2, 4], ['a', 1, 3], ['b', 2, 99], ['b', 1, 99]]) {
+    context.payload = {
+      fileId, sourceVersion: version, renderedHtml: `${fileId}-${anchor}`,
+      threadAnchors: [{ threadId: fileId, anchorStart: anchor, anchorEnd: anchor }],
+    };
+    vm.runInContext('applySourceUpdatedEvent(payload)', context);
+  }
+  assert.equal(html.get('a'), 'a-3');
+  assert.equal(html.get('b'), 'b-4');
+  assert.equal(state.sourceVersion, 2);
+  assert.equal(state.userThreads[0].anchorStart, 3);
+  assert.equal(state.userThreads[1].anchorStart, 4);
+});
+
 test('hydration syncs Edit visibility after selecting the initial file', () => {
   const source = between('    discussFiles = loadState().files || [];', '    if (isHtmlFile()) stashHtmlFrame(activeFileId);');
   for (const kind of ['markdown', 'diff', 'image', 'html']) {
     let syncedFile;
     const context = vm.createContext({
       loadState: () => ({ files: [{ id: kind }] }),
-      discussFiles: [], activeFileId: null,
+      discussFiles: [], activeFileId: null, appliedSourceVersions: new Map(),
       syncEditReadonlyClass: () => { syncedFile = context.activeFileId; },
     });
     vm.runInContext(source, context);

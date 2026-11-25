@@ -2927,6 +2927,8 @@
   // Live source update: the agent pushed new markdown plus re-anchored (or
   // orphaned) thread positions. Swap the document in place and re-run every
   // load-time pass that depends on #doc-content, preserving the conversation.
+  const appliedSourceVersions = new Map();
+
   function applySourceUpdatedEvent(payload) {
     if (!payload || typeof payload.renderedHtml !== 'string') return;
     const doc = document.getElementById('doc-content');
@@ -2934,10 +2936,11 @@
     // A block-edit PATCH response and its SSE broadcast both land here; the
     // second delivery of the same version is a no-op.
     const incomingVersion = parseInt(payload.sourceVersion, 10);
-    if (Number.isFinite(incomingVersion) && incomingVersion <= (loadState().sourceVersion || 0)) {
-      return;
-    }
     const updatedFileId = payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID;
+    if (Number.isFinite(incomingVersion)) {
+      if (incomingVersion <= (appliedSourceVersions.get(updatedFileId) || 0)) return;
+      appliedSourceVersions.set(updatedFileId, incomingVersion);
+    }
     // Keep the pre-rendered copy fresh so switching to this file later shows
     // the updated content.
     renderedFileHtml.set(updatedFileId, payload.renderedHtml);
@@ -2955,7 +2958,7 @@
 
     const s = cloneState(loadState());
     const version = parseInt(payload.sourceVersion, 10);
-    s.sourceVersion = Number.isFinite(version) ? version : s.sourceVersion + 1;
+    s.sourceVersion = Number.isFinite(version) ? Math.max(s.sourceVersion || 0, version) : s.sourceVersion + 1;
     const anchorById = new Map(
       (Array.isArray(payload.threadAnchors) ? payload.threadAnchors : [])
         .map(a => [String(a.threadId), a])
@@ -8314,6 +8317,7 @@
   attachPrismCompleteHook();
   hydrateState().then(() => {
     discussFiles = loadState().files || [];
+    discussFiles.forEach(file => appliedSourceVersions.set(String(file.id), loadState().sourceVersion || 0));
     if (discussFiles.length) activeFileId = String(discussFiles[0].id);
     syncEditReadonlyClass();
     if (isHtmlFile()) stashHtmlFrame(activeFileId);
