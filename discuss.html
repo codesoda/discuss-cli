@@ -6788,13 +6788,14 @@
       fileId,
       anchorIdx,
       sourceVersion: block.sourceVersion,
-      original: block.markdown,
+      original: priorOriginal !== undefined ? priorOriginal : block.markdown,
+      conflicted: priorOriginal !== undefined && block.markdown !== priorOriginal,
       committing: false,
       cancelled: false,
     };
     blockEditorStashes.delete(fileId);
     if (priorOriginal !== undefined && block.markdown !== priorOriginal) {
-      setBlockEditorError('Document changed under you — review before saving.');
+      setBlockEditorError('This block changed or moved. Copy your draft, then Esc and reopen the intended block; saving here is blocked.');
     }
 
     const autosize = () => {
@@ -6857,6 +6858,10 @@
   async function commitBlockEditor(reason, retryCount = 0) {
     if (!blockEditor || blockEditor.committing) return;
     const editor = blockEditor;
+    if (editor.conflicted) {
+      setBlockEditorError('This block changed or moved. Copy your draft, then Esc and reopen the intended block; saving here is blocked.');
+      return;
+    }
     const value = editor.textarea.value;
     // Textareas normalize CRLF/CR to LF even without user input.
     if (value === editor.original.replace(/\r\n?/g, '\n')) {
@@ -6920,8 +6925,8 @@
       await commitBlockEditor(reason, 1);
       return;
     }
-    editor.original = fresh.markdown; // next unchanged-compare is against reality
-    setBlockEditorError('Document changed under you — saving again overwrites the newer block, Esc discards your text.');
+    editor.conflicted = true;
+    setBlockEditorError('This block changed or moved. Copy your draft, then Esc and reopen the intended block; saving here is blocked.');
     editor.textarea.focus();
   }
 

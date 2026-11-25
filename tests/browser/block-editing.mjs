@@ -109,6 +109,33 @@ test('failed saves retain input and provide a working Retry closure', async () =
   assert.equal(patches, 2);
 });
 
+test('changed block identity blocks subsequent blur, shortcut, and retry saves', async () => {
+  let patches = 0;
+  const editor = {
+    textarea: { value: 'my draft', focus() {} }, original: 'original block',
+    fileId: 'f-1', anchorIdx: 2, sourceVersion: 0,
+  };
+  const context = vm.createContext({
+    blockEditor: editor, blockEditorStashes: new Map(), setBlockEditorError() {},
+    apiJson: async (_, options) => {
+      if (options.method === 'GET') return { markdown: 'unrelated block', sourceVersion: 1 };
+      patches++;
+      throw Object.assign(new Error('stale'), { code: 'stale_source_version' });
+    },
+  });
+  vm.runInContext(between('  async function commitBlockEditor', '  // A re-render or file switch'), context);
+  await vm.runInContext("commitBlockEditor('shortcut')", context);
+  assert.equal(editor.conflicted, true);
+  assert.equal(editor.original, 'original block', 'retain identity across later stashes');
+  for (const reason of ['blur', 'shortcut', 'retry', 'mode-exit']) {
+    context.reason = reason;
+    await vm.runInContext('commitBlockEditor(reason)', context);
+  }
+  assert.equal(patches, 1);
+  assert.equal(editor.textarea.value, 'my draft');
+  assert.equal(editor.textarea.disabled, false);
+});
+
 test('failed in-flight PATCH retains its draft across rerenders and file switches', async () => {
   for (const activeFileId of ['f-1', 'f-2']) {
     let rejectPatch;
