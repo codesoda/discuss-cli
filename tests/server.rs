@@ -6166,6 +6166,30 @@ async fn proposal_waits_until_accepted_then_applies_only_chosen_hunks() {
     assert_eq!(listing["proposals"][0]["proposalId"], id);
     assert_eq!(listing["proposals"][0]["stale"], false);
 
+    // A nonempty body without Content-Type must not silently accept all hunks.
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let untyped_body = r#"{"hunkIds":[1]}"#;
+    stream.write_all(format!(
+        "POST /api/proposals/{id}/accept HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{untyped_body}",
+        untyped_body.len()
+    ).as_bytes()).await.expect("write untyped request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    assert!(response.starts_with("HTTP/1.1 415"), "response: {response}");
+    let malformed = post_json_path(addr, &format!("/api/proposals/{id}/accept"), "{").await;
+    assert!(
+        malformed.starts_with("HTTP/1.1 400"),
+        "response: {malformed}"
+    );
+    assert_eq!(
+        response_json(&get_path(addr, "/api/state").await)["sourceVersion"],
+        0
+    );
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), BLOCK_DOC);
+
     // Unknown hunk ids are rejected.
     let response = post_json_path(
         addr,

@@ -14,12 +14,14 @@
 use std::collections::{BTreeSet, HashMap};
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State as AxumState};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::events::{Event, EventKind};
@@ -130,6 +132,35 @@ fn bad_request(rejection: JsonRejection) -> Response {
         "bad_request",
         rejection.body_text(),
     )
+}
+
+fn optional_json<T: DeserializeOwned + Default>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> std::result::Result<T, Box<Response>> {
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim();
+    if !content_type.eq_ignore_ascii_case("application/json") {
+        return Err(Box::new(api_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "validation_error",
+            "a nonempty proposal action body requires Content-Type: application/json",
+        )));
+    }
+    serde_json::from_slice(body).map_err(|error| {
+        Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            error.to_string(),
+        ))
+    })
 }
 
 fn lock_error(what: &str) -> Response {
@@ -321,9 +352,13 @@ fn remove_proposal(app_state: &AppState, proposal: &Proposal) {
 pub(super) async fn post_api_proposal_accept(
     AxumState(app_state): AxumState<AppState>,
     Path(proposal_id): Path<String>,
-    payload: Option<Json<AcceptProposalRequest>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    let request = payload.map(|Json(r)| r).unwrap_or_default();
+    let request = match optional_json::<AcceptProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
     let proposal = match take_proposal(&app_state, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
@@ -450,9 +485,13 @@ pub(super) async fn post_api_proposal_accept(
 pub(super) async fn post_api_proposal_discard(
     AxumState(app_state): AxumState<AppState>,
     Path(proposal_id): Path<String>,
-    payload: Option<Json<DiscardProposalRequest>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    let request = payload.map(|Json(r)| r).unwrap_or_default();
+    let request = match optional_json::<DiscardProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
     let proposal = match take_proposal(&app_state, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
