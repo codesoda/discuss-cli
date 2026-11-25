@@ -4788,6 +4788,74 @@
     return el;
   }
 
+  // Sidebar selection actions: use the existing input event to persist quoted drafts.
+  function appendQuotedSelection(textarea, text) {
+    const separator = textarea.value ? (textarea.value.endsWith('\n\n') ? '' : textarea.value.endsWith('\n') ? '\n' : '\n\n') : '';
+    textarea.value += separator + text.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.scrollTop = textarea.scrollHeight;
+  }
+
+  const selectionActions = document.createElement('div');
+  selectionActions.id = 'thread-selection-actions';
+  selectionActions.hidden = true;
+  selectionActions.setAttribute('role', 'group');
+  selectionActions.setAttribute('aria-label', 'Selected message text');
+  selectionActions.style.cssText = 'position:fixed;z-index:1000;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--bg);box-shadow:0 4px 16px #0003';
+  selectionActions.innerHTML = '<button type="button">Copy</button> <button type="button">Add to chat</button><span role="status"></span>';
+  document.body.appendChild(selectionActions);
+  let selectedMessage = null;
+  function hideSelectionActions() {
+    selectionActions.hidden = true;
+    selectedMessage = null;
+  }
+  selectionActions.addEventListener('pointerdown', event => event.preventDefault());
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    hideSelectionActions();
+    if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) return;
+    const range = selection.getRangeAt(0);
+    const element = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    const message = element?.closest('.user-comment, .thread-quote, .thread-take, .thread-decision');
+    const thread = message?.closest('.thread.open');
+    if (!thread || element.closest('.meta')) return;
+    // Do not quote timestamps, controls, or selections spanning multiple messages.
+    if (Array.from(message.querySelectorAll('.meta')).some(meta => range.intersectsNode(meta))) return;
+    const textarea = thread.querySelector('.followup textarea');
+    const rect = range.getBoundingClientRect();
+    selectedMessage = { text: selection.toString(), textarea, thread };
+    selectionActions.querySelector('[role="status"]').textContent = '';
+    selectionActions.children[1].disabled = reviewComplete || !textarea || textarea.disabled || !!textarea.closest('.hidden');
+    selectionActions.hidden = false;
+    selectionActions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - selectionActions.offsetWidth - 8)) + 'px';
+    selectionActions.style.top = Math.max(8, Math.min(rect.top - selectionActions.offsetHeight - 8, window.innerHeight - selectionActions.offsetHeight - 8)) + 'px';
+  });
+  selectionActions.children[0].addEventListener('click', async () => {
+    if (!selectedMessage) return;
+    try {
+      await navigator.clipboard.writeText(selectedMessage.text);
+      hideSelectionActions();
+    } catch (_) {
+      selectionActions.querySelector('[role="status"]').textContent = 'Copy failed — try again.';
+    }
+  });
+  selectionActions.children[1].addEventListener('click', () => {
+    if (!selectedMessage || reviewComplete) return;
+    const { text, textarea, thread } = selectedMessage;
+    if (!thread.isConnected || !thread.classList.contains('open') || textarea.disabled || textarea.closest('.hidden')) return hideSelectionActions();
+    hideSelectionActions();
+    window.getSelection().removeAllRanges();
+    appendQuotedSelection(textarea, text);
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!selectionActions.contains(event.target)) hideSelectionActions();
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') hideSelectionActions(); });
+  document.addEventListener('scroll', hideSelectionActions, true);
+  window.addEventListener('resize', hideSelectionActions);
+
   function renderFollowups(threadEl, threadId) {
     const list = threadEl.querySelector('.user-comment-list');
     if (!list) return;
