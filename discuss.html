@@ -6735,13 +6735,15 @@
     setEditMode(!editMode);
   });
 
+  const documentControlSelector = '.block-editor, .thread-marker, .thread-marker-stack, .section-toggle';
+
   // Capture-phase so edit-mode clicks in the document pane never reach the
   // comment dispatch below (or the per-code-line handler).
   document.addEventListener('click', (e) => {
     if (!editMode || reviewComplete) return;
     if (!activeFileIsEditable()) return; // diff/image/HTML pane: commenting works as usual
     if (!e.target.closest('#pane-left')) return; // header, threads, toasts work as usual
-    if (e.target.closest('.block-editor, .thread-marker, .thread-marker-stack, .section-toggle')) return;
+    if (e.target.closest(documentControlSelector)) return;
     e.preventDefault(); // stop link navigation as well as comment handlers
     e.stopImmediatePropagation();
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
@@ -7012,9 +7014,8 @@
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('#edit-mode-toggle')) return;
     if (e.target.closest('#inspect-toggle')) return;
-    if (e.target.closest('.block-editor')) return;
+    if (e.target.closest(documentControlSelector)) return;
     if (e.target.closest('#thread-summary-wrap')) return;
-    if (e.target.closest('.thread-marker')) return;
     if (e.target.closest('.image-pin-marker')) return;
     if (e.target.closest('.thread')) return;
     if (e.target.closest('.new-thread-editor')) return;

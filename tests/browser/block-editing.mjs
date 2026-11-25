@@ -13,7 +13,7 @@ const between = (start, end) => {
 };
 
 test('edit clicks prevent link navigation, while read-only panes keep normal clicks', () => {
-  const source = between('  // Capture-phase so edit-mode clicks', '  async function openBlockEditor');
+  const source = between('  const documentControlSelector', '  async function openBlockEditor');
   for (const editable of [true, false]) {
     let handler;
     let prevented = false;
@@ -38,7 +38,7 @@ test('edit clicks prevent link navigation, while read-only panes keep normal cli
 });
 
 test('edit mode leaves document controls clickable and samples prose typography', () => {
-  const source = between('  // Capture-phase so edit-mode clicks', '  async function openBlockEditor');
+  const source = between('  const documentControlSelector', '  async function openBlockEditor');
   let handler;
   vm.runInNewContext(source, {
     editMode: true, reviewComplete: false, activeFileIsEditable: () => true,
@@ -47,12 +47,35 @@ test('edit mode leaves document controls clickable and samples prose typography'
   });
   for (const control of ['.thread-marker', '.thread-marker-stack', '.section-toggle']) {
     handler({
-      target: { closest: selector => selector === '#pane-left' || selector.split(', ').includes(control) ? {} : null },
+      target: { closest: selector => selector === '#pane-left' || selector.split(',').some(part => part.trim() === control) ? {} : null },
       preventDefault: () => assert.fail('control default blocked'),
       stopImmediatePropagation: () => assert.fail('control propagation blocked'),
     });
   }
-  assert.ok(page.includes("const sample = targetEl.querySelector('pre') || targetEl;"));
+  const typography = between('    const sample =', '\n    targetEl.style.display');
+  for (const hasPre of [true, false]) {
+    const prose = { fontFamily: 'serif' };
+    const pre = { fontFamily: 'monospace' };
+    const inlineCode = { fontFamily: 'inline-monospace' };
+    const textarea = { style: {} };
+    const targetEl = { querySelector: selector => selector === 'pre' ? (hasPre ? pre : null) : inlineCode };
+    vm.runInNewContext(typography, {
+      targetEl, textarea, getComputedStyle: element => element === targetEl ? prose : element,
+    });
+    assert.equal(textarea.style.fontFamily, hasPre ? 'monospace' : 'serif');
+  }
+});
+
+test('bubble dispatcher ignores marker-stack gaps and section controls', () => {
+  const declarations = between('  const documentControlSelector', '  // Capture-phase');
+  const guards = between('  // ---------- Click dispatch ----------', '\n    const sel = window.getSelection();');
+  let handler;
+  vm.runInNewContext(declarations + guards + '\n throw new Error("comment dispatch reached");\n});', {
+    document: { addEventListener: (_, fn) => { handler = fn; } },
+  });
+  for (const control of ['.thread-marker-stack', '.section-toggle']) {
+    handler({ target: { closest: selector => selector.split(',').some(part => part.trim() === control) ? {} : null } });
+  }
 });
 
 test('unchanged CRLF textarea content closes without a PATCH', async () => {
