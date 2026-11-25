@@ -3009,7 +3009,7 @@
 
     const source = new EventSource('/api/events');
     eventSource = source;
-    source.onopen = () => { reconcilePrSessionFromServer(); refreshAgentStatuses(); };
+    source.onopen = () => { reconcilePrSessionFromServer(); refreshAgentStatuses(); loadProposals(); };
     SSE_EVENT_KINDS.forEach(kind => {
       source.addEventListener(kind, (event) => {
         const payload = parseEventPayload(kind, event);
@@ -3091,6 +3091,7 @@
         applyProposalGone(payload);
         break;
       case 'proposal.hold_changed':
+        proposalRevision++;
         setHoldUi(!!payload.holdAgentEdits);
         break;
       case 'agent.status':
@@ -3126,6 +3127,7 @@
   // until a take lands, fading to "No reply yet" after AGENT_REPLY_WAIT_MS.
   // Longer jobs come from POST /api/agent/status and show in the header.
   const AGENT_REPLY_WAIT_MS = 5 * 60 * 1000;
+  const AGENT_STATUS_TTL_MS = 10 * 60 * 1000;
   let agentStatuses = [];
   let agentActivityTimer = null;
 
@@ -3172,6 +3174,9 @@
     if (!el) return;
     const state = loadState();
     const now = Date.now();
+    const expired = agentStatuses.filter(status => !(now - Date.parse(status.startedAt) < AGENT_STATUS_TTL_MS));
+    agentStatuses = agentStatuses.filter(status => now - Date.parse(status.startedAt) < AGENT_STATUS_TTL_MS);
+    new Set(expired.map(status => status.threadId).filter(Boolean)).forEach(refreshThreadFromState);
     const chips = agentStatuses.map(status => status.label);
     const waiting = (state.userThreads || []).filter(thread => {
       const id = String(thread.id);
@@ -7396,6 +7401,8 @@
   const hunkChoice = new Map(); // hunk id -> false when skipped
   let proposalReview = false;
   let proposalBusy = false;
+  let proposalRevision = 0;
+  let proposalLoadId = 0;
 
   function activeProposal() {
     return proposalsByFile.get(String(activeFileId)) || null;
@@ -7409,13 +7416,19 @@
   }
 
   async function loadProposals() {
+    const loadId = ++proposalLoadId;
+    const revision = proposalRevision;
     try {
       const response = await fetch('/api/proposals', { headers: { Accept: 'application/json' } });
       if (!response.ok) return;
       const data = await response.json();
+      if (loadId !== proposalLoadId) return;
+      if (revision !== proposalRevision) return loadProposals();
+      const previousId = activeProposal()?.proposalId;
       setHoldUi(!!data.holdAgentEdits);
       proposalsByFile.clear();
       (data.proposals || []).forEach(p => proposalsByFile.set(String(p.fileId), p));
+      if (previousId !== activeProposal()?.proposalId) resetProposalReview();
       renderProposalUi();
     } catch (error) {
       console.warn('Failed to load proposals:', error);
@@ -7424,6 +7437,7 @@
 
   function applyProposalCreated(p) {
     if (!p || !Array.isArray(p.hunks)) return;
+    proposalRevision++;
     const fileId = String(p.fileId);
     const previous = proposalsByFile.get(fileId);
     proposalsByFile.set(fileId, p);
@@ -7435,6 +7449,7 @@
   }
 
   function applyProposalGone(payload) {
+    proposalRevision++;
     const fileId = String(payload.fileId);
     const current = proposalsByFile.get(fileId);
     if (!current || current.proposalId !== payload.proposalId) return;

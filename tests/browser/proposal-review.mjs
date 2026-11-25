@@ -29,6 +29,50 @@ test('switching files clears proposal choices before rendering the new file', ()
   assert.equal(context.activeFileId, 'b');
 });
 
+test('proposal resync retries a snapshot overtaken by an SSE event', async () => {
+  const map = new Map();
+  let fetches = 0;
+  let resets = 0;
+  const context = vm.createContext({
+    proposalLoadId: 0, proposalRevision: 0, proposalsByFile: map,
+    activeProposal: () => map.get('a'), resetProposalReview: () => resets++,
+    setHoldUi() {}, renderProposalUi() {}, console,
+    fetch: async () => ({ ok: true, json: async () => {
+      fetches++;
+      if (fetches === 1) context.proposalRevision++;
+      return { proposals: [{ fileId: 'a', proposalId: fetches === 1 ? 'old' : 'new' }] };
+    } }),
+  });
+  vm.runInContext(extract('  async function loadProposals()', '  function applyProposalCreated('), context);
+  await vm.runInContext('loadProposals()', context);
+  assert.equal(fetches, 2);
+  assert.equal(map.get('a').proposalId, 'new');
+  assert.equal(resets, 1);
+  assert.match(page, /source\.onopen = .*loadProposals\(\)/);
+});
+
+test('agent status expires on the activity timer without another server event', () => {
+  const refreshed = [];
+  const el = { replaceChildren() {} };
+  let timer;
+  const now = Date.now();
+  const context = vm.createContext({
+    agentStatuses: [{ label: 'Working', threadId: 't1', startedAt: new Date(now - 600001).toISOString() }],
+    AGENT_STATUS_TTL_MS: 600000, AGENT_REPLY_WAIT_MS: 300000,
+    agentActivityTimer: null, reviewComplete: false,
+    loadState: () => ({ userThreads: [] }),
+    refreshThreadFromState: id => refreshed.push(id),
+    document: { getElementById: () => el, querySelectorAll: () => [], querySelector: () => null },
+    clearTimeout() {}, setTimeout: fn => { timer = fn; },
+  });
+  vm.runInContext(extract('  function renderAgentActivity()', '  function applyElementDetachment('), context);
+  vm.runInContext('renderAgentActivity()', context);
+  assert.equal(context.agentStatuses.length, 0);
+  assert.deepEqual(refreshed, ['t1']);
+  assert.equal(el.hidden, true);
+  assert.equal(timer, undefined, 'expired status must not keep scheduling activity ticks');
+});
+
 test('document width resolves sidebar variables on body rather than root', () => {
   const root = extract('  :root {', '  html[data-theme');
   assert.doesNotMatch(root, /--left-w:/);
