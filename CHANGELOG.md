@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Commenting is the default HTML prototype mode** — selecting an element no longer drops the review back into pass-through mode, so consecutive comments need no re-arming. The header toggle is now **Interact** (still `I`): press it when you want clicks to drive the prototype — walk a flow, flip a toggle — and press it again to return to commenting. A banner shows while Interact mode is on; commenting mode is unmarked because it is the default.
+
 - **Compact table presentation** — tighter spacing, header styling, alignment-preserving defaults, horizontal scrolling and an overflow fade. Existing server-stamped whole-table and row anchors are preserved, with gutter markers repositioned on resize.
 
 ### Fixed
