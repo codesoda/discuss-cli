@@ -4003,6 +4003,13 @@ async fn patch_api_block_persists_to_disk_atomically() {
     }));
     wait_for_server(addr).await;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o600))
+            .expect("restrict source permissions");
+    }
+
     // Two rapid edits: the debounce coalesces them and the file ends at the
     // second edit's content.
     let body = json!({ "markdown": "Edited once.", "sourceVersion": 0 });
@@ -4025,6 +4032,15 @@ async fn patch_api_block_persists_to_disk_atomically() {
             "file was not updated in time: {on_disk}"
         );
         sleep(Duration::from_millis(50)).await;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&doc_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "atomic saves must preserve restrictive source permissions"
+        );
     }
     let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
         .expect("read tempdir")

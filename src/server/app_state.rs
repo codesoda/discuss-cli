@@ -353,12 +353,46 @@ impl AppState {
 
         // Atomic replace: temp file in the same directory, then rename, so a
         // crash mid-write can never truncate the document.
-        let file_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "source".to_string());
-        let temp_path =
-            path.with_file_name(format!(".{file_name}.{}.discuss-tmp", std::process::id()));
+        // Create exclusively with restrictive permissions; a predictable path
+        // could collide with another writer (or follow an existing symlink).
+        let temp = match tempfile::Builder::new()
+            .prefix(".discuss-tmp-")
+            .tempfile_in(path.parent().unwrap_or_else(|| Path::new(".")))
+        {
+            Ok(temp) => temp.into_temp_path(),
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to create temporary source: {error}"),
+                    &path,
+                );
+                return;
+            }
+        };
+        let temp_path: &Path = temp.as_ref();
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) => {
+                if let Err(error) =
+                    tokio::fs::set_permissions(temp_path, metadata.permissions()).await
+                {
+                    self.emit_save_failed(
+                        "io_error",
+                        format!("failed to preserve source permissions: {error}"),
+                        &path,
+                    );
+                    return;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to read source permissions: {error}"),
+                    &path,
+                );
+                return;
+            }
+        }
         if let Err(error) = tokio::fs::write(&temp_path, current.as_bytes()).await {
             self.emit_save_failed(
                 "io_error",
