@@ -3090,7 +3090,7 @@
 
   function blockCompletedInteraction(event) {
     if (!reviewComplete) return;
-    if (event.target.closest && event.target.closest('#done-banner')) return;
+    if (event.target.closest && event.target.closest('#done-banner, #thread-selection-actions')) return;
     event.preventDefault();
     event.stopPropagation();
   }
@@ -4807,15 +4807,23 @@
   selectionActions.innerHTML = '<button type="button">Copy</button> <button type="button">Add to chat</button><span role="status"></span>';
   document.body.appendChild(selectionActions);
   let selectedMessage = null;
+  let selectionActionsTimer;
+  function canQuoteInto(thread, textarea) {
+    return !reviewComplete && thread.isConnected && thread.classList.contains('open') && textarea && !textarea.disabled && !textarea.closest('.hidden');
+  }
   function hideSelectionActions() {
+    clearTimeout(selectionActionsTimer);
     selectionActions.hidden = true;
     selectedMessage = null;
   }
   selectionActions.addEventListener('pointerdown', event => event.preventDefault());
   document.addEventListener('selectionchange', () => {
-    const selection = window.getSelection();
     hideSelectionActions();
-    if (!selection || selection.isCollapsed || !selection.rangeCount || !selection.toString().trim()) return;
+    selectionActionsTimer = setTimeout(updateSelectionActions, 80);
+  });
+  function updateSelectionActions() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
     const range = selection.getRangeAt(0);
     const element = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
     const message = element?.closest('.user-comment, .thread-quote, .thread-take, .thread-decision');
@@ -4823,19 +4831,22 @@
     if (!thread || element.closest('.meta')) return;
     // Do not quote timestamps, controls, or selections spanning multiple messages.
     if (Array.from(message.querySelectorAll('.meta')).some(meta => range.intersectsNode(meta))) return;
+    const text = selection.toString();
+    if (!text.trim()) return;
     const textarea = thread.querySelector('.followup textarea');
     const rect = range.getBoundingClientRect();
-    selectedMessage = { text: selection.toString(), textarea, thread };
+    selectedMessage = { text, textarea, thread };
     selectionActions.querySelector('[role="status"]').textContent = '';
-    selectionActions.children[1].disabled = reviewComplete || !textarea || textarea.disabled || !!textarea.closest('.hidden');
+    selectionActions.children[0].disabled = false;
+    selectionActions.children[1].disabled = !canQuoteInto(thread, textarea);
     selectionActions.hidden = false;
     selectionActions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - selectionActions.offsetWidth - 8)) + 'px';
     selectionActions.style.top = Math.max(8, Math.min(rect.top - selectionActions.offsetHeight - 8, window.innerHeight - selectionActions.offsetHeight - 8)) + 'px';
-  });
+  }
   selectionActions.children[0].addEventListener('click', async () => {
     if (!selectedMessage) return;
     try {
-      await navigator.clipboard.writeText(selectedMessage.text);
+      await copyTextToClipboard(selectedMessage.text);
       hideSelectionActions();
     } catch (_) {
       selectionActions.querySelector('[role="status"]').textContent = 'Copy failed — try again.';
@@ -4844,7 +4855,7 @@
   selectionActions.children[1].addEventListener('click', () => {
     if (!selectedMessage || reviewComplete) return;
     const { text, textarea, thread } = selectedMessage;
-    if (!thread.isConnected || !thread.classList.contains('open') || textarea.disabled || textarea.closest('.hidden')) return hideSelectionActions();
+    if (!canQuoteInto(thread, textarea)) return hideSelectionActions();
     hideSelectionActions();
     window.getSelection().removeAllRanges();
     appendQuotedSelection(textarea, text);
@@ -6495,6 +6506,7 @@
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
+    if (e.target.closest('#thread-selection-actions')) return;
     if (e.target.closest('#toast-host')) return;
     if (e.target.closest('.diff-file-actions')) return;
 

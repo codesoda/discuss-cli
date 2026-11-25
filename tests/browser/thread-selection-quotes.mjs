@@ -1,10 +1,8 @@
 // Run with: node --test tests/browser/thread-selection-quotes.mjs
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { quoteFunction as source, selectionSource } from './fixtures/thread-selection-source.mjs';
 import test from 'node:test';
 import vm from 'node:vm';
-const html = fs.readFileSync(new URL('../../discuss.html', import.meta.url), 'utf8');
-const source = html.slice(html.indexOf('  function appendQuotedSelection('), html.indexOf('  const selectionActions ='));
 const context = { Event };
 vm.createContext(context);
 vm.runInContext(source, context);
@@ -29,10 +27,13 @@ test('popup selects user/agent messages, copies raw text, quotes and dismisses',
   const selection = { isCollapsed: false, rangeCount: 1, toString: () => 'selected\ntext',
     getRangeAt: () => ({ commonAncestorContainer: element, getBoundingClientRect: () => ({ left: 100, top: 100 }) }),
     removeAllRanges() { cleared = true; } };
-  const sandbox = { Event, reviewComplete: false, navigator: { clipboard: { async writeText(text) { copied = text; } } },
+  let pending;
+  const sandbox = { Event, reviewComplete: false, setTimeout(fn) { pending = fn; }, clearTimeout() { pending = null; }, async copyTextToClipboard(text) { copied = text; },
     document: { createElement: () => popup, body: { appendChild() {} }, addEventListener(type, fn) { listeners[type] = fn; } },
     window: { getSelection: () => selection, innerWidth: 800, innerHeight: 600, addEventListener() {} } };
-  vm.runInNewContext(html.slice(html.indexOf('  function appendQuotedSelection('), html.indexOf('  function renderFollowups(')), sandbox);
+  vm.runInNewContext(selectionSource, sandbox);
+  const changed = listeners.selectionchange;
+  listeners.selectionchange = () => { changed(); pending?.(); };
   listeners.selectionchange();
   assert.equal(popup.hidden, false);
   await buttons[0].click();
