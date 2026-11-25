@@ -3679,6 +3679,35 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
 }
 
 #[tokio::test]
+async fn patch_api_block_orphans_ambiguous_carry_after_markdown_restructuring() {
+    for (source, replacement) in [
+        ("First.\n\nSecond.\n", "```rust\nfirst"),
+        (
+            "Refs [^a] [^b].\n\n[^a]: Alpha\n\n[^b]: Beta\n",
+            "Refs [^b] [^a].",
+        ),
+    ] {
+        let addr = free_loopback_addr();
+        let app_state = AppState::for_process().with_markdown_source(source);
+        let mut anchored = thread("u-untouched", 2);
+        anchored.anchor_end = 2;
+        app_state.state.write().unwrap().add_thread(anchored);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(addr, app_state, async move {
+            let _ = shutdown_rx.await;
+        }));
+        wait_for_server(addr).await;
+        let body = json!({ "markdown": replacement, "sourceVersion": 0 });
+        let response = patch_json_path(addr, "/api/blocks/1", &body.to_string()).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let state = response_json(&get_path(addr, "/api/state").await);
+        assert_eq!(state["threads"][0]["orphaned"], true, "{source}");
+        shutdown_tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn patch_api_block_preserves_code_row_selection_when_anchor_moves() {
     let addr = free_loopback_addr();
     let app_state =
