@@ -4102,7 +4102,7 @@ async fn patch_api_block_persists_to_disk_atomically() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o600))
+        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o640))
             .expect("restrict source permissions");
     }
 
@@ -4134,8 +4134,8 @@ async fn patch_api_block_persists_to_disk_atomically() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             fs::metadata(&doc_path).unwrap().permissions().mode() & 0o777,
-            0o600,
-            "atomic saves must preserve restrictive source permissions"
+            0o640,
+            "atomic saves must preserve the source mode, including group-read permission"
         );
     }
     let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
