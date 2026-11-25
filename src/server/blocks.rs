@@ -39,7 +39,13 @@ pub(super) async fn get_api_file_blocks(
     let blocks = match file.kind {
         FileKind::Markdown => markdown_blocks(&file.content),
         FileKind::Diff => {
-            markdown_blocks(&diff::diff_content_to_markdown(&file.path, &file.content))
+            let mut blocks =
+                markdown_blocks(&diff::diff_content_to_markdown(&file.path, &file.content));
+            for block in &mut blocks {
+                block.line_start = None;
+                block.line_end = None;
+            }
+            blocks
         }
         FileKind::Image | FileKind::Html => {
             return api_error_response(

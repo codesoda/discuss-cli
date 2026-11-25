@@ -3131,6 +3131,10 @@ async fn get_api_file_blocks_maps_diff_files_through_synthesized_markdown() {
     // hunk — the same blocks the browser renders and indexes.
     assert_eq!(body["blocks"][0]["index"], 1);
     assert_eq!(body["blocks"][0]["snippet"], "foo.rs");
+    for block in body["blocks"].as_array().expect("blocks") {
+        assert!(block.get("lineStart").is_none());
+        assert!(block.get("lineEnd").is_none());
+    }
     assert_eq!(body["blocks"][1]["index"], 2);
     assert!(
         body["blocks"][1]["snippet"]
