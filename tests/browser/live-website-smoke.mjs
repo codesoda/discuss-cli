@@ -164,7 +164,9 @@ async function run() {
     if (chrome.exitCode != null) throw new Error(`Chrome exited ${chrome.exitCode}: ${chromeErrors}`);
     try { return (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).ok; }
     catch (_) { return false; }
-  }, 'Chrome DevTools HTTP endpoint');
+  }, 'Chrome DevTools HTTP endpoint', 300).catch(error => {
+    throw new Error(`${error.message}\nChrome stderr:\n${chromeErrors}`, { cause: error });
+  });
   const cdp = await connectCdp(cdpPort);
   cdpSocket = cdp.socket;
   await cdp.send('Runtime.enable');
