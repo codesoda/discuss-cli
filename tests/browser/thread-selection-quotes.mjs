@@ -12,8 +12,8 @@ test('popup selects user/agent messages, copies raw text, quotes and dismisses',
   const buttons = [0, 1].map(() => ({ addEventListener(type, fn) { this[type] = fn; } }));
   const status = {};
   const popup = { style: {}, children: buttons, offsetWidth: 180, offsetHeight: 40,
-    setAttribute() {}, addEventListener() {}, querySelector() { return status; }, contains() { return false; } };
-  const textarea = { value: 'Draft', dispatchEvent() {}, focus() {}, setSelectionRange() {}, closest() { return null; } };
+    setAttribute() {}, addEventListener() {}, querySelector(selector) { return selector.includes('"copy"') ? buttons[0] : selector.includes('"quote"') ? buttons[1] : status; }, contains() { return false; } };
+  const textarea = { isConnected: true, value: 'Draft', dispatchEvent() {}, focus() {}, setSelectionRange() {}, closest() { return null; } };
   const thread = { isConnected: true, classList: { contains: () => true }, querySelector: () => textarea };
   const message = { closest: () => thread, querySelectorAll: () => [] };
   const element = { nodeType: 1, closest(selector) {
@@ -25,10 +25,10 @@ test('popup selects user/agent messages, copies raw text, quotes and dismisses',
   let cleared = false;
   let copied;
   const selection = { isCollapsed: false, rangeCount: 1, toString: () => 'selected\ntext',
-    getRangeAt: () => ({ commonAncestorContainer: element, getBoundingClientRect: () => ({ left: 100, top: 100 }) }),
+    getRangeAt: () => ({ commonAncestorContainer: element, cloneRange: () => ({}), getBoundingClientRect: () => ({ left: 100, top: 100 }) }),
     removeAllRanges() { cleared = true; } };
   let pending;
-  const sandbox = { Event, reviewComplete: false, setTimeout(fn) { pending = fn; }, clearTimeout() { pending = null; }, async copyTextToClipboard(text) { copied = text; },
+  const sandbox = { Event, navigator: { clipboard: { writeText() {} } }, reviewComplete: false, setTimeout(fn) { pending = fn; }, clearTimeout() { pending = null; }, async copyTextToClipboard(text) { copied = text; },
     document: { createElement: () => popup, body: { appendChild() {} }, addEventListener(type, fn) { listeners[type] = fn; } },
     window: { getSelection: () => selection, innerWidth: 800, innerHeight: 600, addEventListener() {} } };
   vm.runInNewContext(selectionSource, sandbox);
@@ -44,7 +44,7 @@ test('popup selects user/agent messages, copies raw text, quotes and dismisses',
   assert.equal(textarea.value, 'Draft\n\n> selected\n> text\n\n');
   assert.equal(cleared, true);
   listeners.selectionchange();
-  listeners.keydown({ key: 'Escape' });
+  listeners.keydown({ key: 'Escape', preventDefault() {}, stopImmediatePropagation() {} });
   assert.equal(popup.hidden, true);
   selection.isCollapsed = true;
   listeners.selectionchange();

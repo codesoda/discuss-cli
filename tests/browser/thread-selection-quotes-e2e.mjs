@@ -54,6 +54,30 @@ try {
   await select('[data-kind="reply"]');
   await page.evaluate(() => getSelection().removeAllRanges());
   await menu.waitFor({ state: 'hidden' });
+  // A range ending exactly at metadata start must remain quotable.
+  await page.locator('[data-kind="reply"]').evaluate(el => {
+    const range = document.createRange(); range.setStart(el.firstChild, 0); range.setEnd(el.querySelector('.meta'), 0);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await menu.waitFor({ state: 'visible' });
+  // A later Escape listener must not collapse the thread.
+  await page.evaluate(() => document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAllThreads(); }));
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.thread').evaluate(el => el.classList.contains('open')), true);
+  // Late clipboard completion must not dismiss a newer selection.
+  await page.evaluate(() => { window.originalCopy = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = () => new Promise(resolve => window.finishCopy = resolve); });
+  await select('[data-kind="reply"]');
+  await menu.getByRole('button', { name: 'Copy', exact: true }).click();
+  await select('[data-kind="take"]');
+  await page.evaluate(() => finishCopy());
+  await page.waitForTimeout(100);
+  assert.equal(await menu.isVisible(), true);
+  await page.evaluate(() => navigator.clipboard.writeText = window.originalCopy);
+  // Replaced/detached reply controls cannot receive a stale quote.
+  await page.evaluate(() => { const ta = document.querySelector('textarea'); ta.replaceWith(ta.cloneNode()); });
+  const before = await page.locator('textarea').inputValue();
+  await menu.getByRole('button', { name: 'Add to chat' }).click();
+  assert.equal(await page.locator('textarea').inputValue(), before);
   await page.evaluate(() => { reviewComplete = true; document.querySelectorAll('button, textarea').forEach(el => el.disabled = true); });
   await select('[data-kind="reply"]');
   assert.equal(await menu.getByRole('button', { name: 'Add to chat' }).isDisabled(), true);
@@ -61,6 +85,15 @@ try {
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'User first\nUser second');
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true }));
   await select('[data-kind="take"]');
+  await menu.getByRole('button', { name: 'Copy', exact: true }).click();
+  await menu.waitFor({ state: 'hidden' });
+  await page.evaluate(() => { window.originalExec = document.execCommand.bind(document); document.execCommand = () => false; });
+  await select('[data-kind="reply"]');
+  await menu.getByRole('button', { name: 'Copy', exact: true }).click();
+  await page.waitForTimeout(150);
+  assert.equal(await menu.isVisible(), true);
+  assert.match(await menu.getByRole('status').textContent(), /Copy failed/);
+  await page.evaluate(() => document.execCommand = window.originalExec);
   await menu.getByRole('button', { name: 'Copy', exact: true }).click();
   await menu.waitFor({ state: 'hidden' });
   assert.deepEqual(errors, []);
