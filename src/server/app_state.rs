@@ -86,6 +86,7 @@ pub struct AppState {
     pub(super) history_dir: Arc<PathBuf>,
     pub(super) prefs_path: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
+    pub(super) transcription_command: Option<Vec<String>>,
     done_started: Arc<AtomicBool>,
     finalization: Arc<Mutex<Option<FinalizationClaim>>>,
     completion_scope: Arc<String>,
@@ -125,6 +126,7 @@ impl AppState {
             history_dir: Arc::new(history::default_history_dir()),
             prefs_path: Arc::new(prefs::default_prefs_path()),
             no_save: Arc::new(AtomicBool::new(false)),
+            transcription_command: None,
             done_started: Arc::new(AtomicBool::new(false)),
             finalization: Arc::new(Mutex::new(None)),
             completion_scope: Arc::new("session".to_string()),
@@ -477,6 +479,19 @@ impl AppState {
 
     pub(super) fn set_hold_agent_edits(&self, hold: bool) {
         self.hold_agent_edits.store(hold, Ordering::Relaxed);
+    }
+
+    pub(super) fn voice_notes_enabled(&self) -> bool {
+        self.transcription_command.as_ref().is_some_and(|command| {
+            command
+                .first()
+                .is_some_and(|program| !program.trim().is_empty())
+        })
+    }
+
+    pub fn with_transcription_command(mut self, command: Option<Vec<String>>) -> Self {
+        self.transcription_command = command;
+        self
     }
 
     pub fn with_no_save(self, no_save: bool) -> Self {

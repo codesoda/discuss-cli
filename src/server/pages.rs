@@ -37,7 +37,10 @@ pub(super) async fn get_root(AxumState(app_state): AxumState<AppState>) -> Respo
 
 fn render_root_page(app_state: &AppState) -> std::result::Result<String, String> {
     let snapshot = app_state.snapshot_with_files()?;
-    let initial_state_json = serde_json::to_string(&snapshot)
+    let mut seed = serde_json::to_value(&snapshot)
+        .map_err(|error| format!("failed to serialize initial state: {error}"))?;
+    seed["voiceNotesEnabled"] = serde_json::json!(app_state.voice_notes_enabled());
+    let initial_state_json = serde_json::to_string(&seed)
         .map_err(|error| format!("failed to serialize initial state: {error}"))?;
     let source = app_state.current_source()?;
 

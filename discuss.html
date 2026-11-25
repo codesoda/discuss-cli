@@ -2534,7 +2534,7 @@
     <div id="divider"></div>
     <div class="pane-right" id="pane-right">
       <div class="empty-state" id="empty-state">
-        Click on an element to comment, click-and-hold to talk.
+        Click on an element to comment.
       </div>
       <div id="threads-host"></div>
     </div>
@@ -5829,7 +5829,9 @@
     if (!anyOpen && isImageFile()) {
       emptyState.innerHTML = '<b>Click the image to drop a pin</b>, then type your comment.<br>Click a numbered pin to reopen its thread.';
     } else if (!anyOpen) {
-      emptyState.textContent = 'Click on an element to comment, click-and-hold to talk.';
+      emptyState.textContent = voiceSupported()
+        ? 'Click on an element to comment, click-and-hold to talk.'
+        : 'Click on an element to comment.';
     }
   }
 
@@ -7555,7 +7557,7 @@
   // ---------- Voice notes: hold on a block, talk, let go ----------
   // Hold still on a block for VOICE_HOLD_MS (or hover it and hold V) to
   // record. Releasing uploads the clip and creates a thread whose
-  // thread.created event carries audioPath; the agent transcribes it.
+  // thread.created preserves audioPath for native audio input or agent transcription.
   const VOICE_HOLD_MS = 250;
   const VOICE_MOVE_SLOP_PX = 4;
   const VOICE_MIN_MS = 400;
@@ -7573,7 +7575,8 @@
   };
 
   function voiceSupported() {
-    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+    return window.__DISCUSS_INITIAL_STATE__?.voiceNotesEnabled === true
+      && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   }
   function voiceAnchorFor(target) {
     if (reviewComplete) return null;
@@ -7709,7 +7712,7 @@
     if (!uploadResponse.ok) throw new Error(`POST /api/audio returned ${uploadResponse.status}`);
     const upload = await uploadResponse.json();
     const seconds = Math.max(1, Math.round(durationMs / 1000));
-    const text = `🎤 Voice note (${seconds}s)`;
+    const text = upload.transcript || `🎤 Voice note (${seconds}s)`;
     const snippet = snippetOfRange(idx, idx);
     const created = await apiJson('/api/threads', {
       body: {

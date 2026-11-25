@@ -1,6 +1,6 @@
 //! Voice notes: the browser uploads a recorded clip, discuss saves it to a
 //! per-process temp folder and hands the path to the agent on
-//! `thread.created`. discuss never transcribes; the agent does.
+//! `thread.created`. An optional engine-independent command supplies transcript text.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -58,9 +58,21 @@ pub(super) fn audio_path_for_id(audio_id: &str) -> Option<PathBuf> {
 pub(super) struct UploadAudioResponse {
     audio_id: String,
     audio_path: String,
+    transcript: Option<String>,
 }
 
-pub(super) async fn post_api_audio(headers: HeaderMap, body: Bytes) -> Response {
+pub(super) async fn post_api_audio(
+    axum::extract::State(state): axum::extract::State<super::AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !state.voice_notes_enabled() {
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "voice_notes_disabled",
+            "voice notes require a configured transcription command",
+        );
+    }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -104,11 +116,28 @@ pub(super) async fn post_api_audio(headers: HeaderMap, body: Bytes) -> Response 
         );
     }
 
+    let transcript = if let Some(command) = state
+        .transcription_command
+        .as_ref()
+        .filter(|c| !c.is_empty())
+    {
+        match transcribe(command, &path).await {
+            Ok(text) => Some(text),
+            Err(error) => {
+                tracing::warn!(%error, "voice transcription failed; preserving audio for agent");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     (
         StatusCode::CREATED,
         Json(UploadAudioResponse {
             audio_id,
             audio_path: path.display().to_string(),
+            transcript,
         }),
     )
         .into_response()
@@ -133,9 +162,65 @@ pub(super) async fn get_api_audio(Path(audio_id): Path<String>) -> Response {
     }
 }
 
+async fn transcribe(command: &[String], path: &std::path::Path) -> Result<String, String> {
+    let Some(program) = command.first().filter(|value| !value.is_empty()) else {
+        return Err("empty transcription command".into());
+    };
+    let args: Vec<_> = command[1..]
+        .iter()
+        .map(|arg| arg.replace("{filepath}", &path.to_string_lossy()))
+        .collect();
+    let mut child = tokio::process::Command::new(program);
+    child.args(args).kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(120), child.output())
+        .await
+        .map_err(|_| "transcription timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("transcription exited with {}", output.status));
+    }
+    let text = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+    if text.trim().is_empty() {
+        return Err("empty transcript".into());
+    }
+    Ok(text.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unconfigured_voice_notes_reject_uploads() {
+        for command in [None, Some(vec![]), Some(vec!["  ".into()])] {
+            let state = super::super::AppState::for_process().with_transcription_command(command);
+            assert!(!state.voice_notes_enabled());
+            let response = post_api_audio(
+                axum::extract::State(state),
+                HeaderMap::new(),
+                Bytes::from_static(b"audio"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let state = super::super::AppState::for_process()
+            .with_transcription_command(Some(vec!["transcribe".into(), "{filepath}".into()]));
+        assert!(state.voice_notes_enabled());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transcription_preserves_path_arguments_and_checks_output() {
+        let path = std::path::Path::new("/tmp/a 'quoted' ; clip.webm");
+        let command = vec!["printf".into(), "%s".into(), "{filepath}".into()];
+        assert_eq!(
+            transcribe(&command, path).await.unwrap(),
+            path.to_str().unwrap()
+        );
+        assert!(transcribe(&[], path).await.is_err());
+        assert!(transcribe(&["false".into()], path).await.is_err());
+        assert!(transcribe(&["true".into()], path).await.is_err());
+    }
 
     #[test]
     fn rejects_malformed_audio_ids() {
