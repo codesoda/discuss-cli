@@ -113,6 +113,7 @@
     --ink: #1a1a1a;
     --muted: #666;
     --accent: #0b5fff;
+    --link: #0b5fff;
     --accent-soft: rgba(11, 95, 255, 0.10);
     --accent-hover: rgba(11, 95, 255, 0.05);
     --accent-dashed: rgba(11, 95, 255, 0.35);
@@ -178,6 +179,7 @@
     --ink: #e8e8e6;
     --muted: #a8a8a4;
     --accent: #5a9bff;
+    --link: #7cb0ff;
     --accent-soft: rgba(90, 155, 255, 0.18);
     --accent-hover: rgba(90, 155, 255, 0.10);
     --accent-dashed: rgba(90, 155, 255, 0.45);
@@ -1034,7 +1036,37 @@
     margin: 10px 0;
   }
   #doc-content .pre-wrap pre { margin: 0; }
-  #doc-content .table-wrap { position: relative; }
+  #doc-content a, #doc-content a:visited { color: var(--link); }
+  #doc-content a { text-underline-offset: 2px; }
+  /* Keep existing table/row anchors and their markers outside the scroll clip. */
+  #doc-content .table-wrap { position: relative; margin: 10px 0; }
+  #doc-content .table-scroll { overflow-x: auto; }
+  #doc-content .table-wrap.can-scroll-right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--card));
+  }
+  #doc-content table { border-collapse: collapse; max-width: 100%; font-size: 13px; line-height: 1.45; }
+  #doc-content th, #doc-content td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: break-word;
+  }
+  #doc-content th:not([align]) { text-align: left; }
+  #doc-content thead th { background: var(--pre-bg); border-bottom: 1px solid var(--line-strong); font-weight: 600; }
+  #doc-content tbody tr:last-child > td { border-bottom: none; }
+  #doc-content tr[data-anchor-idx]:hover,
+  #doc-content tr[data-anchor-idx].focused,
+  #doc-content tr[data-anchor-idx].in-range,
+  #doc-content tr[data-anchor-idx].thread-active { outline: none; box-shadow: none; }
+  #doc-content thead tr[data-anchor-idx]:is(:hover, .focused, .in-range, .has-thread, .thread-active) > th { background-color: inherit; }
+  #doc-content tr[data-anchor-idx]:is(.focused, .thread-active) > :first-child { box-shadow: inset 2px 0 0 var(--accent); }
   #doc-content pre {
     background: var(--pre-bg);
     padding: 10px 12px;
@@ -5521,7 +5553,43 @@
     return stack;
   }
 
+  function updateTablePresentation(wrap) {
+    const scroll = wrap.querySelector(':scope > .table-scroll');
+    if (!scroll) return;
+    wrap.classList.toggle('can-scroll-right', scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft > 1);
+    wrap.querySelectorAll(':scope > .thread-marker-stack[data-row-anchor-idx]').forEach(stack => {
+      const row = wrap.querySelector(`tr[data-anchor-idx="${stack.getAttribute('data-row-anchor-idx')}"]`);
+      if (row) stack.style.top = (row.getBoundingClientRect().top - wrap.getBoundingClientRect().top + 1) + 'px';
+    });
+  }
+  const tablePresentationObserver = new ResizeObserver(entries => {
+    entries.forEach(entry => {
+      const wrap = entry.target.closest('.table-wrap');
+      if (wrap) updateTablePresentation(wrap);
+    });
+  });
+  function prepareTablePresentation() {
+    // Disconnect old file DOM on every render; never assign or renumber anchors.
+    tablePresentationObserver.disconnect();
+    document.querySelectorAll('#doc-content .table-wrap').forEach(wrap => {
+      const table = wrap.querySelector(':scope > table');
+      if (table) {
+        const scroll = document.createElement('div');
+        scroll.className = 'table-scroll';
+        table.before(scroll);
+        scroll.appendChild(table);
+        scroll.addEventListener('scroll', () => updateTablePresentation(wrap), { passive: true });
+      }
+      const scroll = wrap.querySelector(':scope > .table-scroll');
+      if (!scroll) return;
+      tablePresentationObserver.observe(scroll);
+      tablePresentationObserver.observe(scroll.querySelector('table'));
+      updateTablePresentation(wrap);
+    });
+  }
+
   function renderMarkers() {
+    prepareTablePresentation();
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
     document.querySelectorAll('[data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
