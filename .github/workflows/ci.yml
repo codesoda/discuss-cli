@@ -50,6 +50,10 @@ jobs:
         with:
           node-version: 22
 
+      - name: browser helper regressions
+        if: runner.os == 'Linux'
+        run: node --test tests/browser/block-editing.mjs tests/browser/prefs-helper.mjs tests/browser/thread-selection-quotes.mjs
+
       - name: live website browser e2e
         if: runner.os == 'Linux'
         run: node tests/browser/live-website-smoke.mjs
