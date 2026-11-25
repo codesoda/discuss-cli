@@ -70,6 +70,7 @@ where
 {
     let cli::Args {
         port,
+        browser,
         no_open,
         no_save,
         history_dir,
@@ -98,13 +99,14 @@ where
         }
     }
 
-    let config = Config::resolve(ConfigOverrides {
+    let mut config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
         history_dir,
         no_save: no_save.then_some(true),
         ..ConfigOverrides::default()
     })?;
+    config.browser = browser;
     init_tracing(&config)?;
     tracing::debug!("tracing initialized");
 
@@ -206,7 +208,7 @@ where
                 files_count,
                 unified,
             },
-            config.auto_open,
+            config.auto_open.then_some(config.browser),
         ),
     )
     .await
@@ -234,7 +236,7 @@ fn pr_session_ready_callback(
     emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     app_state: AppState,
     startup: PrStartup,
-    auto_open: bool,
+    browser: Option<launch::Browser>,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
         let url = launch::loopback_url(listening_addr);
@@ -275,7 +277,8 @@ fn pr_session_ready_callback(
             startup.import_body,
             None,
         ));
-        let launcher = launch::SystemBrowserLauncher;
+        let launcher = browser.unwrap_or_default();
+        let auto_open = browser.is_some();
         if let Err(error) =
             launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
         {
@@ -495,7 +498,7 @@ where
         server::demo::DEMO_SOURCE_LABEL.to_string(),
         files_count,
         Vec::new(),
-        config.auto_open,
+        config.auto_open.then_some(config.browser),
         SessionReadyDetails::Demo(serde_json::json!({
             "scenarios": scenarios.iter().map(|(id, label, description, url)| serde_json::json!({
                 "id": id,
@@ -649,7 +652,7 @@ where
 
     let port = config.port.unwrap_or(0);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let auto_open = config.auto_open;
+    let auto_open = config.auto_open.then_some(config.browser);
 
     let mut app_state = AppState::for_process()
         .with_source(source)
@@ -755,7 +758,7 @@ where
         upstream_url,
         1,
         Vec::new(),
-        config.auto_open,
+        config.auto_open.then_some(config.browser),
         SessionReadyDetails::Live(live),
     )(api_addr);
 
@@ -827,7 +830,7 @@ fn session_ready_callback(
     session_source_label: String,
     files_count: usize,
     git_args: Vec<String>,
-    auto_open: bool,
+    browser: Option<launch::Browser>,
     details: SessionReadyDetails,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
@@ -872,7 +875,8 @@ fn session_ready_callback(
             );
         }
 
-        let launcher = launch::SystemBrowserLauncher;
+        let launcher = browser.unwrap_or_default();
+        let auto_open = browser.is_some();
         let mut stderr = io::stderr();
 
         if let Err(error) = launch::announce_listening(&mut stderr, &launcher, &url, auto_open) {

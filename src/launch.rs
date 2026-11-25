@@ -14,6 +14,31 @@ impl BrowserLauncher for SystemBrowserLauncher {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum Browser {
+    #[default]
+    Default,
+    Brave,
+}
+
+impl BrowserLauncher for Browser {
+    fn open(&self, url: &str) -> io::Result<()> {
+        match self {
+            Self::Default => SystemBrowserLauncher.open(url),
+            Self::Brave => {
+                let app = if cfg!(target_os = "macos") {
+                    "Brave Browser"
+                } else if cfg!(windows) {
+                    "brave.exe"
+                } else {
+                    "brave-browser"
+                };
+                open::with(url, app).map(|_| ()).map_err(io::Error::other)
+            }
+        }
+    }
+}
+
 pub fn loopback_url(addr: SocketAddr) -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
