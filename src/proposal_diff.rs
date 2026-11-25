@@ -22,7 +22,7 @@ struct Unit {
 
 impl Unit {
     fn key(&self) -> &str {
-        self.text.trim()
+        self.text.trim_end_matches(['\r', '\n'])
     }
 }
 
@@ -127,6 +127,14 @@ fn units(markdown: &str) -> Vec<Unit> {
 /// Longest common subsequence over unit keys, as matched index pairs.
 fn lcs(old: &[Unit], new: &[Unit]) -> Vec<(usize, usize)> {
     let (n, m) = (old.len(), new.len());
+    if n == m && old.iter().zip(new).all(|(a, b)| a.key() == b.key()) {
+        return (0..n).map(|i| (i, i)).collect();
+    }
+    // Bound the quadratic table to 16 MiB. Large rewrites remain reviewable
+    // as one hunk instead of exhausting memory on fine-grained alignment.
+    if n.saturating_add(1).saturating_mul(m.saturating_add(1)) > 4_000_000 {
+        return Vec::new();
+    }
     let mut table = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
@@ -313,6 +321,29 @@ mod tests {
     use super::*;
 
     const OLD: &str = "# Title\n\nFirst para.\n\nSecond para.\n\n- one\n- two\n\nLast para.\n";
+
+    #[test]
+    fn indentation_changes_require_explicit_acceptance() {
+        let old = "    code\n\nOther.\n";
+        let new = "code\n\nChanged.\n";
+        let diff = BlockDiff::new(old, new);
+        assert!(!diff.hunks.is_empty());
+        assert_eq!(diff.compose(|_| false).markdown, old);
+        assert_eq!(diff.compose(|_| true).markdown, new);
+        let indentation_only = BlockDiff::new("    code\n", "code\n");
+        assert_eq!(indentation_only.hunks.len(), 1);
+    }
+
+    #[test]
+    fn large_diff_falls_back_to_one_reviewable_hunk() {
+        let old = "Old paragraph.\n\n".repeat(2100);
+        let new = "New paragraph.\n\n".repeat(2100);
+        assert!(BlockDiff::new(&old, &old).hunks.is_empty());
+        let diff = BlockDiff::new(&old, &new);
+        assert_eq!(diff.hunks.len(), 1);
+        assert_eq!(diff.compose(|_| false).markdown, old);
+        assert_eq!(diff.compose(|_| true).markdown, new);
+    }
 
     #[test]
     fn identical_documents_have_no_hunks() {
