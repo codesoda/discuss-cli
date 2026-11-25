@@ -4050,6 +4050,43 @@ fn file_backed_source(path: &Path, content: &str) -> discuss::state::Source {
 }
 
 #[tokio::test]
+async fn shutdown_flushes_block_edits_before_the_debounce_expires() {
+    for done in [false, true] {
+        let addr = free_loopback_addr();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        fs::write(&path, BLOCK_DOC).unwrap();
+        let app = AppState::for_process()
+            .with_history_dir(dir.path().join("history"))
+            .with_source(file_backed_source(&path, BLOCK_DOC));
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(addr, app, async move {
+            let _ = shutdown_rx.await;
+        }));
+        wait_for_server(addr).await;
+        let body = json!({ "markdown": "Saved before exit.", "sourceVersion": 0 });
+        let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        if done {
+            let response = post_json_path(addr, "/api/done", "{}").await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        } else {
+            shutdown_tx.send(()).unwrap();
+        }
+        timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("Saved before exit.")
+        );
+    }
+}
+
+#[tokio::test]
 async fn patch_api_block_persists_to_disk_atomically() {
     let addr = free_loopback_addr();
     let temp_dir = tempfile::tempdir().expect("tempdir");

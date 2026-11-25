@@ -311,6 +311,26 @@ impl AppState {
         });
     }
 
+    pub(super) async fn flush_source_writes(&self) {
+        if self.no_save() {
+            return;
+        }
+        // Called after requests drain. Removing generations also invalidates
+        // sleeping debounce tasks; already-running writers share the I/O lock.
+        let pending: Vec<_> = match self.source_sync.lock() {
+            Ok(mut sync) => sync.write_generations.drain().map(|(id, _)| id).collect(),
+            Err(_) => {
+                tracing::warn!("could not flush source edits: source sync lock poisoned");
+                return;
+            }
+        };
+        for id in pending {
+            if let Some(path) = self.file(&id).and_then(|file| persistable_file_path(&file)) {
+                self.clone().persist_source(id, path).await;
+            }
+        }
+    }
+
     async fn persist_source(self, file_id: FileId, path: PathBuf) {
         // Debouncing only cancels sleeping writers. Serialize writers already
         // doing I/O too, including their snapshots and last_synced updates.
