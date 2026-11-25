@@ -6849,7 +6849,7 @@
     scheduleReposition();
   }
 
-  async function commitBlockEditor(reason) {
+  async function commitBlockEditor(reason, retryCount = 0) {
     if (!blockEditor || blockEditor.committing) return;
     const editor = blockEditor;
     const value = editor.textarea.value;
@@ -6877,10 +6877,13 @@
       if (!blockEditor || blockEditor !== editor) return; // re-render took over
       editor.committing = false;
       editor.textarea.disabled = false;
-      if (error.code === 'stale_source_version') {
+      if (error.code === 'stale_source_version' && retryCount === 0) {
         await rebaseBlockEditor(editor, value, reason);
       } else {
         setBlockEditorError(error.message);
+        showMutationError(editor.el, "couldn't save — retry?", () => {
+          if (blockEditor === editor) commitBlockEditor('retry');
+        });
         editor.textarea.focus();
       }
     }
@@ -6901,7 +6904,7 @@
     if (blockEditor !== editor || !fresh) return;
     editor.sourceVersion = fresh.sourceVersion;
     if (fresh.markdown === editor.original) {
-      commitBlockEditor(reason);
+      await commitBlockEditor(reason, 1);
       return;
     }
     editor.original = fresh.markdown; // next unchanged-compare is against reality

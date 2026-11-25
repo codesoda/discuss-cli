@@ -54,6 +54,61 @@ test('unchanged CRLF textarea content closes without a PATCH', async () => {
   assert.equal(closed, true);
 });
 
+test('stale saves retry once, retain the draft, and offer an explicit Retry', async () => {
+  const source = between('  async function commitBlockEditor', '  // A re-render or file switch');
+  let patches = 0;
+  let gets = 0;
+  let retry;
+  const editor = {
+    textarea: { value: 'draft', disabled: false, focus() {} },
+    original: 'original', sourceVersion: 0, anchorIdx: 2, fileId: 'f-1', el: {},
+  };
+  const context = vm.createContext({
+    blockEditor: editor, blockEditorStashes: new Map(),
+    setBlockEditorError() {},
+    showMutationError: (_, message, action) => { retry = action; },
+    apiJson: async (_, options) => {
+      if (options.method === 'GET') {
+        gets++;
+        return { markdown: 'original', sourceVersion: gets };
+      }
+      patches++;
+      throw Object.assign(new Error('stale'), { code: 'stale_source_version' });
+    },
+  });
+  vm.runInContext(source, context);
+  await vm.runInContext("commitBlockEditor('shortcut')", context);
+  assert.equal(patches, 2);
+  assert.equal(gets, 1);
+  assert.equal(editor.textarea.value, 'draft');
+  assert.equal(editor.textarea.disabled, false);
+  assert.equal(editor.committing, false);
+  assert.equal(typeof retry, 'function');
+});
+
+test('failed saves retain input and provide a working Retry closure', async () => {
+  const source = between('  async function commitBlockEditor', '  // The document moved under an open editor');
+  let retry;
+  let patches = 0;
+  const editor = {
+    textarea: { value: 'draft', focus() {} }, original: 'original',
+    sourceVersion: 0, anchorIdx: 2, fileId: 'f-1', el: {},
+  };
+  const context = vm.createContext({
+    blockEditor: editor, blockEditorStashes: new Map(),
+    setBlockEditorError() {},
+    showMutationError: (_, message, action) => { retry = action; },
+    apiJson: async () => { patches++; throw new Error('offline'); },
+  });
+  vm.runInContext(source, context);
+  await vm.runInContext("commitBlockEditor('shortcut')", context);
+  assert.equal(editor.textarea.value, 'draft');
+  assert.equal(editor.textarea.disabled, false);
+  retry();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(patches, 2);
+});
+
 test('hydration syncs Edit visibility after selecting the initial file', () => {
   const source = between('    discussFiles = loadState().files || [];', '    if (isHtmlFile()) stashHtmlFrame(activeFileId);');
   for (const kind of ['markdown', 'diff', 'image', 'html']) {
