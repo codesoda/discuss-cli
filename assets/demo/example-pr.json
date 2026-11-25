@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "importId": "demo-only/ledgerly#56@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "pr": {
+    "owner": "demo-only",
+    "repo": "ledgerly",
+    "number": 56,
+    "url": "https://github.com/demo-only/ledgerly/pull/56",
+    "title": "Make payment retries safer during provider brownouts [DEMO]",
+    "body": "Synthetic demo PR. It adds bounded jittered retries, tests the retry budget, updates the operator runbook, and refreshes a binary logo fixture. No repository or GitHub account exists for this example.",
+    "state": "OPEN",
+    "isDraft": false,
+    "author": {
+      "login": "demo-alex",
+      "url": "https://github.com/demo-only/ledgerly"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "head": {
+      "ref": "demo/retry-budget",
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "overviewMarkdown": "# PR #56: Make payment retries safer during provider brownouts [DEMO]\n\n> **Synthetic demo data.** This PR, its identities, links, comments, and publication results are local examples. Nothing in this scenario contacts or writes to GitHub.\n\n- **Author:** `@demo-alex` (synthetic identity)\n- **State:** Open — demo fixture\n- **Base:** `main` (`aaaaaaaaaaaa`)\n- **Head:** `demo/retry-budget` (`bbbbbbbbbbbb`)\n- **Demo link:** [Synthetic PR — local demo link only](#demo-pr-link)\n- **Changed files:** 4 across `src/`, `docs/`, and `assets/`\n\n## Description\n\nThis private-first review adds bounded full-jitter retries for card charges. The implementation keeps the retry window under 30 seconds, reserves provider capacity for first attempts, adds deterministic tests, renames the operator runbook, and includes one binary change that cannot receive inline comments.\n\n## Existing discussion\n\n### Issue comment — `@demo-riley` — synthetic target `issue-comment:900001`\n\nPlease keep the rollout reversible. Support needs one switch that stops new retries without interrupting successful first attempts.\n\n[Demo link — issue comment](#demo-issue-comment-900001)\n\n### Review summary — `@demo-morgan` — synthetic review `900002`\n\nThe direction looks good. I want explicit coverage for the total deadline and a clear capacity budget before approval.\n\n[Demo link — review summary](#demo-review-summary-900002)\n\n### Inline review thread — `@demo-sam` — synthetic root `900003`\n\nCan this sleep push the charge beyond the provider timeout? Please tie it to the overall retry deadline.\n\n#### Reply — `@demo-alex`\n\nGood catch. The new `remainingMs` clamp keeps each sleep inside the 30-second window.\n\n[Demo link — inline thread](#demo-review-thread-900003)\n",
+  "diff": {
+    "contextLines": 10,
+    "contextSource": "git-unified-10"
+  },
+  "files": [
+    {
+      "key": "src/payments/retry.ts",
+      "oldPath": "src/payments/retry.ts",
+      "newPath": "src/payments/retry.ts",
+      "status": "modified",
+      "binary": false,
+      "diff": "diff --git a/src/payments/retry.ts b/src/payments/retry.ts\nindex 31f20ab..91a4c22 100644\n--- a/src/payments/retry.ts\n+++ b/src/payments/retry.ts\n@@ -1,6 +1,8 @@\n export async function chargeWithRetry(charge: Charge) {\n-  const attempts = 3;\n+  const attempts = 5;\n+  const deadlineMs = Date.now() + 30_000;\n   for (let attempt = 0; attempt < attempts; attempt++) {\n-    await sleep(backoffMs(attempt));\n+    const remainingMs = Math.max(0, deadlineMs - Date.now());\n+    await sleep(Math.min(backoffMs(attempt), remainingMs));\n   }\n }\n"
+    },
+    {
+      "key": "src/payments/__tests__/retry.test.ts",
+      "oldPath": "src/payments/__tests__/retry.test.ts",
+      "newPath": "src/payments/__tests__/retry.test.ts",
+      "status": "added",
+      "binary": false,
+      "diff": "diff --git a/src/payments/__tests__/retry.test.ts b/src/payments/__tests__/retry.test.ts\nnew file mode 100644\nindex 0000000..b557bb1\n--- /dev/null\n+++ b/src/payments/__tests__/retry.test.ts\n@@ -0,0 +1,6 @@\n+import { chargeWithRetry } from '../retry';\n+\n+test('caps the complete retry window', async () => {\n+  const elapsed = await measureRetryWindow(chargeWithRetry);\n+  expect(elapsed).toBeLessThanOrEqual(30_000);\n+});\n"
+    },
+    {
+      "key": "docs/operations/retry-runbook.md",
+      "oldPath": "docs/runbook.md",
+      "newPath": "docs/operations/retry-runbook.md",
+      "status": "renamed",
+      "binary": false,
+      "diff": "diff --git a/docs/runbook.md b/docs/operations/retry-runbook.md\nsimilarity index 88%\nrename from docs/runbook.md\nrename to docs/operations/retry-runbook.md\n--- a/docs/runbook.md\n+++ b/docs/operations/retry-runbook.md\n@@ -1,3 +1,4 @@\n # Retry runbook\n \n-Disable `payments.retry` during an incident.\n+Disable `payments.retry.enabled` during an incident.\n+First attempts continue while retry scheduling drains.\n"
+    },
+    {
+      "key": "assets/brand/logo.png",
+      "oldPath": "assets/brand/logo.png",
+      "newPath": "assets/brand/logo.png",
+      "status": "modified",
+      "binary": true,
+      "diff": "diff --git a/assets/brand/logo.png b/assets/brand/logo.png\nindex 06aa020..36f4a99 100644\nBinary files a/assets/brand/logo.png and b/assets/brand/logo.png differ\n"
+    }
+  ],
+  "discussions": [
+    {
+      "id": "issue-comment:900001",
+      "kind": "issueComment",
+      "author": {
+        "login": "demo-riley",
+        "url": "https://github.com/demo-only/ledgerly"
+      },
+      "createdAt": "2026-09-05T09:15:00Z",
+      "url": "https://github.com/demo-only/ledgerly/pull/56#issuecomment-900001",
+      "body": "Please keep the rollout reversible. Support needs one switch that stops new retries without interrupting successful first attempts.",
+      "reviewId": null,
+      "rootCommentId": null,
+      "resolved": null,
+      "outdated": null,
+      "comments": []
+    },
+    {
+      "id": "review-summary:900002",
+      "kind": "reviewSummary",
+      "author": {
+        "login": "demo-morgan",
+        "url": "https://github.com/demo-only/ledgerly"
+      },
+      "createdAt": "2026-09-05T09:30:00Z",
+      "url": "https://github.com/demo-only/ledgerly/pull/56#pullrequestreview-900002",
+      "body": "The direction looks good. I want explicit coverage for the total deadline and a clear capacity budget before approval.",
+      "reviewId": 900002,
+      "rootCommentId": null,
+      "resolved": null,
+      "outdated": null,
+      "comments": []
+    },
+    {
+      "id": "review-thread:900003",
+      "kind": "reviewThread",
+      "author": {
+        "login": "demo-sam",
+        "url": "https://github.com/demo-only/ledgerly"
+      },
+      "createdAt": "2026-09-05T09:45:00Z",
+      "url": "https://github.com/demo-only/ledgerly/pull/56#discussion_r900003",
+      "body": "Can this sleep push the charge beyond the provider timeout? Please tie it to the overall retry deadline.",
+      "reviewId": 900004,
+      "rootCommentId": 900003,
+      "resolved": false,
+      "outdated": false,
+      "comments": [
+        {
+          "id": 900005,
+          "author": {
+            "login": "demo-alex",
+            "url": "https://github.com/demo-only/ledgerly"
+          },
+          "createdAt": "2026-09-05T10:00:00Z",
+          "url": "https://github.com/demo-only/ledgerly/pull/56#discussion_r900005",
+          "body": "Good catch. The new remainingMs clamp keeps each sleep inside the 30-second window."
+        }
+      ]
+    }
+  ],
+  "seedThreads": [
+    {
+      "discussionId": "review-thread:900003",
+      "fileKey": "src/payments/retry.ts",
+      "rootCommentId": 900003,
+      "githubThreadNodeId": "DEMO_PRRT_900003",
+      "path": "src/payments/retry.ts",
+      "line": 6,
+      "side": "RIGHT",
+      "startLine": null,
+      "startSide": null,
+      "commitId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "body": "Can this sleep push the charge beyond the provider timeout? Please tie it to the overall retry deadline.",
+      "url": "https://github.com/demo-only/ledgerly/pull/56#discussion_r900003",
+      "author": {
+        "login": "demo-sam",
+        "url": "https://github.com/demo-only/ledgerly"
+      },
+      "createdAt": "2026-09-05T09:45:00Z",
+      "resolved": false,
+      "outdated": false
+    }
+  ]
+}

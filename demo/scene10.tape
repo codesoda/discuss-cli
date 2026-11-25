@@ -9,4 +9,4 @@ Hide
 Type "bash demo/scene10.sh"
 Enter
 Show
-Sleep 8s
+Sleep 7s

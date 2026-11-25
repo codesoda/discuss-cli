@@ -199,11 +199,16 @@ if (!saved || saved.elementAnchor?.selector !== '#pricing [data-test="buy-team"]
   throw new Error(`Server did not persist the expected anchor: ${JSON.stringify(saved)}`);
 }
 await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after save');
+await waitFor(`document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'false' && getComputedStyle(document.querySelector('#inspect-banner')).display === 'none'`, 'default commenting toggle and banner');
+await click(await framePoint('[data-test="buy-team"]'));
+await waitFor(`!!document.querySelector('.html-thread-editor')`, 'next comment opens without rearming');
+await click(await center('.html-thread-editor .cancel'));
 
 // The Interact toggle is the special mode: it hands clicks to the prototype
 // and restores its cursor, and a second press returns to commenting.
 await click(inspectButton);
 await waitFor(`!document.body.classList.contains('inspecting')`, 'Interact mode on toggle press');
+await waitFor(`document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'true' && getComputedStyle(document.querySelector('#inspect-banner')).display !== 'none'`, 'Interact toggle and banner');
 await waitFor(
   `document.querySelector('.prototype-frame').contentDocument.documentElement.style.cursor !== 'crosshair'`,
   'inspector crosshair cursor released in Interact mode',

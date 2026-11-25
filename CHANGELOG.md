@@ -10,6 +10,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Commenting is the default HTML prototype mode** — selecting an element no longer drops the review back into pass-through mode, so consecutive comments need no re-arming. The header toggle is now **Interact** (still `I`): press it when you want clicks to drive the prototype — walk a flow, flip a toggle — and press it again to return to commenting. A banner shows while Interact mode is on; commenting mode is unmarked because it is the default.
 
+- **Compact table presentation** — tighter spacing, header styling, alignment-preserving defaults, horizontal scrolling and an overflow fade. Existing server-stamped whole-table and row anchors are preserved, with gutter markers repositioned on resize.
+
+### Fixed
+
+- **Readable document links** — theme-aware link colours also apply to visited links.
+
+- **UI settings are remembered between sessions** — ⌘ Enter to send, the theme, and the file-sidebar collapse state survive closing a review. Each session binds a fresh port, so the browser treated every run as a new origin and started with empty `localStorage`; these preferences now live in `~/.discuss/prefs.json`, seeded into the page at render and written back through `POST /api/prefs`. Settings saved by an earlier build in the browser are not carried over, so each one needs to be set once more.
+
+## [0.11.1] - 2026-09-14
+
+### Added
+
+- **Resizable, compact file sidebar** — drag the sidebar's right edge to adjust its width, use keyboard controls for accessible resizing, or double-click to reset. Collapsing and reopening preserves the chosen width for the session. Tighter row padding, smaller icons, and reduced spacing give filenames more room.
+
+- **Expanded self-contained demo** — one `discuss demo` launch now exposes the existing six-file feature tour, a deterministic synthetic private-first PR review, and a bundled running local-app review through a shared header switcher. The PR scenario uses the production import/state/UI contracts for nested changed files, GitHub-style diffs, imported issue/review/inline discussion, local takes, Viewed progression, editable Finish Review, and exact GFM confirmation; its exclusive demo execution mode generates a local summary and simulates OK locally, making `gh`, agent publication events, and the real publisher unreachable. The mini app serves root-relative CSS/JavaScript, an app API, and SPA routes in-process on its own loopback origin, then uses the production live proxy and inspector for route-scoped element anchors, markers, and canned responses. All five listeners bind before readiness, demo update checks stay offline, history stays disabled, and no LLM, GitHub authentication, external app process, or public network is required. README video/GIF and the deterministic recording pipeline now cover both workflows. Closes [#56](https://github.com/codesoda/discuss-cli/issues/56).
+
+## [0.11.0] - 2026-09-04
+
+### Added
+
+- **Private-first GitHub PR review** — `discuss pr <full-github-pr-url>` starts a loopback-only PR session and automatically loads it by invoking the user's authenticated `gh` CLI plus read-only `git` commands; Discuss never receives or stores the token. Missing `gh` fails before readiness with macOS, Windows, Linux, and authentication instructions. Metadata and discussion fetches run concurrently with a temporary filtered clone, immutable base/head SHAs are verified, and exactly one aggregate git diff becomes a GFM overview plus one anchored diff file per changed path with existing discussion provenance. PR diffs use ten unchanged context lines by default, configurable with `discuss pr --unified <N>`. Every new thread and answer remains local by default. Finish Review supports PR actions, editable summary/comments, explicit include controls, an exact GFM confirmation step, grouped inline review publication, resolvable thread replies, and retry-safe direct publication through authenticated `gh`; nothing reaches GitHub before the reviewer confirms OK. Changed files appear in a GitHub-style expandable folder tree, and diff headers/hunks/additions/deletions use self-contained GitHub-like colors even when Prism's diff grammar is unavailable. Each diff header carries its addition/deletion totals and has a dedicated whole-file comment button instead of acting as a generic click target, plus a **Viewed** control that records the file, timestamp, and immutable PR head SHA, marks the sidebar entry with an eye indicator, animates the closing header into that entry, and advances to the next unviewed file. Standalone PR comments and separate OAuth/token configuration remain out of scope. Closes [#51](https://github.com/codesoda/discuss-cli/issues/51).
+
+- **Live website review** — a sole HTTP/S URL starts a fixed-upstream reverse proxy on a second loopback origin and loads that origin in the review iframe. Root-relative assets, application `/api/*` routes, request bodies, and WebSockets stay with the upstream; HTML responses receive frame-header/CSP neutralization, an early service-worker guard, and the element inspector, while non-HTML bytes stream unchanged. Same-upstream redirects remain proxied and cross-origin redirects require explicit reviewer confirmation. SPA `pushState`, `replaceState`, `popstate`, and hash changes are reported to the parent, with route and accessible-name context persisted on element anchors. Startup reports `mode: "live"`, `upstreamUrl`, `proxyUrl`, and the existing API endpoint map after both listeners bind; Done/external shutdown terminates both. Authentication remains explicit out-of-scope for v1 because upstream cookies do not implicitly belong to the loopback proxy origin. Closes [#32](https://github.com/codesoda/discuss-cli/issues/32).
+
 ## [0.10.0] - 2026-08-30
 
 ### Added

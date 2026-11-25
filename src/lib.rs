@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::Utc;
 use clap::CommandFactory;
 
-use crate::state::{File, FileId, FileKind, Source};
+use crate::state::{DemoScenarioLink, File, FileId, FileKind, Source};
 
 pub mod assets;
 pub mod blocks;
@@ -23,6 +23,9 @@ pub mod exit;
 pub mod history;
 pub mod launch;
 pub mod logging;
+pub mod pr;
+pub mod prefs;
+pub mod proxy;
 pub mod render;
 pub mod server;
 pub mod sse;
@@ -81,6 +84,20 @@ where
         std::process::exit(exit::EXIT_CONFIG_ERROR);
     }
 
+    if matches!(&command, Some(cli::Commands::Pr(_))) {
+        if !files.is_empty() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept positional files".to_string(),
+            });
+        }
+        if verdict_options.is_some() || verdict_prompt.is_some() {
+            return Err(DiscussError::ConfigError {
+                message: "`discuss pr` does not accept --verdict-options or --verdict-prompt"
+                    .to_string(),
+            });
+        }
+    }
+
     let config = Config::resolve(ConfigOverrides {
         port,
         auto_open: no_open.then_some(false),
@@ -113,6 +130,10 @@ where
         Some(cli::Commands::Diff(diff_args)) => {
             run_review_session(files, Some(diff_args), verdict_config, &config, shutdown).await
         }
+        Some(cli::Commands::Pr(pr_args)) => {
+            let identity = pr::GithubPrUrl::parse(&pr_args.url)?;
+            Box::pin(run_pr_session(identity, pr_args.unified, &config, shutdown)).await
+        }
         Some(cli::Commands::Demo) => {
             if !files.is_empty() {
                 return Err(DiscussError::ConfigError {
@@ -123,15 +144,209 @@ where
             }
             run_demo_session(verdict_config, &config, shutdown).await
         }
-        None => run_review_session(files, None, verdict_config, &config, shutdown).await,
+        None => {
+            if let Some(upstream) = live_url_argument(&files)? {
+                let upstream_url = files[0].to_string_lossy().into_owned();
+                run_live_session(upstream, upstream_url, verdict_config, &config, shutdown).await
+            } else {
+                run_review_session(files, None, verdict_config, &config, shutdown).await
+            }
+        }
     }
 }
 
-/// Runs the bundled demo session: six embedded files (GIF first), four
-/// pre-seeded agent threads, and the canned Demo agent responder. No agent
-/// session is involved and history archives are always disabled; everything
-/// else (session.started, stderr announce, Done semantics) matches a normal
-/// review session, including the page's usual Prism/version-check fetches.
+async fn run_pr_session<F>(
+    identity: pr::GithubPrUrl,
+    unified: u32,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let bundle = pr::load_pr(&identity, unified).await?;
+    let files_count = bundle.files.len() + 1;
+    let import_body = serde_json::to_vec(&bundle).map_err(|error| DiscussError::PrError {
+        message: format!("could not encode the loaded PR: {error}"),
+    })?;
+    let source = Source {
+        files: vec![File {
+            id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
+            path: "pr-overview.md".to_string(),
+            kind: FileKind::Markdown,
+            content:
+                "# Loading pull request\n\nDiscuss is importing this pull request through your authenticated `gh` CLI.\n"
+                    .to_string(),
+        }],
+    };
+    let secret = random_hex_secret();
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_pr_session(identity.clone(), secret.clone())
+        .with_direct_pr_publication()
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let emitter = app_state.emitter.clone();
+    let ready_state = app_state.clone();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port.unwrap_or(0)));
+    server::serve_with_ready(
+        addr,
+        app_state,
+        shutdown,
+        pr_session_ready_callback(
+            emitter,
+            ready_state,
+            PrStartup {
+                identity,
+                secret,
+                import_body,
+                files_count,
+                unified,
+            },
+            config.auto_open,
+        ),
+    )
+    .await
+}
+
+fn random_hex_secret() -> String {
+    let bytes = rand::random::<[u8; 32]>();
+    let mut secret = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(secret, "{byte:02x}");
+    }
+    secret
+}
+
+struct PrStartup {
+    identity: pr::GithubPrUrl,
+    secret: String,
+    import_body: Vec<u8>,
+    files_count: usize,
+    unified: u32,
+}
+
+fn pr_session_ready_callback(
+    emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
+    app_state: AppState,
+    startup: PrStartup,
+    auto_open: bool,
+) -> impl FnOnce(SocketAddr) {
+    move |listening_addr| {
+        let url = launch::loopback_url(listening_addr);
+        app_state.set_pr_base_url(url.clone());
+        let started_at = Utc::now();
+        let import_url = format!("{url}/api/pr/import");
+        let mut endpoints = launch::session_endpoints(&url);
+        endpoints["prImport"] = serde_json::json!(import_url);
+        endpoints["prSummary"] = serde_json::json!(format!("{url}/api/pr/summary"));
+        endpoints["prPublicationResult"] =
+            serde_json::json!(format!("{url}/api/pr/publication-result"));
+        let instructions = pr::agent_instructions().replace("<SESSION_SECRET>", &startup.secret);
+        let payload = serde_json::json!({
+            "url": url,
+            "apiBaseUrl": url,
+            "endpoints": endpoints,
+            "agentInstructions": instructions,
+            "mode": "pr",
+            "prUrl": startup.identity.canonical_url(),
+            "prSessionSecret": startup.secret,
+            "prImportMode": "automatic",
+            "unified": startup.unified,
+            "source_file": "pr-overview.md",
+            "files_count": startup.files_count,
+            "started_at": started_at.to_rfc3339(),
+        });
+        if let Err(error) = emitter.emit(&Event {
+            kind: EventKind::SessionStarted,
+            at: started_at,
+            payload,
+        }) {
+            tracing::warn!(%url, error = %error, "failed to emit PR session.started event");
+        }
+        tokio::spawn(post_automatic_pr_import(
+            app_state,
+            import_url,
+            startup.secret,
+            startup.import_body,
+            None,
+        ));
+        let launcher = launch::SystemBrowserLauncher;
+        if let Err(error) =
+            launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
+        {
+            tracing::warn!(%url, error = %error, "failed to write listening URL to stderr");
+        }
+    }
+}
+
+async fn post_automatic_pr_import(
+    app_state: AppState,
+    import_url: String,
+    secret: String,
+    body: Vec<u8>,
+    demo_take: Option<(String, String)>,
+) {
+    let result = async {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|error| format!("could not create loopback HTTP client: {error}"))?;
+        let response = client
+            .post(import_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .bearer_auth(secret)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| format!("could not reach the local import endpoint: {error}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "response body unavailable".to_string());
+            return Err(format!("local import returned {status}: {detail}"));
+        }
+        if let Some((take_url, text)) = demo_take {
+            let response = client
+                .post(take_url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(
+                    serde_json::to_vec(&serde_json::json!({ "text": text })).map_err(|error| {
+                        format!("could not encode the bundled demo PR take: {error}")
+                    })?,
+                )
+                .send()
+                .await
+                .map_err(|error| format!("could not seed the bundled demo PR take: {error}"))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let detail = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "response body unavailable".to_string());
+                return Err(format!("demo PR take returned {status}: {detail}"));
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        eprintln!("pull request error: automatic PR import failed: {error}");
+        tracing::error!(%error, "automatic PR import failed");
+        app_state.signal_shutdown();
+    }
+}
+
+/// Runs all three bundled demo scenarios from one process. The tour, the
+/// synthetic PR, and the local-app review each use an isolated real AppState;
+/// five listeners are acquired together so every advertised URL is live and
+/// loopback-only or startup fails without partial readiness.
 async fn run_demo_session<F>(
     verdict_config: Option<verdict::VerdictConfig>,
     config: &Config,
@@ -140,42 +355,195 @@ async fn run_demo_session<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (source, file_bytes) = server::demo::demo_source();
-    let files_count = source.files.len();
+    let (pr_identity, pr_import_body) = server::demo::demo_pr_import()?;
+    let requested = demo_listener_addrs(config.port)?;
+    let mut listeners = server::bind_loopback_listeners(&requested)
+        .await?
+        .into_iter();
+    let (tour_listener, tour_addr) = listeners.next().expect("tour listener");
+    let (pr_listener, pr_addr) = listeners.next().expect("PR listener");
+    let (local_api_listener, local_api_addr) = listeners.next().expect("local API listener");
+    let (app_listener, app_addr) = listeners.next().expect("demo app listener");
+    let (proxy_listener, proxy_addr) = listeners.next().expect("proxy listener");
 
-    let port = config.port.unwrap_or(0);
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let auto_open = config.auto_open;
+    let tour_url = launch::loopback_url(tour_addr);
+    let pr_url = launch::loopback_url(pr_addr);
+    let local_api_url = launch::loopback_url(local_api_addr);
+    let app_url = format!("{}/", launch::loopback_url(app_addr));
+    let proxy_url = launch::loopback_url(proxy_addr);
+    let scenarios = [
+        (
+            "tour",
+            "Feature tour",
+            "Markdown, diffs, images, and a static prototype",
+            &tour_url,
+        ),
+        (
+            "pr",
+            "Example PR",
+            "Private-first review with synthetic GitHub data",
+            &pr_url,
+        ),
+        (
+            "local-app",
+            "Local app",
+            "Inspect a bundled running SPA through the live proxy",
+            &local_api_url,
+        ),
+    ];
+    let links_for = |active: &str| {
+        scenarios
+            .iter()
+            .map(|(id, label, description, url)| DemoScenarioLink {
+                id: (*id).to_string(),
+                label: (*label).to_string(),
+                description: (*description).to_string(),
+                url: (*url).to_string(),
+                active: *id == active,
+            })
+            .collect::<Vec<_>>()
+    };
 
-    let app_state = AppState::for_process()
-        .with_source(source)
-        .with_file_bytes(file_bytes)
+    let (tour_source, tour_file_bytes) = server::demo::demo_source();
+    let files_count = tour_source.files.len();
+    let tour_state = AppState::for_process()
+        .with_source(tour_source)
+        .with_file_bytes(tour_file_bytes)
         .with_verdict_config(verdict_config)
+        .with_completion_scope("demo-tour")
+        .with_demo_scenarios(links_for("tour"))
+        .with_offline_demo()
         .with_no_save(true)
-        .with_idle_timeout_secs(config.idle_timeout_secs);
-    // Seed before serving so the first GET / snapshot includes the threads.
-    let seeded = server::demo::seed_demo_threads(&app_state);
+        .with_idle_timeout_secs(0);
+
+    let pr_secret = random_hex_secret();
+    let pr_state = AppState::for_process()
+        .with_shared_demo_lifecycle(&tour_state)
+        .with_source(Source {
+            files: vec![File {
+                id: FileId(pr::PR_OVERVIEW_FILE_ID.to_string()),
+                path: "pr-overview.md".to_string(),
+                kind: FileKind::Markdown,
+                content: "# Loading synthetic demo PR\n\nNo GitHub connection is used.\n"
+                    .to_string(),
+            }],
+        })
+        .with_pr_session(pr_identity, pr_secret.clone())
+        .with_demo_pr_execution()
+        .with_completion_scope("demo-pr")
+        .with_demo_scenarios(links_for("pr"))
+        .with_offline_demo()
+        .with_no_save(true)
+        .with_idle_timeout_secs(0);
+    pr_state.set_pr_base_url(pr_url.clone());
+
+    let local_state = AppState::for_process()
+        .with_shared_demo_lifecycle(&tour_state)
+        .with_source(Source {
+            files: vec![File {
+                id: FileId("f-1".to_string()),
+                path: "Bundled Ledgerly local app".to_string(),
+                kind: FileKind::Html,
+                content: String::new(),
+            }],
+        })
+        .with_live_frame_url(format!("{proxy_url}/"))
+        .with_completion_scope("demo-local-app")
+        .with_demo_scenarios(links_for("local-app"))
+        .with_offline_demo()
+        .with_no_save(true)
+        .with_idle_timeout_secs(0);
+
+    let tour_seeded = server::demo::seed_demo_threads(&tour_state);
     server::demo::spawn_demo_responder(
-        app_state.clone(),
-        seeded,
+        tour_state.clone(),
+        tour_seeded,
         server::demo::DEMO_RESPONSE_DELAY,
     );
-    let emitter = app_state.emitter.clone();
+    server::demo::spawn_demo_responder(
+        pr_state.clone(),
+        Vec::new(),
+        server::demo::DEMO_RESPONSE_DELAY,
+    );
+    server::demo::spawn_demo_responder(
+        local_state.clone(),
+        Vec::new(),
+        server::demo::DEMO_RESPONSE_DELAY,
+    );
 
-    server::serve_with_ready(
-        addr,
-        app_state,
-        shutdown,
-        session_ready_callback(
-            emitter,
-            server::demo::DEMO_MODE,
-            server::demo::DEMO_SOURCE_LABEL.to_string(),
-            files_count,
-            Vec::new(),
-            auto_open,
-        ),
-    )
-    .await
+    let live_proxy = proxy::LiveProxy::new(
+        url::Url::parse(&app_url).expect("loopback app URL should parse"),
+        proxy_url.clone(),
+        local_api_url.clone(),
+    )?;
+    let import_url = format!("{pr_url}/api/pr/import");
+    let take_url = format!(
+        "{pr_url}/api/threads/{}/takes",
+        server::demo::DEMO_PR_IMPORTED_THREAD_ID
+    );
+    tokio::spawn(post_automatic_pr_import(
+        pr_state.clone(),
+        import_url,
+        pr_secret,
+        pr_import_body,
+        Some((take_url, server::demo::DEMO_PR_LOCAL_TAKE.to_string())),
+    ));
+
+    session_ready_callback(
+        tour_state.emitter.clone(),
+        server::demo::DEMO_MODE,
+        server::demo::DEMO_SOURCE_LABEL.to_string(),
+        files_count,
+        Vec::new(),
+        config.auto_open,
+        SessionReadyDetails::Demo(serde_json::json!({
+            "scenarios": scenarios.iter().map(|(id, label, description, url)| serde_json::json!({
+                "id": id,
+                "label": label,
+                "description": description,
+                "url": url,
+            })).collect::<Vec<_>>(),
+            "examplePrUrl": pr_url,
+            "localAppReviewUrl": local_api_url,
+            "localAppUpstreamUrl": app_url,
+            "localAppProxyUrl": proxy_url,
+        })),
+    )(tour_addr);
+
+    let proxy_shutdown = tour_state.subscribe_shutdown();
+    let app_shutdown = tour_state.subscribe_shutdown();
+    let lifecycle = tour_state.clone();
+    let result = tokio::try_join!(
+        server::serve_listener(tour_listener, tour_state, shutdown),
+        server::serve_listener(pr_listener, pr_state, pending()),
+        server::serve_listener(local_api_listener, local_state, pending()),
+        server::demo::serve_demo_app_listener(app_listener, app_shutdown),
+        proxy::serve_proxy_listener(proxy_listener, live_proxy, proxy_shutdown),
+    );
+    // Wake detached canned responders even when one listener failed and
+    // try_join dropped the remaining server futures.
+    lifecycle.signal_shutdown();
+    result?;
+    Ok(())
+}
+
+fn demo_listener_addrs(base_port: Option<u16>) -> Result<Vec<SocketAddr>> {
+    let ports = match base_port {
+        Some(base) => (0..5)
+            .map(|offset| {
+                base.checked_add(offset).ok_or_else(|| DiscussError::ConfigError {
+                    message: format!(
+                        "--port {base} cannot be used for demo because five adjacent loopback ports are required"
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        None => vec![0; 5],
+    };
+    Ok(ports
+        .into_iter()
+        .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        .collect())
 }
 
 async fn run_review_session<F>(
@@ -308,14 +676,151 @@ where
             files_count,
             git_args,
             auto_open,
+            SessionReadyDetails::Standard,
         ),
     )
     .await
 }
 
-/// Builds the `serve_with_ready` readiness callback shared by normal and demo
-/// sessions: emits `session.started`, then announces the URL on stderr and
-/// opens the browser when `auto_open` remains true.
+#[derive(Clone, Debug)]
+struct LiveStartup {
+    upstream_url: String,
+    proxy_url: String,
+}
+
+enum SessionReadyDetails {
+    Standard,
+    Live(LiveStartup),
+    Demo(serde_json::Value),
+}
+
+async fn run_live_session<F>(
+    upstream: url::Url,
+    upstream_url: String,
+    verdict_config: Option<verdict::VerdictConfig>,
+    config: &Config,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let api_port = config.port.unwrap_or(0);
+    let proxy_port = match config.port {
+        Some(port) => port.checked_add(1).ok_or_else(|| DiscussError::ConfigError {
+            message: "--port 65535 cannot be used for live review because the adjacent proxy port is unavailable".to_string(),
+        })?,
+        None => 0,
+    };
+    let requested = [
+        SocketAddr::from((Ipv4Addr::LOCALHOST, api_port)),
+        SocketAddr::from((Ipv4Addr::LOCALHOST, proxy_port)),
+    ];
+    let mut listeners = server::bind_loopback_listeners(&requested).await?;
+    let (proxy_listener, proxy_addr) = listeners
+        .pop()
+        .expect("proxy listener should be returned second");
+    let (api_listener, api_addr) = listeners
+        .pop()
+        .expect("API listener should be returned first");
+    let api_url = launch::loopback_url(api_addr);
+    let proxy_url = launch::loopback_url(proxy_addr);
+    let frame_url = format!("{proxy_url}{}", url_route(&upstream));
+
+    let source = Source {
+        files: vec![File {
+            id: FileId("f-1".to_string()),
+            path: upstream_url.clone(),
+            kind: FileKind::Html,
+            content: String::new(),
+        }],
+    };
+    let mut app_state = AppState::for_process()
+        .with_source(source)
+        .with_live_frame_url(frame_url)
+        .with_verdict_config(verdict_config)
+        .with_no_save(config.no_save)
+        .with_idle_timeout_secs(config.idle_timeout_secs);
+    if let Some(history_dir) = config.history_dir.clone() {
+        app_state = app_state.with_history_dir(history_dir);
+    }
+    let live_proxy = proxy::LiveProxy::new(upstream, proxy_url.clone(), api_url)?;
+    let emitter = app_state.emitter.clone();
+    let live = LiveStartup {
+        upstream_url: upstream_url.clone(),
+        proxy_url: proxy_url.clone(),
+    };
+    session_ready_callback(
+        emitter,
+        "live",
+        upstream_url,
+        1,
+        Vec::new(),
+        config.auto_open,
+        SessionReadyDetails::Live(live),
+    )(api_addr);
+
+    let proxy_shutdown = app_state.subscribe_shutdown();
+    let api_state = app_state.clone();
+    let proxy_state = app_state.clone();
+    let api = async move {
+        let result = server::serve_listener(api_listener, app_state, shutdown).await;
+        api_state.signal_shutdown();
+        result
+    };
+    let proxy = async move {
+        let result = proxy::serve_proxy_listener(proxy_listener, live_proxy, proxy_shutdown).await;
+        proxy_state.signal_shutdown();
+        result
+    };
+    let (api_result, proxy_result) = tokio::join!(api, proxy);
+    api_result?;
+    proxy_result
+}
+
+fn live_url_argument(files: &[PathBuf]) -> Result<Option<url::Url>> {
+    if files.len() != 1 {
+        return Ok(None);
+    }
+    let Some(value) = files[0].to_str() else {
+        return Ok(None);
+    };
+    let has_http_scheme = value
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
+    let has_https_scheme = value
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    if !has_http_scheme && !has_https_scheme {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(value).map_err(|error| DiscussError::ConfigError {
+        message: format!("invalid live website URL {value:?}: {error}"),
+    })?;
+    if parsed.host_str().is_none() {
+        return Err(DiscussError::ConfigError {
+            message: format!("live website URL must include a host: {value}"),
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn url_route(url: &url::Url) -> String {
+    let mut route = url.path().to_string();
+    if route.is_empty() {
+        route.push('/');
+    }
+    if let Some(query) = url.query() {
+        route.push('?');
+        route.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        route.push('#');
+        route.push_str(fragment);
+    }
+    route
+}
+
+/// Builds the readiness callback shared by normal, demo, and live sessions.
 fn session_ready_callback(
     emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     mode: &'static str,
@@ -323,6 +828,7 @@ fn session_ready_callback(
     files_count: usize,
     git_args: Vec<String>,
     auto_open: bool,
+    details: SessionReadyDetails,
 ) -> impl FnOnce(SocketAddr) {
     move |listening_addr| {
         let url = launch::loopback_url(listening_addr);
@@ -340,6 +846,18 @@ fn session_ready_callback(
         });
         if !git_args.is_empty() {
             payload["git_args"] = serde_json::json!(git_args);
+        }
+        match details {
+            SessionReadyDetails::Standard => {}
+            SessionReadyDetails::Live(live) => {
+                payload["upstreamUrl"] = serde_json::json!(live.upstream_url);
+                payload["proxyUrl"] = serde_json::json!(live.proxy_url);
+            }
+            SessionReadyDetails::Demo(extra) => {
+                if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+                    payload.extend(extra.clone());
+                }
+            }
         }
 
         if let Err(error) = emitter.emit(&Event {
@@ -520,6 +1038,69 @@ mod tests {
     use super::*;
 
     use tempfile::tempdir;
+
+    #[test]
+    fn sole_http_or_https_argument_selects_live_mode_and_preserves_route() {
+        for (value, expected) in [
+            ("http://localhost:3000/", "http://localhost:3000/"),
+            (
+                "https://example.test/path?q=1#section",
+                "https://example.test/path?q=1#section",
+            ),
+            ("HTTP://localhost:3000/", "http://localhost:3000/"),
+        ] {
+            let parsed = live_url_argument(&[PathBuf::from(value)])
+                .expect("URL should parse")
+                .expect("URL should select live mode");
+            assert_eq!(parsed.as_str(), expected);
+        }
+        let parsed = live_url_argument(&[PathBuf::from("https://example.test/path?q=1#section")])
+            .unwrap()
+            .unwrap();
+        assert_eq!(url_route(&parsed), "/path?q=1#section");
+    }
+
+    #[test]
+    fn paths_and_multiple_arguments_do_not_select_live_mode() {
+        assert!(
+            live_url_argument(&[PathBuf::from("review.md")])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            live_url_argument(&[
+                PathBuf::from("https://example.test"),
+                PathBuf::from("notes.md")
+            ])
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn demo_reserves_five_adjacent_ports_or_fails_before_binding() {
+        let dynamic = demo_listener_addrs(None).expect("dynamic demo ports");
+        assert_eq!(dynamic.len(), 5);
+        assert!(
+            dynamic
+                .iter()
+                .all(|addr| addr.ip().is_loopback() && addr.port() == 0)
+        );
+
+        let fixed = demo_listener_addrs(Some(4200)).expect("fixed demo ports");
+        assert_eq!(
+            fixed.iter().map(SocketAddr::port).collect::<Vec<_>>(),
+            vec![4200, 4201, 4202, 4203, 4204]
+        );
+        assert!(demo_listener_addrs(Some(65_532)).is_err());
+    }
+
+    #[test]
+    fn malformed_live_url_returns_config_error() {
+        let error = live_url_argument(&[PathBuf::from("http://")])
+            .expect_err("malformed URL should fail as configuration");
+        assert!(matches!(error, DiscussError::ConfigError { .. }));
+    }
 
     #[test]
     fn missing_markdown_file_maps_to_file_not_found() {

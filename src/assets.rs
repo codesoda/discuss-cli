@@ -49,6 +49,10 @@ mod tests {
         assert!(inspector.contains("discuss:ready"));
         assert!(inspector.contains("discuss:element-selected"));
         assert!(inspector.contains("discuss:resolve-anchors"));
+        assert!(inspector.contains("discussParentOrigin"));
+        assert!(inspector.contains("event.origin !== parentOrigin"));
+        assert!(inspector.contains("discuss:route-changed"));
+        assert!(inspector.contains("accessibleName"));
         assert!(inspector.contains("attachShadow({ mode: 'closed' })"));
     }
 

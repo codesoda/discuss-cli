@@ -17,7 +17,7 @@ LLM ref: https://github.com/codesoda/discuss-cli/blob/main/llms.txt";
 #[command(
     name = "discuss",
     version,
-    about = "Launch a live bidirectional markdown review session.",
+    about = "Launch a live bidirectional document or website review session.",
     subcommand_precedence_over_arg = true,
     after_help = HELP_FOOTER,
     after_long_help = HELP_FOOTER
@@ -59,8 +59,8 @@ pub struct Args {
     pub verdict_prompt: Option<String>,
 
     #[arg(
-        value_name = "FILE",
-        help = "One or more files to review together. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin. Multiple paths open a single session with a file sidebar."
+        value_name = "FILE_OR_URL",
+        help = "One or more files to review together, or one HTTP/S URL for live website review. Use `-` to read from stdin; bare `discuss` with piped stdin also reads from stdin."
     )]
     pub files: Vec<PathBuf>,
 
@@ -88,18 +88,46 @@ the diff together in one session."
     Diff(DiffArgs),
 
     #[command(
-        about = "Open a self-contained demo review session with bundled example files.",
-        long_about = "Open a self-contained demo review session with bundled example files.\n\n\
-Every file is embedded in the binary: a feature-tour GIF, two revised markdown documents\n\
-pre-annotated with agent takes, a diff, an image, and an HTML prototype. A deterministic\n\
-Demo agent replies to comments you leave, entirely in-process: no agent session, no LLM,\n\
-and no history archive is written.\n\n\
-The review page behaves like any other session, so it still loads Prism syntax\n\
-highlighting from a CDN and checks for a newer release. With no network the demo still\n\
-runs; code fences lose highlighting and per-line diff comments.\n\n\
-Top-level flags must come first: `discuss --port 4000 --no-open demo`."
+        about = "Review a GitHub pull request privately before publishing.",
+        long_about = "Review a GitHub pull request privately before publishing.\n\n\
+Accepts a full https://github.com/OWNER/REPO/pull/NUMBER URL only. discuss uses the\n\
+already-authenticated gh CLI to load the PR automatically; install gh and run `gh auth login`\n\
+first. Nothing is posted to GitHub until the reviewer selects items, previews the exact GFM\n\
+payload, and confirms publication.\n\n\
+Top-level flags must come first: `discuss --no-open pr https://github.com/acme/app/pull/123`."
+    )]
+    Pr(PrArgs),
+
+    #[command(
+        about = "Open self-contained tour, example PR, and local-app review scenarios.",
+        long_about = "Open three self-contained review scenarios from one command.\n\n\
+Use the in-page switcher to explore the existing six-file Feature tour, a synthetic\n\
+private-first Example PR using the real PR state/UI contracts, and a bundled running\n\
+Local app inspected through the production live proxy. A deterministic Demo agent replies\n\
+to comments entirely in-process. No agent session, LLM, gh command, GitHub authentication,\n\
+external app process, public network, or history archive is required. PR publication is a\n\
+clearly labelled local simulation that cannot invoke the real publisher.\n\n\
+With --port N, demo reserves loopback ports N through N+4. Without it, the OS assigns all\n\
+five ports. Top-level flags must come first: `discuss --port 4000 --no-open demo`."
     )]
     Demo,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PrArgs {
+    #[arg(
+        value_name = "FULL_GITHUB_PR_URL",
+        help = "Full GitHub pull request URL: https://github.com/OWNER/REPO/pull/NUMBER"
+    )]
+    pub url: String,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 10,
+        help = "Include N unchanged context lines around each PR diff hunk"
+    )]
+    pub unified: u32,
 }
 
 #[derive(Debug, clap::Args)]
@@ -379,6 +407,73 @@ mod tests {
     }
 
     #[test]
+    fn parses_pr_subcommand_with_full_url() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+        ])
+        .expect("PR command should parse");
+
+        let Some(Commands::Pr(pr_args)) = args.command else {
+            panic!("expected pr subcommand");
+        };
+        assert_eq!(
+            pr_args.url,
+            "https://github.com/codesoda/discuss-cli/pull/51"
+        );
+        assert_eq!(pr_args.unified, 10);
+    }
+
+    #[test]
+    fn parses_pr_subcommand_unified_context_override() {
+        let args = Args::try_parse_from([
+            "discuss",
+            "pr",
+            "https://github.com/codesoda/discuss-cli/pull/51",
+            "--unified=4",
+        ])
+        .expect("PR unified override should parse");
+
+        let Some(Commands::Pr(pr_args)) = args.command else {
+            panic!("expected pr subcommand");
+        };
+        assert_eq!(pr_args.unified, 4);
+    }
+
+    #[test]
+    fn pr_subcommand_requires_url() {
+        let error = Args::try_parse_from(["discuss", "pr"])
+            .expect_err("PR command without URL should fail");
+
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn pr_help_documents_private_first_automatic_workflow() {
+        let mut command = Args::command();
+        let pr = command
+            .find_subcommand_mut("pr")
+            .expect("pr subcommand should exist");
+        let help = pr.render_long_help().to_string();
+
+        for expected in [
+            "full https://github.com/OWNER/REPO/pull/NUMBER URL only",
+            "authenticated gh CLI",
+            "load the PR automatically",
+            "gh auth login",
+            "--unified <N>",
+            "Nothing is posted to GitHub",
+            "previews the exact GFM",
+        ] {
+            assert!(
+                help.contains(expected),
+                "expected pr help to contain {expected:?}\n{help}"
+            );
+        }
+    }
+
+    #[test]
     fn parses_demo_subcommand() {
         let args = Args::try_parse_from(["discuss", "demo"]).expect("demo should parse");
 
@@ -410,7 +505,8 @@ mod tests {
         let help = Args::command().render_long_help().to_string();
 
         assert!(
-            help.contains("demo") && help.contains("self-contained demo review session"),
+            help.contains("demo")
+                && help.contains("self-contained tour, example PR, and local-app review scenarios"),
             "expected help to list the demo subcommand\n{help}"
         );
     }
@@ -424,11 +520,13 @@ mod tests {
         let help = demo.render_long_help().to_string();
 
         for expected in [
-            "Open a self-contained demo review session with bundled example files.",
-            "no agent session, no LLM",
-            // The offline claim is scoped: the page still fetches Prism and the
-            // version check, so the help must not promise a network-free run.
-            "loads Prism syntax",
+            "Open three self-contained review scenarios from one command.",
+            "Feature tour",
+            "Example PR",
+            "production live proxy",
+            "No agent session, LLM, gh command, GitHub authentication",
+            "public network, or history archive is required",
+            "five ports",
             "Top-level flags must come first",
             "discuss --port 4000 --no-open demo",
         ] {

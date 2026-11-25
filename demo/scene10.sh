@@ -1,15 +1,15 @@
 #!/bin/bash
-# Scene 10: session.done with verdict arrives in the terminal. Run from the repo root.
-CAP=demo/captures/scene9.ndjsonl
+# Scene 10: the local PR simulation completes without publishing. Run from repo root.
+set -e
+CAP=demo/captures/scene6.ndjsonl
 clear
 
-printf '\033[1;36m⏺ agent\033[0m  Review finished — reading the transcript…\n\n'
-sleep 0.6
+printf '\033[1;36m⏺ demo\033[0m  The exact confirmed GFM was simulated locally.\n\n'
+sleep 0.7
 printf '\033[2m'
-grep '"session.done"' "$CAP" | head -c 700
+grep '"session.done"' "$CAP" | head -c 760
 printf '\033[0m…\n\n'
-sleep 1.2
-printf '\033[1;36m⏺ agent\033[0m  Verdict: \033[1;31mDecline\033[0m — "Ship after the risks section is fixed."\n'
-sleep 0.5
-printf '\033[1;36m⏺ agent\033[0m  I will fix the risks section and rerun the review. Same terminal session.\n'
-sleep 2.5
+sleep 1.0
+printf '\033[1;32m✓ Demo publication simulated locally\033[0m\n'
+printf '  No gh command ran. Nothing was sent to GitHub. No history was saved.\n'
+sleep 3

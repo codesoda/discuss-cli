@@ -2,11 +2,11 @@
 
 **Stop reviewing agent plans in the terminal.**
 
-<img src="docs/demo.gif" alt="Discuss CLI demo" width="100%">
+<img src="docs/demo.gif" alt="Discuss CLI demo showing the feature tour, a private-first PR review, and a running local-app review" width="100%">
 
 <sub>Higher-quality video: [docs/demo.mp4](docs/demo.mp4) · recording pipeline: [docs/demo-script.md](docs/demo-script.md)</sub>
 
-`discuss` opens Markdown, diffs, images, and local HTML prototypes in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
+`discuss` opens Markdown, diffs, images, private-first GitHub PRs, local HTML prototypes, and running HTTP/S websites in your browser. It adds anchored, PR-style threads to each one. Your Codex or Claude Code session reads your comments and replies in the margins. Same terminal session, no copy-paste.
 
 Anchored. Threaded. Bidirectional. No cloud.
 
@@ -21,13 +21,14 @@ Engineers share most non-code work as markdown: PRDs, design docs, RFCs, post-mo
 - **Image review** — `discuss mockup.png` renders the image. Drop numbered pins to anchor threads to coordinates.
 - **First-class diff review** — `discuss diff` opens the staged git diff with per-hunk syntax highlighting and line-anchored threads. It combines with the file list: `discuss plan.md diff HEAD~1..HEAD`.
 - **HTML prototype review** — `discuss prototype.html` renders the local prototype and its relative assets in a sandboxed iframe. Clicking an element anchors a thread to it with resilient selector fallbacks; Interact mode hands clicks back to the prototype.
+- **Live website review** — `discuss http://localhost:3000` proxies a running app through a second loopback origin, preserving root assets, app APIs, WebSockets, and SPA routes while injecting the element inspector.
 - **Rich rendering** — Prism highlights tagged code fences (e.g. ` ```rust `, ` ```diff-typescript `). ` ```mermaid ` fences render as diagrams. YAML frontmatter renders as a collapsed, threadable block. See [Prism's supported languages](https://prismjs.com/#supported-languages).
 - **Takes vs replies** — the agent posts *takes* (its view), humans post *replies*. The UI renders them distinctly so you can tell who said what.
 - **Agent pre-annotations** — an agent that edited the doc can open `kind: "agent"` threads before you start reading. Each one marks a change and explains it.
 - **Live source updates** — the agent can push new markdown into a running session via `POST /api/source`. Threads re-anchor without a restart.
 - **Bidirectional** — the browser writes through a local REST API. The agent reads stdout events and writes back through the same API.
 - **Navigation and themes** — a thread summary popover lists all threads and jumps to any of them. Open thread panels have ‹ / › prev/next buttons. The UI supports light, dark, and system themes.
-- **No cloud.** One Rust binary, one localhost server, one browser tab.
+- **No review cloud.** One Rust binary, loopback-only local servers, one browser tab.
 
 ## Install
 
@@ -83,7 +84,9 @@ discuss ./plan.md
 
 The browser opens at the address printed on stderr as `review UI/API: http://127.0.0.1:<port>`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
-First time here? `discuss demo` opens a self-contained six-file tour — the feature GIF, two markdown docs pre-annotated with agent takes, a diff, an image, and an HTML prototype — with a canned Demo agent that replies to your comments. Every file is embedded in the binary: no agent session, no LLM, no history writes. The page itself behaves like any other session, so it still loads Prism syntax highlighting from a CDN and checks for a newer release; with no network the demo runs, minus code highlighting and per-line diff comments.
+First time here? `discuss demo` starts three self-contained scenarios from one command. Use the switcher in the header to move between **Feature tour** (the existing six-file gallery), **Example PR** (a realistic synthetic private-first review with nested diffs, imported discussion, Viewed progression, editable Finish Review, and exact GFM confirmation), and **Local app** (a bundled running SPA inspected through the production live proxy). The Demo agent replies with deterministic canned takes.
+
+Everything runs in-process on distinct loopback origins. Demo mode never invokes `gh`, a publisher, or an LLM; it never writes history; and it needs no GitHub login, app process, JavaScript runtime, or public network. Synthetic identities, links, destinations, and the local publication simulation are labelled as demo data. With `--port N`, the launcher reserves `N` through `N + 4`; without it, the OS assigns all five listeners.
 
 ### Piping markdown via stdin
 
@@ -102,7 +105,7 @@ In stdin mode, `session.started` reports `source_file: "<stdin>"`. History archi
 discuss plan.md design.md notes.md
 ```
 
-All files open in one session with a left sidebar for switching. Threads, drafts, and resolutions are scoped per file. Sidebar badges show open-thread counts so you miss nothing. The transcript groups threads by file in CLI order. Duplicate paths fail loudly. `-` (stdin) can appear once anywhere in the list. History archives for multi-file sessions land under `<history-dir>/multi-<N>-files/`.
+All files open in one session with a left sidebar for switching. Repository-relative paths are grouped into an expandable folder tree; each folder can be collapsed independently, and selecting a file automatically reopens its ancestors. Threads, drafts, and resolutions are scoped per file. File and folder badges show open-thread counts so you miss nothing. The compact collapsed rail remains a flat icon view. The transcript groups threads by file in CLI order. Duplicate paths fail loudly. `-` (stdin) can appear once anywhere in the list. History archives for multi-file sessions land under `<history-dir>/multi-<N>-files/`.
 
 `.diff` / `.patch` files in the list render as diff review sections automatically.
 
@@ -129,6 +132,19 @@ Relative CSS, JavaScript, images, and fonts resolve from the HTML file's directo
 
 See [`examples/prototype.html`](examples/prototype.html) for a small fixture.
 
+### Reviewing a live website
+
+```sh
+discuss http://localhost:3000
+discuss https://example.test/path
+```
+
+A sole HTTP/S URL starts two loopback-only listeners: the Discuss UI/API and a fixed-upstream reverse proxy loaded by the iframe. The second origin prevents the app's `/`, `/api/*`, root-absolute assets, and WebSockets from colliding with Discuss routes. HTML responses have frame-blocking CSP/X-Frame-Options removed and receive an early service-worker guard plus the inspector; non-HTML bytes pass through unchanged. Same-upstream redirects stay proxied, while cross-origin redirects require an explicit choice. SPA routes are shown above the iframe and stored on element anchors.
+
+The live iframe permits scripts, same-origin app behavior, forms, modals, popups, and downloads, but cannot navigate the top-level Discuss tab. This is intended for local development apps and public pages, not arbitrary production compatibility. Upstream cookies do not implicitly carry to the loopback proxy; v1 has no `--cookie` or `--cookie-file` flags, browser-profile import, transparent SSO, or anti-bot bypass.
+
+`session.started` reports `mode: "live"`, the unchanged `upstreamUrl`, the actual `proxyUrl`, and the API `endpoints` map. Agents must use the reported API endpoints for all Discuss mutations—never `proxyUrl`, which is only the iframe's fixed-upstream website origin. With no `--port`, both listeners use independent OS-assigned ports. With explicit `--port N`, the API binds exactly to `N` and the proxy to `N + 1`; either collision fails before readiness.
+
 ### Reviewing a git diff
 
 ```sh
@@ -139,20 +155,40 @@ discuss diff main...feature     # branch comparison
 discuss plan.md diff            # plan + staged diff in one session
 ```
 
-Each changed file gets its own entry in the sidebar. Each hunk renders as a fenced `diff-<lang>` block, so Prism highlights both the diff and the underlying language. Line-anchored threads land directly on added or removed lines. Threads on code blocks carry a `lineRange {start, end}` field. `session.started` gains `mode` (`markdown` / `diff` / `mixed`) and `git_args` so agents know what they are reviewing.
+Each changed file gets its own entry in the expandable folder tree. Each hunk renders as a fenced `diff-<lang>` block with GitHub-like file-header, hunk, addition, deletion, and context colors. A local prefix-based fallback preserves diff coloring when Prism's language grammar is unavailable. Line-anchored threads land directly on added or removed lines. Threads on code blocks carry a `lineRange {start, end}` field. `session.started` gains `mode` (`markdown` / `diff` / `mixed`) and `git_args` so agents know what they are reviewing.
 
 Diff output is capped at 5 MB to keep the browser responsive. Override with `--max-diff-bytes <N>` (0 disables), `max_diff_bytes` in `discuss.config.toml`, or `DISCUSS_MAX_DIFF_BYTES`.
+
+### Reviewing a GitHub pull request privately
+
+```sh
+discuss pr https://github.com/acme/project/pull/123
+# Optional: reduce or expand unchanged hunk context
+# discuss pr https://github.com/acme/project/pull/123 --unified 4
+```
+
+PR mode accepts a full `https://github.com/OWNER/REPO/pull/NUMBER` URL only. It requires the [GitHub CLI](https://cli.github.com/) to be installed and authenticated with `gh auth login --hostname github.com`; when `gh` is missing, Discuss exits before starting a server and prints installation commands for macOS, Windows, and Linux. Discuss invokes `gh` directly for read-only GitHub access without requesting, storing, or receiving its token. It loads PR metadata and all existing discussion in parallel, uses `gh repo clone` plus the immutable PR ref in a temporary filtered clone, and generates one aggregate git diff exactly once. Diff hunks include ten unchanged lines by default; override that with `--unified <N>` (including `--unified 0` for no unchanged context). The resulting GFM overview and one diff file per changed path are imported automatically before review begins.
+
+The overview distinguishes issue comments, review summaries, and review threads while preserving authors, timestamps, IDs, and GitHub links. Resolvable inline review discussion is also anchored on its diff. Every textual hunk uses the configured unchanged context; binary and mode-only files remain visible but unanchorable.
+
+Everything created during review stays local by default. Diff file headers include the file's green addition and red deletion totals, are not generic thread click targets, and use a dedicated speech-bubble control for explicit whole-file local comments. Each changed-file header also includes a **Viewed** checkbox; marking it records the server timestamp and current immutable PR head SHA, shows an eye-style viewed indicator in the file tree (not an approval checkmark), and advances to the next unviewed changed file. Viewed progress survives reloads and is included in the final local transcript.
+
+**Finish review** opens a PR-specific editor with Approve, Request changes, and Comment only actions; an editable agent-generated summary; and explicit include controls (off by default) for local responses. A second, text-first GFM screen shows the exact selected destinations and text. Only **OK** authorizes Discuss to recheck the PR head and publish through the authenticated `gh` CLI. New inline comments are grouped into one GitHub review wherever possible, while replies target only confidently resolved existing review threads. Unanchorable, binary, outdated, or ambiguous items remain unpublished with a reason. Failures preserve the draft for retry; success makes the session read-only. Standalone PR comments are intentionally out of scope.
+
+`--verdict-options`, extra file arguments, shortened PR references, GitHub Enterprise URLs, and separate OAuth/token configuration are not supported in PR mode. To try this workflow without `gh`, authentication, or a real repository, run `discuss demo` and choose **Example PR**; its OK action is a local simulation that cannot call the real publisher.
 
 ## CLI
 
 | Command | Description |
 |---------|-------------|
 | `discuss <file>...` | Open one or more files (markdown, `.diff`/`.patch`, images, `.html`/`.htm`) in a browser review session |
+| `discuss <http-or-https-url>` | Review one running website through a fixed-upstream loopback proxy |
 | `discuss -` | Read markdown from stdin explicitly (once, anywhere in the file list) |
 | `<cmd> \| discuss` | Auto-detected stdin (non-TTY) — same as `discuss -` |
 | `discuss diff [args]` | Review a git diff (staged by default; `--unstaged` or range/commit args) |
 | `discuss <file>... diff [args]` | Review files and a git diff together in one session |
-| `discuss demo` | Self-contained demo session: bundled example files plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
+| `discuss pr <full-github-pr-url>` | Load a private-first GitHub PR review automatically through authenticated `gh`; publication remains confirmation-gated |
+| `discuss demo` | One self-contained launch with Feature tour, synthetic Example PR, and bundled Local app scenarios plus a canned Demo agent (top-level flags go first: `discuss --no-open demo`) |
 | `discuss update` | Check for a newer release and confirm interactively before installing |
 | `discuss update --check` | Check GitHub for a newer release (check only) |
 | `discuss update -y` | Download the latest release, verify checksum, self-replace |
@@ -161,11 +197,12 @@ Diff output is capped at 5 MB to keep the browser responsive. Override with `--m
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <N>` | OS-assigned | Bind this exact nonzero port; fail if occupied. Without it, the OS assigns a loopback port. |
+| `--port <N>` | OS-assigned | Bind this exact nonzero port; fail if occupied. Live review also uses `N + 1`; demo reserves `N` through `N + 4`. Without it, the OS assigns loopback ports. |
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
 | `--max-diff-bytes <N>` | `5242880` | (diff mode) Diff size cap; `0` disables |
+| `--unified <N>` | `10` | (`pr` subcommand) Unchanged context lines around each diff hunk |
 | `--verdict-options <SPEC>` | off | Offer finish-review choices; SPEC is `id[:label][:style][!]` separated by `\|`, e.g. `approved:Approve\|declined:Decline:negative!` |
 | `--verdict-prompt <TEXT>` | default prompt | Custom prompt text shown above verdict options; without `--verdict-options` it only warns on stderr |
 
@@ -230,7 +267,10 @@ Agents should use the exact URLs in `session.started.payload.endpoints` rather t
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread; optional `{decision}` body |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
 | `POST` | `/api/source` | Push new markdown into the running session: `{markdown, fileId?, threadAnchors}`. Each active thread on that file needs a new anchor or `"orphaned": true`. Coverage is strict; a partial list is rejected. Success bumps `sourceVersion` and broadcasts `source.updated`. Not supported for image or HTML files. |
-| `POST` | `/api/done` | Finish the review; requires a verdict body when verdict options are configured |
+| `POST` | `/api/pr/import` | PR mode only: internal/compatibility bearer-protected schema-v1 import endpoint; normal imports are automatic |
+| `POST` | `/api/pr/summary` | PR mode only: bearer-protected callback for the requested AI review summary |
+| `POST` | `/api/pr/publication-result` | PR mode only: internal/compatibility callback for applying a GitHub publication result |
+| `POST` | `/api/done` | Finish a non-PR review; requires a verdict body when verdict options are configured |
 | `DELETE` | `/api/threads/{id}` | Soft-delete (`kind = "user"` or `"agent"`; `"prepopulated"` is 403) |
 
 ## Stdout events
@@ -239,14 +279,17 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Ordinary sessions omit `proxyUrl`. |
-| `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret for summary callbacks, and compatibility import/publication-result endpoints. |
+| `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
 | `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |
 | `thread.deleted` | Soft-delete | `{threadId}` |
 | `source.updated` | A live source update was applied | `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` |
 | `prompt.suggest_done` | Idle timeout fired (`idle_timeout_secs`, default 600) | Includes `idle_for_secs` |
-| `session.done` | Final transcript payload | Includes optional `verdict` object when `--verdict-options` was used |
+| `pr.imported` | Discuss's automatic `gh` import is installed | Concrete overview/changed-file IDs, seeded imported-thread IDs, warnings, and anchoring/publication reminders |
+| `pr.summary.requested` | PR reviewer opens Finish review | Agent generates the editable summary and calls the supplied protected callback |
+| `pr.publish.requested` | Compatibility/test publication mode only | Exact grouped-review and existing-thread reply operations; normal CLI PR sessions publish directly through `gh` after OK |
+| `session.done` | Final transcript payload | Includes optional `verdict` for generic sessions or PR draft/publication metadata for a successfully published PR review |
 
 Draft keystrokes and agent takes broadcast via SSE only — they never surface on stdout.
 

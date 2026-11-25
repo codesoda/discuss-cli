@@ -5,6 +5,7 @@
 use std::future::pending;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,13 +15,319 @@ use discuss::server::demo::{
 use discuss::state::{FileKind, State, ThreadId};
 use discuss::{AppState, EventBus, EventEmitter, serve};
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 
 const SHORT_DELAY: Duration = Duration::from_millis(50);
 const SUPPRESSION_DELAY: Duration = Duration::from_millis(300);
+
+#[tokio::test]
+async fn one_demo_launch_serves_all_scenarios_and_simulates_pr_publication_offline() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let history = tempfile::tempdir().expect("temporary history");
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_discuss"))
+        .args([
+            "--no-open",
+            "--history-dir",
+            history.path().to_str().expect("UTF-8 history path"),
+            "demo",
+        ])
+        // If demo accidentally enters the real PR loader or publisher, `gh`
+        // cannot be resolved and this startup/flow test fails.
+        .env("PATH", "")
+        .env("HOME", home.path())
+        .env("DISCUSS_LOG", "")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start discuss demo");
+    let stdout = child.stdout.take().expect("captured stdout");
+    let mut stdout = BufReader::new(stdout);
+    let mut started_line = String::new();
+    timeout(Duration::from_secs(10), stdout.read_line(&mut started_line))
+        .await
+        .expect("session.started timeout")
+        .expect("read session.started");
+    let started: Value = serde_json::from_str(&started_line).expect("session.started JSON");
+    assert_eq!(started["kind"], "session.started");
+    assert_eq!(started["payload"]["mode"], "demo");
+    let payload = &started["payload"];
+    let scenarios = payload["scenarios"].as_array().expect("scenario list");
+    assert_eq!(scenarios.len(), 3);
+    assert_eq!(scenarios[0]["id"], "tour");
+    assert_eq!(scenarios[1]["id"], "pr");
+    assert_eq!(scenarios[2]["id"], "local-app");
+    let origins = scenarios
+        .iter()
+        .map(|scenario| {
+            let url = url::Url::parse(scenario["url"].as_str().expect("scenario URL"))
+                .expect("valid scenario URL");
+            assert_eq!(url.host_str(), Some("127.0.0.1"));
+            url.origin().ascii_serialization()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(origins.len(), 3, "each review UI has a distinct origin");
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("loopback client");
+    let tour_url = payload["apiBaseUrl"].as_str().expect("tour URL");
+    let pr_url = payload["examplePrUrl"].as_str().expect("PR URL");
+    let local_url = payload["localAppReviewUrl"]
+        .as_str()
+        .expect("local review URL");
+    let app_url = payload["localAppUpstreamUrl"]
+        .as_str()
+        .expect("app upstream URL");
+    let proxy_url = payload["localAppProxyUrl"].as_str().expect("app proxy URL");
+
+    for (url, active) in [(tour_url, "tour"), (local_url, "local-app")] {
+        let state = reqwest_json(
+            client
+                .get(format!("{url}/api/state"))
+                .send()
+                .await
+                .expect("scenario state request"),
+        )
+        .await;
+        let links = state["demoScenarios"].as_array().expect("demo links");
+        assert_eq!(links.len(), 3);
+        assert!(
+            links
+                .iter()
+                .any(|link| link["id"] == active && link["active"] == true)
+        );
+    }
+
+    let direct_html = client
+        .get(format!("{app_url}payments"))
+        .send()
+        .await
+        .expect("direct app route")
+        .text()
+        .await
+        .expect("direct app HTML");
+    assert!(direct_html.contains("/demo-app.css"));
+    assert!(!direct_html.contains("data-discuss-parent-origin"));
+    let proxied_html = client
+        .get(format!("{proxy_url}/payments"))
+        .send()
+        .await
+        .expect("proxied app route")
+        .text()
+        .await
+        .expect("proxied app HTML");
+    assert!(proxied_html.contains("data-discuss-parent-origin"));
+    assert!(
+        client
+            .get(format!("{proxy_url}/demo-app.css"))
+            .send()
+            .await
+            .expect("root-relative CSS")
+            .status()
+            .is_success()
+    );
+    let app_api = reqwest_json(
+        client
+            .get(format!("{proxy_url}/api/dashboard"))
+            .send()
+            .await
+            .expect("same-app API"),
+    )
+    .await;
+    assert_eq!(app_api["status"], "local API connected");
+
+    let element_thread = post_reqwest_json(
+        &client,
+        &format!("{local_url}/api/threads"),
+        serde_json::json!({
+            "fileId": "f-1",
+            "snippet": "Retry rollout control",
+            "text": "Clarify whether advancing is reversible.",
+            "elementAnchor": {
+                "selector": "#deploy-card",
+                "fallbacks": ["[aria-label='Retry rollout control']"],
+                "tag": "section",
+                "accessibleName": "Retry rollout control",
+                "route": "/payments",
+                "outerHtml": "<section id=\"deploy-card\" aria-label=\"Retry rollout control\">"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(element_thread["elementAnchor"]["route"], "/payments");
+    let element_thread_id = element_thread["id"].as_str().expect("element thread id");
+    let local_take = timeout(Duration::from_secs(4), async {
+        loop {
+            let state = reqwest_json(
+                client
+                    .get(format!("{local_url}/api/state"))
+                    .send()
+                    .await
+                    .expect("local state"),
+            )
+            .await;
+            if let Some(take) = state["takes"][element_thread_id]
+                .as_array()
+                .and_then(|takes| takes.first())
+            {
+                break take.clone();
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("canned local-app response");
+    assert!(
+        local_take["text"]
+            .as_str()
+            .expect("local take text")
+            .starts_with(DEMO_AGENT_PREFIX)
+    );
+
+    let pr_state = loop {
+        let state = reqwest_json(
+            client
+                .get(format!("{pr_url}/api/state"))
+                .send()
+                .await
+                .expect("PR state"),
+        )
+        .await;
+        if state["prSession"]["phase"] == "reviewing"
+            && !state["takes"].as_object().unwrap().is_empty()
+        {
+            break state;
+        }
+        sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(pr_state["prSession"]["demo"], true);
+    assert_eq!(pr_state["files"].as_array().unwrap().len(), 5);
+    assert_eq!(pr_state["threads"][0]["id"], "gh-review-thread-900003");
+    assert!(
+        pr_state["takes"]["gh-review-thread-900003"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(DEMO_AGENT_PREFIX)
+    );
+
+    let first_diff_id = pr_state["prSession"]["files"][0]["fileId"]
+        .as_str()
+        .expect("PR diff id");
+    let viewed = reqwest_json(
+        client
+            .post(format!("{pr_url}/api/pr/files/{first_diff_id}/viewed"))
+            .send()
+            .await
+            .expect("viewed request")
+            .error_for_status()
+            .expect("viewed accepted"),
+    )
+    .await;
+    assert_eq!(
+        viewed["headSha"],
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
+
+    let draft = post_reqwest_json(
+        &client,
+        &format!("{pr_url}/api/pr/prepare"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(draft["summaryPending"], false);
+    assert!(draft["summary"].as_str().unwrap().contains("Demo review"));
+    let items = draft["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "itemId": item["id"],
+                "include": item["publishable"],
+                "text": item["text"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let updated = post_reqwest_json(
+        &client,
+        &format!("{pr_url}/api/pr/draft"),
+        serde_json::json!({
+            "draftId": draft["draftId"],
+            "revision": draft["revision"],
+            "action": "commentOnly",
+            "summary": format!("{} Edited locally.", draft["summary"].as_str().unwrap()),
+            "items": items,
+        }),
+    )
+    .await;
+    let confirmation = post_reqwest_json(
+        &client,
+        &format!("{pr_url}/api/pr/confirm"),
+        serde_json::json!({
+            "draftId": updated["draftId"],
+            "revision": updated["revision"],
+        }),
+    )
+    .await;
+    assert!(
+        confirmation["previewGfm"]
+            .as_str()
+            .unwrap()
+            .contains("Action: COMMENT")
+    );
+    assert!(
+        confirmation["previewGfm"]
+            .as_str()
+            .unwrap()
+            .contains("Reply to review thread 900003")
+    );
+    let publish = post_reqwest_json(
+        &client,
+        &format!("{pr_url}/api/pr/publish"),
+        serde_json::json!({
+            "draftId": confirmation["draftId"],
+            "revision": confirmation["revision"],
+            "digest": confirmation["digest"],
+        }),
+    )
+    .await;
+    assert_eq!(publish["status"], "simulating");
+
+    timeout(Duration::from_secs(8), child.wait())
+        .await
+        .expect("demo exits after simulation")
+        .expect("wait for demo");
+    let mut remaining_stdout = String::new();
+    stdout
+        .read_to_string(&mut remaining_stdout)
+        .await
+        .expect("read remaining events");
+    let events = remaining_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    let event_kinds = events
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    let done = events
+        .iter()
+        .find(|event| event["kind"] == "session.done")
+        .expect("session.done event");
+    assert_eq!(done["payload"]["prSession"]["demo"], true);
+    assert!(!event_kinds.contains(&"pr.summary.requested"));
+    assert!(!event_kinds.contains(&"pr.publish.requested"));
+    assert!(
+        std::fs::read_dir(history.path())
+            .expect("read history")
+            .next()
+            .is_none()
+    );
+}
 
 #[tokio::test]
 async fn demo_state_seeds_four_agent_threads_and_allocates_ids_after_them() {
@@ -441,6 +748,28 @@ async fn demo_done_writes_no_history_archive() {
 }
 
 // ---------- helpers ----------
+
+async fn reqwest_json(response: reqwest::Response) -> Value {
+    let status = response.status();
+    let bytes = response.bytes().await.expect("response body");
+    assert!(
+        status.is_success(),
+        "HTTP {status}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).expect("response JSON")
+}
+
+async fn post_reqwest_json(client: &reqwest::Client, url: &str, body: Value) -> Value {
+    let response = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&body).expect("request JSON"))
+        .send()
+        .await
+        .expect("POST request");
+    reqwest_json(response).await
+}
 
 fn shared_stdout() -> Arc<Mutex<Vec<u8>>> {
     Arc::new(Mutex::new(Vec::new()))

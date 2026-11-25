@@ -3863,6 +3863,82 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
 }
 
 #[tokio::test]
+async fn live_html_threads_require_routes_and_detachment_is_route_scoped() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let html_path = temp_dir.path().join("live.html");
+    fs::write(&html_path, "fixture").expect("write fixture");
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_source(html_source(&html_path, "", false))
+        .with_live_frame_url("http://127.0.0.1:49153/start");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let without_route = post_json_path(
+        addr,
+        "/api/threads",
+        r##"{"anchorStart":0,"anchorEnd":0,"snippet":"Buy","text":"Missing route","elementAnchor":{"selector":"#buy","tag":"button","outerHtml":"<button>Buy</button>"}}"##,
+    )
+    .await;
+    assert!(without_route.starts_with("HTTP/1.1 400"), "{without_route}");
+
+    for (selector, route) in [("#one", "/one"), ("#two", "/two?tab=2#details")] {
+        let created = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({
+                "anchorStart": 0,
+                "anchorEnd": 0,
+                "snippet": selector,
+                "text": "Route scoped",
+                "elementAnchor": {
+                    "selector": selector,
+                    "tag": "button",
+                    "accessibleName": selector,
+                    "route": route,
+                    "outerHtml": format!("<button id=\"{}\">Route</button>", &selector[1..]),
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        assert!(created.starts_with("HTTP/1.1 200"), "{created}");
+    }
+
+    let detached = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/two?tab=2#details","detachedThreadIds":["u-2"]}"#,
+    )
+    .await;
+    assert!(detached.starts_with("HTTP/1.1 200"), "{detached}");
+    assert_eq!(response_json(&detached)["route"], "/two?tab=2#details");
+    let first_route_resolution = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/one","detachedThreadIds":[]}"#,
+    )
+    .await;
+    assert!(
+        first_route_resolution.starts_with("HTTP/1.1 200"),
+        "{first_route_resolution}"
+    );
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(snapshot["threads"][0].get("orphaned").is_none());
+    assert_eq!(snapshot["threads"][1]["orphaned"], true);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn html_asset_route_rejects_parent_and_symlink_escape() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let root = temp_dir.path().join("prototype");
@@ -4019,6 +4095,570 @@ async fn html_thread_creation_validates_serializes_and_reports_detachment() {
         .expect("server shutdown should succeed");
 }
 
+#[tokio::test]
+async fn pr_backend_import_draft_publish_retry_and_success_protocol() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let secret = "a".repeat(64);
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(32)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_pr_session(
+        discuss::pr::GithubPrUrl::parse("https://github.com/acme/project/pull/51").unwrap(),
+        secret.clone(),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0)
+    .with_source(discuss::state::Source {
+        files: vec![discuss::state::File {
+            id: discuss::state::FileId("pr-overview".to_string()),
+            path: "pr-overview.md".to_string(),
+            kind: discuss::state::FileKind::Markdown,
+            content: "loading".to_string(),
+        }],
+    });
+    let server = tokio::spawn(serve(addr, app_state.clone(), pending()));
+    wait_for_server(addr).await;
+
+    let bundle = json!({
+        "schemaVersion": 1,
+        "importId": format!("acme/project#51@{}", "b".repeat(40)),
+        "pr": {
+            "owner": "acme", "repo": "project", "number": 51,
+            "url": "https://github.com/acme/project/pull/51",
+            "title": "Improve it", "body": "Description", "state": "OPEN", "isDraft": false,
+            "author": {"login": "octocat", "url": "https://github.com/octocat"},
+            "base": {"ref": "main", "sha": "a".repeat(40)},
+            "head": {"ref": "feature", "sha": "b".repeat(40)}
+        },
+        "overviewMarkdown": "# PR #51\n\nExisting discussion.",
+        "diff": {"contextLines": 10, "contextSource": "git-unified-10"},
+        "files": [{
+            "key": "src/lib.rs", "oldPath": "src/lib.rs", "newPath": "src/lib.rs",
+            "status": "modified", "binary": false,
+            "diff": "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        }],
+        "discussions": [{
+            "id": "review-thread:456", "kind": "reviewThread",
+            "author": {"login": "reviewer", "url": "https://github.com/reviewer"},
+            "createdAt": "2026-09-01T00:00:00Z",
+            "url": "https://github.com/acme/project/pull/51#discussion_r456",
+            "body": "Please fix", "reviewId": 123, "rootCommentId": 456,
+            "resolved": false, "outdated": false, "comments": []
+        }],
+        "seedThreads": [{
+            "discussionId": "review-thread:456", "fileKey": "src/lib.rs",
+            "rootCommentId": 456, "githubThreadNodeId": "PRRT_node", "path": "src/lib.rs",
+            "line": 1, "side": "RIGHT", "startLine": null, "startSide": null,
+            "commitId": "b".repeat(40), "body": "Please fix",
+            "url": "https://github.com/acme/project/pull/51#discussion_r456",
+            "author": {"login": "reviewer", "url": "https://github.com/reviewer"},
+            "createdAt": "2026-09-01T00:00:00Z", "resolved": false, "outdated": false
+        }]
+    })
+    .to_string();
+
+    let unauthorized = post_json_with_bearer(addr, "/api/pr/import", &bundle, None).await;
+    assert!(unauthorized.starts_with("HTTP/1.1 401"), "{unauthorized}");
+    let imported = post_json_with_bearer(addr, "/api/pr/import", &bundle, Some(&secret)).await;
+    assert!(imported.starts_with("HTTP/1.1 200"), "{imported}");
+    let imported_json = response_json(&imported);
+    assert_eq!(imported_json["idempotent"], false);
+    assert_eq!(
+        imported_json["seededThreadIds"],
+        json!(["gh-review-thread-456"])
+    );
+    let diff_file_id = imported_json["files"][0]["fileId"]
+        .as_str()
+        .expect("diff file id")
+        .to_string();
+    let imported_event = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["kind"] == "pr.imported")
+        .expect("agent receives concrete imported file IDs");
+    assert_eq!(imported_event["payload"]["overviewFileId"], "pr-overview");
+    assert_eq!(
+        imported_event["payload"]["files"][0]["fileId"],
+        diff_file_id
+    );
+    assert_eq!(
+        imported_event["payload"]["seededThreadIds"],
+        json!(["gh-review-thread-456"])
+    );
+    let repeated = post_json_with_bearer(addr, "/api/pr/import", &bundle, Some(&secret)).await;
+    assert_eq!(response_json(&repeated)["idempotent"], true);
+    let mut changed_bundle: Value = serde_json::from_str(&bundle).unwrap();
+    changed_bundle["overviewMarkdown"] = json!("# changed");
+    let conflicting = post_json_with_bearer(
+        addr,
+        "/api/pr/import",
+        &changed_bundle.to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(conflicting.starts_with("HTTP/1.1 409"), "{conflicting}");
+
+    let generic_done = post_path_no_body(addr, "/api/done").await;
+    assert!(generic_done.starts_with("HTTP/1.1 409"), "{generic_done}");
+    assert_eq!(
+        response_json(&generic_done)["error"]["code"],
+        "pr_publication_required"
+    );
+
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["sourceVersion"], 1);
+    assert_eq!(snapshot["files"].as_array().unwrap().len(), 2);
+    assert_eq!(snapshot["threads"][0]["anchorStart"], 3);
+    assert_eq!(
+        snapshot["threads"][0]["lineRange"],
+        json!({"start": 3, "end": 3})
+    );
+    assert!(snapshot["prSession"].get("secret").is_none());
+    assert!(
+        snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let overview_viewed = post_path_no_body(addr, "/api/pr/files/pr-overview/viewed").await;
+    assert!(
+        overview_viewed.starts_with("HTTP/1.1 404"),
+        "{overview_viewed}"
+    );
+    let viewed = post_path_no_body(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(viewed.starts_with("HTTP/1.1 200"), "{viewed}");
+    let viewed = response_json(&viewed);
+    assert_eq!(viewed["fileId"], diff_file_id);
+    assert_eq!(viewed["headSha"], "b".repeat(40));
+    DateTime::parse_from_rfc3339(viewed["viewedAt"].as_str().unwrap())
+        .expect("viewedAt should be RFC3339");
+    let viewed_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(viewed_snapshot["prSession"]["viewedFiles"][0], viewed);
+
+    let cleared = delete_path(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(cleared.starts_with("HTTP/1.1 200"), "{cleared}");
+    let cleared_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(
+        cleared_snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let local_thread = post_json_path(
+        addr,
+        "/api/threads",
+        &json!({
+            "fileId": diff_file_id, "anchorStart": 3, "anchorEnd": 3,
+            "lineRange": {"start": 1, "end": 1}, "snippet": "hunk", "text": "Local comment"
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(local_thread.starts_with("HTTP/1.1 200"), "{local_thread}");
+    let imported_reply = post_json_path(
+        addr,
+        "/api/threads/gh-review-thread-456/replies",
+        r#"{"text":"Local reply"}"#,
+    )
+    .await;
+    assert!(
+        imported_reply.starts_with("HTTP/1.1 200"),
+        "{imported_reply}"
+    );
+
+    let prepare = post_json_path(addr, "/api/pr/prepare", "{}").await;
+    assert!(prepare.starts_with("HTTP/1.1 202"), "{prepare}");
+    let prepare_json = response_json(&prepare);
+    assert!(
+        prepare_json["draft"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["include"] == false)
+    );
+    let events = stdout_string(&stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "pr.summary.requested")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "pr.publish.requested")
+            .count(),
+        0
+    );
+    let summary_request_id = prepare_json["requestId"].as_str().unwrap();
+    let summary = post_json_with_bearer(
+        addr,
+        "/api/pr/summary",
+        &json!({"requestId": summary_request_id, "summary": "Review summary"}).to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(summary.starts_with("HTTP/1.1 200"), "{summary}");
+    let draft = response_json(&summary);
+    let updates = draft["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            json!({
+                "itemId": item["id"], "include": true,
+                "text": format!("publish {}", item["id"].as_str().unwrap())
+            })
+        })
+        .collect::<Vec<_>>();
+    let stale = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"],
+            "revision": draft["revision"].as_u64().unwrap() - 1,
+            "action": "requestChanges", "summary": "Edited summary", "items": updates
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(stale.starts_with("HTTP/1.1 409"), "{stale}");
+
+    let mut immutable_target_update = updates.clone();
+    immutable_target_update[0]["destination"] = json!({"kind": "none"});
+    let immutable = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"], "revision": draft["revision"],
+            "action": "requestChanges", "summary": "Edited summary",
+            "items": immutable_target_update
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(immutable.starts_with("HTTP/1.1 422"), "{immutable}");
+
+    let updated = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"], "revision": draft["revision"],
+            "action": "requestChanges", "summary": "Edited summary", "items": updates
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(updated.starts_with("HTTP/1.1 200"), "{updated}");
+    let updated = response_json(&updated);
+    let confirmed = post_json_path(
+        addr,
+        "/api/pr/confirm",
+        &json!({"draftId": updated["draftId"], "revision": updated["revision"]}).to_string(),
+    )
+    .await;
+    assert!(confirmed.starts_with("HTTP/1.1 200"), "{confirmed}");
+    let confirmed = response_json(&confirmed);
+    assert!(
+        confirmed["previewGfm"]
+            .as_str()
+            .unwrap()
+            .contains("Edited summary")
+    );
+    assert!(
+        confirmed["previewHtml"]
+            .as_str()
+            .unwrap()
+            .contains("Edited summary")
+    );
+    assert_eq!(
+        stdout_string(&stdout)
+            .lines()
+            .filter(|line| line.contains("pr.publish.requested"))
+            .count(),
+        0
+    );
+
+    let publish_body = json!({
+        "draftId": confirmed["draftId"], "revision": confirmed["revision"],
+        "digest": confirmed["digest"]
+    })
+    .to_string();
+    let publish = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert!(publish.starts_with("HTTP/1.1 200"), "{publish}");
+    let first_publish_id = response_json(&publish)["requestId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repeated_publish = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert_eq!(
+        response_json(&repeated_publish)["requestId"],
+        first_publish_id
+    );
+    let locked_thread = post_json_path(
+        addr,
+        "/api/threads",
+        &json!({
+            "fileId": diff_file_id, "anchorStart": 3, "anchorEnd": 3,
+            "lineRange": {"start": 3, "end": 3}, "snippet": "new", "text": "too late"
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(locked_thread.starts_with("HTTP/1.1 409"), "{locked_thread}");
+    assert_eq!(
+        response_json(&locked_thread)["error"]["code"],
+        "pr_publication_locked"
+    );
+    let publish_events = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["kind"] == "pr.publish.requested")
+        .collect::<Vec<_>>();
+    assert_eq!(publish_events.len(), 1);
+    assert_eq!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["event"],
+        "REQUEST_CHANGES"
+    );
+    assert_eq!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["body"],
+        "Edited summary"
+    );
+    assert!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["comments"][0]
+            .get("operationId")
+            .is_none()
+    );
+    assert!(
+        publish_events[0]["payload"]["replies"][0]["githubRequest"]
+            .get("operationId")
+            .is_none()
+    );
+    assert_eq!(
+        publish_events[0]["payload"]["replies"][0]["rootCommentId"],
+        456
+    );
+    let reply_operation = publish_events[0]["payload"]["replies"][0]["operationId"]
+        .as_str()
+        .unwrap();
+
+    let failure = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": first_publish_id, "status": "failed",
+            "replies": [{
+                "operationId": reply_operation, "rootCommentId": 456, "id": 888,
+                "url": "https://github.com/acme/project/pull/51#discussion_r888"
+            }],
+            "completedOperations": [reply_operation], "unknownOperations": [],
+            "error": {"code": "github_error", "message": "safe failure"}
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(failure.starts_with("HTTP/1.1 200"), "{failure}");
+    let failed_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(failed_snapshot["prSession"]["phase"], "failed");
+    assert_eq!(
+        failed_snapshot["prSession"]["draft"]["summary"],
+        "Edited summary"
+    );
+    let completed_reply_item = failed_snapshot["prSession"]["draft"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["destination"]["kind"] == "existingReviewThread")
+        .expect("reply draft item");
+    assert_eq!(completed_reply_item["completed"], true);
+
+    let retry = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert!(retry.starts_with("HTTP/1.1 200"), "{retry}");
+    let retry_id = response_json(&retry)["requestId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(retry_id, first_publish_id);
+    let latest_publish = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .rfind(|event| event["kind"] == "pr.publish.requested")
+        .unwrap();
+    assert!(
+        latest_publish["payload"]["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let incomplete_success = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": retry_id, "status": "succeeded",
+            "replies": [], "completedOperations": [], "unknownOperations": []
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(
+        incomplete_success.starts_with("HTTP/1.1 400"),
+        "{incomplete_success}"
+    );
+
+    let success = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": retry_id, "status": "succeeded",
+            "review": {"id": 999, "url": "https://github.com/acme/project/pull/51#pullrequestreview-999"},
+            "replies": [], "completedOperations": ["review"], "unknownOperations": []
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(success.starts_with("HTTP/1.1 200"), "{success}");
+    let events = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    assert_eq!(events.last().unwrap()["kind"], "session.done");
+    assert_eq!(
+        events.last().unwrap()["payload"]["prSession"]["phase"],
+        "published"
+    );
+    timeout(Duration::from_secs(3), server)
+        .await
+        .expect("PR success should trigger delayed shutdown")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn pr_routes_are_unavailable_outside_pr_sessions() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let response = post_json_path(addr, "/api/pr/prepare", "{}").await;
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    assert_eq!(response_json(&response)["error"]["code"], "not_pr_session");
+    shutdown_tx.send(()).unwrap();
+    timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ui_prefs_round_trip_to_disk_and_seed_the_page() {
+    let prefs_dir = tempfile::tempdir().expect("temp dir");
+    let prefs_path = prefs_dir.path().join("prefs.json");
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Review Plan\n\nBody text.")
+        .with_prefs_path(&prefs_path);
+    let (shutdown_tx, shutdown_rx_signal) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx_signal.await;
+    }));
+    wait_for_server(addr).await;
+
+    let saved = post_json_path(addr, "/api/prefs", r#"{"cmdEnterToSend":false}"#).await;
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    let body: Value = serde_json::from_str(response_body(&saved)).expect("prefs response json");
+    assert_eq!(body["prefs"]["cmdEnterToSend"], json!(false));
+
+    // A second setting must not clobber the first.
+    let merged = post_json_path(addr, "/api/prefs", r#"{"theme":"dark"}"#).await;
+    let merged_body: Value = serde_json::from_str(response_body(&merged)).expect("merged json");
+    assert_eq!(merged_body["prefs"]["cmdEnterToSend"], json!(false));
+    assert_eq!(merged_body["prefs"]["theme"], json!("dark"));
+
+    let stored = discuss::prefs::load(&prefs_path);
+    assert_eq!(stored.cmd_enter_to_send, Some(false));
+    assert_eq!(stored.theme, Some(discuss::prefs::Theme::Dark));
+
+    // The page must carry the saved values, since the browser's own storage is
+    // scoped to this session's port and starts empty on the next run.
+    let page = get_root(addr).await;
+    assert!(
+        page.contains(r#""cmdEnterToSend":false"#),
+        "prefs missing from page"
+    );
+    assert!(page.contains("window.__DISCUSS_PREFS__ = {"));
+
+    let bad_theme = post_json_path(addr, "/api/prefs", r#"{"theme":"neon"}"#).await;
+    assert!(bad_theme.starts_with("HTTP/1.1 400"), "{bad_theme}");
+    let unknown_key = post_json_path(addr, "/api/prefs", r#"{"nope":1}"#).await;
+    assert!(unknown_key.starts_with("HTTP/1.1 400"), "{unknown_key}");
+    let empty = post_json_path(addr, "/api/prefs", "{}").await;
+    assert!(empty.starts_with("HTTP/1.1 400"), "{empty}");
+    // The rejected writes must not have touched the stored preferences.
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    // A demo must answer the page coherently without reaching into the user's
+    // home directory, even with a saved prefs file in place.
+    let demo_addr = free_loopback_addr();
+    let demo_state = AppState::for_process()
+        .with_markdown_source("# Demo\n\nBody text.")
+        .with_prefs_path(&prefs_path)
+        .with_offline_demo();
+    let (demo_shutdown_tx, demo_shutdown_rx) = oneshot::channel();
+    let demo_server = tokio::spawn(serve(demo_addr, demo_state, async move {
+        let _ = demo_shutdown_rx.await;
+    }));
+    wait_for_server(demo_addr).await;
+
+    let demo_response = post_json_path(demo_addr, "/api/prefs", r#"{"theme":"light"}"#).await;
+    assert!(demo_response.starts_with("HTTP/1.1 200"), "{demo_response}");
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+    // And the demo page renders with defaults, not the developer's own prefs.
+    assert!(
+        !get_root(demo_addr)
+            .await
+            .contains(r#"<script id="discuss-prefs">"#)
+    );
+
+    demo_shutdown_tx
+        .send(())
+        .expect("send demo shutdown signal");
+    timeout(Duration::from_secs(1), demo_server)
+        .await
+        .expect("demo server exits within timeout")
+        .expect("demo server task should not panic")
+        .expect("demo server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
@@ -4142,10 +4782,122 @@ async fn assert_verdict_rejection_is_noop_then_valid(invalid_body: &str, expecte
     );
 }
 
+#[tokio::test]
+async fn browser_mutations_reject_cross_origin_requests_but_allow_originless_clients() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, std::future::pending()));
+    wait_for_server(addr).await;
+
+    let rejected = post_with_headers(
+        addr,
+        "/api/done",
+        &[
+            ("Origin", "http://127.0.0.1:49999"),
+            ("Sec-Fetch-Site", "same-site"),
+        ],
+    )
+    .await;
+    assert!(rejected.starts_with("HTTP/1.1 403"), "{rejected}");
+    assert_eq!(
+        response_json(&rejected)["error"]["code"],
+        "cross_origin_request"
+    );
+    assert!(
+        get_path(addr, "/api/state")
+            .await
+            .starts_with("HTTP/1.1 200"),
+        "cross-origin Done must not stop the session"
+    );
+
+    let mut rebound = TcpStream::connect(addr)
+        .await
+        .expect("connect rebound request");
+    rebound
+        .write_all(
+            b"POST /api/heartbeat HTTP/1.1\r\nHost: attacker.example\r\nOrigin: http://attacker.example\r\nSec-Fetch-Site: same-origin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .expect("write rebound request");
+    let mut rebound_response = String::new();
+    rebound
+        .read_to_string(&mut rebound_response)
+        .await
+        .expect("read rebound response");
+    assert!(
+        rebound_response.starts_with("HTTP/1.1 403"),
+        "forged matching Host/Origin must not bypass loopback origin checks: {rebound_response}"
+    );
+
+    let origin = format!("http://{addr}");
+    let same_origin = post_with_headers(
+        addr,
+        "/api/heartbeat",
+        &[("Origin", &origin), ("Sec-Fetch-Site", "same-origin")],
+    )
+    .await;
+    assert!(same_origin.starts_with("HTTP/1.1 200"), "{same_origin}");
+
+    let done = post_path_no_body(addr, "/api/done").await;
+    assert!(done.starts_with("HTTP/1.1 200"), "{done}");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
     try_post_json_path(addr, path, body)
         .await
         .expect("POST request should succeed")
+}
+
+async fn post_json_with_bearer(
+    addr: SocketAddr,
+    path: &str,
+    body: &str,
+    bearer: Option<&str>,
+) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let authorization = bearer
+        .map(|secret| format!("Authorization: Bearer {secret}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n{authorization}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
+async fn post_with_headers(addr: SocketAddr, path: &str, headers: &[(&str, &str)]) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\n{extra_headers}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn post_path_no_body(addr: SocketAddr, path: &str) -> String {

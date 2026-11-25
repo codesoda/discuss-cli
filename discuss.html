@@ -57,11 +57,44 @@
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/line-numbers/prism-line-numbers.min.css">
 <link rel="stylesheet" href="https://unpkg.com/prismjs@1.30.0/plugins/diff-highlight/prism-diff-highlight.min.css">
 
+<!-- Preference plumbing. Every session binds a fresh port, so browser storage
+     is scoped to one run and forgets everything between reviews. The CLI owns
+     these values (~/.discuss/prefs.json) and injects them just below as
+     window.__DISCUSS_PREFS__; each change updates that in-page copy at once
+     and is posted back to the CLI. -->
+<script id="discuss-prefs-client">
+(function () {
+  function prefs() {
+    if (!window.__DISCUSS_PREFS__ || typeof window.__DISCUSS_PREFS__ !== 'object') {
+      window.__DISCUSS_PREFS__ = {};
+    }
+    return window.__DISCUSS_PREFS__;
+  }
+
+  window.discussReadPref = function (key, fallback) {
+    var saved = prefs();
+    return Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : fallback;
+  };
+
+  window.discussWritePref = function (key, value) {
+    prefs()[key] = value;
+    var body = {};
+    body[key] = value;
+    try {
+      fetch('/api/prefs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).catch(function () {});
+    } catch (_) {}
+  };
+})();
+</script>
+
 <!-- Pre-paint theme bootstrap: prevents flash of wrong theme on reload. -->
 <script id="discuss-theme-bootstrap">
 (function () {
-  var stored = null;
-  try { stored = localStorage.getItem('discuss-theme'); } catch (_) {}
+  var stored = window.discussReadPref('theme', null);
   var mode = (stored === 'light' || stored === 'dark') ? stored : 'system';
   var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   var effective = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
@@ -80,6 +113,7 @@
     --ink: #1a1a1a;
     --muted: #666;
     --accent: #0b5fff;
+    --link: #0b5fff;
     --accent-soft: rgba(11, 95, 255, 0.10);
     --accent-hover: rgba(11, 95, 255, 0.05);
     --accent-dashed: rgba(11, 95, 255, 0.35);
@@ -123,7 +157,15 @@
     --accent-dashed-strong: rgba(11, 95, 255, 0.5);
     --teal: #0d9488;
     --grip: rgba(0, 0, 0, 0.2);
+    --modal-backdrop: rgba(255, 255, 255, 0.32);
     --highlight-active: rgba(255, 236, 139, 0.55);
+    --diff-file-header-bg: #f6f8fa;
+    --diff-hunk-bg: #ddf4ff;
+    --diff-hunk-ink: #0550ae;
+    --diff-add-bg: #dafbe1;
+    --diff-add-ink: #116329;
+    --diff-delete-bg: #ffebe9;
+    --diff-delete-ink: #82071e;
     --header-h: 54px;
     --left-w: 60%;
     --divider-w: 6px;
@@ -137,6 +179,7 @@
     --ink: #e8e8e6;
     --muted: #a8a8a4;
     --accent: #5a9bff;
+    --link: #7cb0ff;
     --accent-soft: rgba(90, 155, 255, 0.18);
     --accent-hover: rgba(90, 155, 255, 0.10);
     --accent-dashed: rgba(90, 155, 255, 0.45);
@@ -176,9 +219,17 @@
     --accent-dashed-strong: rgba(90, 155, 255, 0.6);
     --teal: #3fbfae;
     --grip: rgba(255, 255, 255, 0.28);
+    --modal-backdrop: rgba(40, 40, 40, 0.32);
     /* Dimmer and warmer than the light tint: at 55% the light yellow washes out
        to a pale olive that --ink can no longer sit on legibly (2.7:1). */
     --highlight-active: rgba(240, 200, 96, 0.22);
+    --diff-file-header-bg: #161b22;
+    --diff-hunk-bg: #121d2f;
+    --diff-hunk-ink: #a5d6ff;
+    --diff-add-bg: #12261e;
+    --diff-add-ink: #7ee787;
+    --diff-delete-bg: #2d1519;
+    --diff-delete-ink: #ffa198;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -291,6 +342,31 @@
   header .thread-summary-status { color: var(--pending-dark); font-size: 12px; }
   header .thread-summary-status.resolved { color: var(--ok-ink); }
   header .spacer { flex: 1; }
+  .demo-scenarios {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .demo-scenarios[hidden] { display: none; }
+  .demo-scenarios a {
+    padding: 5px 9px;
+    border-radius: 5px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .demo-scenarios a:hover { background: var(--accent-hover); color: var(--ink); }
+  .demo-scenarios a[aria-current="page"] {
+    background: var(--accent);
+    color: var(--accent-ink);
+    pointer-events: none;
+  }
   header .toggle {
     font: inherit;
     font-size: 12px;
@@ -533,6 +609,116 @@
     color: var(--ink);
   }
   .verdict-error .mutation-error { margin-top: 12px; }
+
+  .pr-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    max-width: min(42vw, 620px);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pr-header[hidden] { display: none; }
+  .pr-header a { color: var(--accent); text-decoration: none; }
+  .pr-header a:hover { text-decoration: underline; }
+  .pr-header-main, .pr-header-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-header-main { color: var(--ink); font-weight: 600; }
+  .pr-header-detail { max-width: 340px; }
+  .pr-header-separator { color: var(--line-strong); }
+
+  .pr-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 190;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--modal-backdrop);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .pr-modal[hidden] { display: none; }
+  .pr-dialog {
+    width: min(820px, 100%);
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    background: var(--card);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.20);
+    padding: 20px;
+  }
+  .pr-dialog h2 { margin: 0; font-size: 19px; }
+  .pr-dialog h3 { margin: 18px 0 8px; font-size: 14px; }
+  .pr-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+  .pr-phase-label { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .pr-status { min-height: 20px; margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+  .pr-status.busy::before { content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 8px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: pr-spin 0.75s linear infinite; vertical-align: -2px; }
+  @keyframes pr-spin { to { transform: rotate(360deg); } }
+  .pr-error .mutation-error { margin-top: 12px; }
+  .pr-field-label { display: block; margin: 16px 0 6px; font-size: 13px; font-weight: 600; }
+  .pr-summary, .pr-item-text {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--field);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .pr-summary { min-height: 108px; }
+  .pr-item-text { min-height: 84px; }
+  .pr-summary:focus, .pr-item-text:focus { outline: none; border-color: var(--accent); }
+  .pr-actions-choice { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0 2px; }
+  .pr-actions-choice label, .pr-item-include { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .pr-items { display: grid; gap: 12px; }
+  .pr-item { padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .pr-item.unpublishable { opacity: 0.82; }
+  .pr-item-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 8px; }
+  .pr-destination { font-size: 13px; font-weight: 650; }
+  .pr-destination-context { margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; word-break: break-word; }
+  .pr-approximate, .pr-unpublishable { margin: 8px 0; padding: 7px 9px; border-radius: 5px; font-size: 12px; }
+  .pr-approximate { background: var(--quote); border: 1px solid var(--quote-border); }
+  .pr-unpublishable { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-ink); }
+  .pr-modal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .pr-button {
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .pr-button:hover { background: var(--accent-hover); }
+  .pr-button.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .pr-button:disabled, .pr-dialog input:disabled, .pr-dialog textarea:disabled { opacity: 0.65; cursor: default; }
+  .pr-preview-raw { margin: 12px 0 0; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--pre-bg); font: 12px/1.55 var(--mono); }
+  .pr-preview-rendered { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .pr-preview-rendered-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .pr-preview-rendered-content { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+  .pr-preview-rendered-content h1, .pr-preview-rendered-content h2, .pr-preview-rendered-content h3 { margin: 16px 0 8px; }
+  .pr-preview-rendered-content p, .pr-preview-rendered-content ul, .pr-preview-rendered-content ol { margin: 8px 0; }
+  .pr-preview-rendered-content ul, .pr-preview-rendered-content ol { padding-left: 24px; }
+  .pr-preview-rendered-content a { color: var(--accent); }
+  .pr-preview-rendered-content code { padding: 1px 4px; border-radius: 3px; background: var(--pre-bg); font-family: var(--mono); }
+  .pr-preview-rendered-content pre { overflow: auto; padding: 10px; border-radius: 6px; background: var(--pre-bg); }
+  .pr-preview-rendered-content pre code { padding: 0; background: transparent; }
+  .pr-preview-rendered-content blockquote { margin: 10px 0; padding: 1px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+  .pr-preview-rendered-content table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
+  .pr-preview-rendered-content th, .pr-preview-rendered-content td { padding: 6px 10px; border: 1px solid var(--line); }
+  .pr-publication-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-weight: 400; }
+  .pr-publication-links a { color: inherit; text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) {
+    .pr-status.busy::before { animation: none; border-top-color: var(--line-strong); }
+  }
   body.review-complete .workspace { pointer-events: none; opacity: 0.72; }
 
   .workspace {
@@ -563,11 +749,28 @@
   /* --- File sidebar (multi-file sessions) --- */
   /* Explicit column placement keeps the panes in their tracks whether or
      not the sidebar is rendered (display:none children leave the grid). */
-  .file-sidebar { grid-column: 1; }
+  .file-sidebar { grid-column: 1; grid-row: 1; }
+  .file-sidebar-resizer {
+    display: none;
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: end;
+    position: sticky;
+    top: 0;
+    width: 6px;
+    height: calc(100vh - var(--header-h));
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  body.multi-file:not(.files-collapsed) .file-sidebar-resizer { display: block; }
+  .file-sidebar-resizer:hover,
+  .file-sidebar-resizer:focus-visible,
+  .file-sidebar-resizer.resizing { background: var(--line-strong); }
   .pane-left { grid-column: 2; }
   #divider { grid-column: 3; }
   .pane-right { grid-column: 4; }
-  body.multi-file { --files-w: 236px; }
+  body.multi-file { --files-w: var(--files-expanded-w, 236px); }
   .file-sidebar { display: none; }
   body.multi-file .file-sidebar {
     display: block;
@@ -575,7 +778,7 @@
     top: 0;
     max-height: calc(100vh - var(--header-h));
     overflow-y: auto;
-    padding: 20px 8px 20px 10px;
+    padding: 12px 6px;
     border-right: 1px solid var(--line);
     background: var(--bg);
     min-width: 0;
@@ -586,16 +789,16 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--muted, #888);
-    margin: 0 0 8px 8px;
+    margin: 0 0 8px 4px;
   }
   .file-item {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     width: 100%;
     text-align: left;
-    padding: 7px 8px;
+    padding: 5px 4px;
     border: 0;
     background: transparent;
     border-radius: 6px;
@@ -618,7 +821,65 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .file-item .file-dir { opacity: 0.55; }
+  .file-tree { display: grid; gap: 1px; }
+  .file-folder { margin: 0; }
+  .file-folder > summary {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 30px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    list-style: none;
+    user-select: none;
+  }
+  .file-folder > summary::-webkit-details-marker { display: none; }
+  .file-folder > summary:hover { background: var(--pre-bg); }
+  .file-folder-chevron, .file-folder-icon {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: var(--muted);
+  }
+  .file-folder-chevron { transition: transform 0.12s ease; }
+  .file-folder[open] > summary .file-folder-chevron { transform: rotate(90deg); }
+  .file-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-folder-count {
+    flex: 0 0 auto;
+    min-width: 17px;
+    height: 17px;
+    margin-left: auto;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--marker-pink);
+    color: var(--card);
+    font-size: 10px;
+    line-height: 17px;
+    text-align: center;
+  }
+  .file-folder-count.zero { display: none; }
+  .file-folder-children {
+    display: grid;
+    gap: 1px;
+    margin-left: 12px;
+    padding-left: 7px;
+    border-left: 1px solid var(--line);
+  }
+  .file-item.viewed .file-name { color: var(--muted); opacity: 0.72; }
+  .file-viewed-marker {
+    display: none;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+  }
+  .file-viewed-marker svg { width: 16px; height: 16px; }
+  .file-item.viewed .file-viewed-marker { display: inline-flex; }
+  .file-folder.all-viewed > summary .file-folder-name { color: var(--muted); opacity: 0.72; }
   .file-item .file-kind {
     flex: 0 0 auto;
     font-size: 10px;
@@ -672,8 +933,8 @@
   .file-sidebar-toggle svg { width: 14px; height: 14px; transition: transform 0.15s ease; }
   .file-item .file-icon {
     flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     color: var(--muted);
   }
   .file-item.active .file-icon { color: var(--ink); }
@@ -685,8 +946,21 @@
   body.files-collapsed .file-sidebar-title { display: none; }
   body.files-collapsed .file-sidebar-toggle svg { transform: rotate(180deg); }
   body.files-collapsed .file-item { justify-content: center; padding: 9px 0; }
+  body.files-collapsed .file-folder > summary { display: none; }
+  body.files-collapsed .file-folder-children,
+  body.files-collapsed .file-folder:not([open]) > .file-folder-children {
+    display: contents !important;
+  }
   body.files-collapsed .file-item .file-name,
   body.files-collapsed .file-item .file-kind { display: none; }
+  body.files-collapsed .file-item .file-viewed-marker {
+    position: absolute;
+    right: 2px;
+    bottom: 1px;
+    width: 12px;
+    height: 12px;
+  }
+  body.files-collapsed .file-item .file-viewed-marker svg { width: 12px; height: 12px; }
   body.files-collapsed .file-item .file-count {
     position: absolute;
     top: 0;
@@ -713,6 +987,9 @@
   .html-review { position: relative; width: 100%; overflow: hidden; background: var(--bg); }
   .html-review[hidden] { display: none; }
   .prototype-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--card); }
+  .live-route { height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--text-dim); font-size: 11px; }
+  .live-route code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .live-review .prototype-frame { height: calc(100% - 34px); }
   body.html-file .heading-minimap { display: none; }
   .pane-right {
     padding: 28px 24px 80px 24px;
@@ -759,7 +1036,37 @@
     margin: 10px 0;
   }
   #doc-content .pre-wrap pre { margin: 0; }
-  #doc-content .table-wrap { position: relative; }
+  #doc-content a, #doc-content a:visited { color: var(--link); }
+  #doc-content a { text-underline-offset: 2px; }
+  /* Keep existing table/row anchors and their markers outside the scroll clip. */
+  #doc-content .table-wrap { position: relative; margin: 10px 0; }
+  #doc-content .table-scroll { overflow-x: auto; }
+  #doc-content .table-wrap.can-scroll-right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--card));
+  }
+  #doc-content table { border-collapse: collapse; max-width: 100%; font-size: 13px; line-height: 1.45; }
+  #doc-content th, #doc-content td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: break-word;
+  }
+  #doc-content th:not([align]) { text-align: left; }
+  #doc-content thead th { background: var(--pre-bg); border-bottom: 1px solid var(--line-strong); font-weight: 600; }
+  #doc-content tbody tr:last-child > td { border-bottom: none; }
+  #doc-content tr[data-anchor-idx]:hover,
+  #doc-content tr[data-anchor-idx].focused,
+  #doc-content tr[data-anchor-idx].in-range,
+  #doc-content tr[data-anchor-idx].thread-active { outline: none; box-shadow: none; }
+  #doc-content thead tr[data-anchor-idx]:is(:hover, .focused, .in-range, .has-thread, .thread-active) > th { background-color: inherit; }
+  #doc-content tr[data-anchor-idx]:is(.focused, .thread-active) > :first-child { box-shadow: inset 2px 0 0 var(--accent); }
   #doc-content pre {
     background: var(--pre-bg);
     padding: 10px 12px;
@@ -776,6 +1083,141 @@
      left padding under the same id-scope when line-numbers is on. */
   #doc-content pre.line-numbers { padding-left: 3.8em; }
   #doc-content pre code { background: none; padding: 0; font-size: inherit; }
+  body.diff-file #doc-content > h3 {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px 6px 0 0;
+    background: var(--diff-file-header-bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: default;
+  }
+  body.diff-file #doc-content > h3.diff-file-header-ready { border-radius: 6px; }
+  body.diff-file #doc-content > h3[data-anchor-idx]:hover {
+    background: var(--diff-file-header-bg);
+    outline: none;
+  }
+  .diff-file-stats {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .diff-file-additions { color: var(--diff-add-ink); }
+  .diff-file-deletions { color: var(--diff-delete-ink); }
+  .diff-file-status-note { color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 10px; font-weight: 500; }
+  .diff-file-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .diff-file-comment {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .diff-file-comment:hover { background: var(--accent-hover); color: var(--ink); }
+  .diff-file-comment svg { width: 16px; height: 16px; }
+  .pr-file-viewed-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .pr-file-viewed-control input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+  .pr-file-viewed-control .viewed-meta { color: var(--muted); font-size: 10px; font-weight: 400; }
+  .pr-file-viewed-control.busy { opacity: 0.65; }
+  .diff-file-close-ghost {
+    position: fixed;
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 10px 12px;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--diff-file-header-bg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: normal;
+    white-space: nowrap;
+    pointer-events: none;
+    transform-origin: center;
+  }
+  body.diff-file #doc-content > h3 + p {
+    margin: 0;
+    padding: 6px 12px;
+    border-right: 1px solid var(--line-strong);
+    border-bottom: 1px solid var(--line-strong);
+    border-left: 1px solid var(--line-strong);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  body.diff-file #doc-content .pre-wrap {
+    margin: 10px 0 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  body.diff-file #doc-content .pre-wrap pre { border-radius: 0; }
+  #doc-content pre[class*="language-diff"] .token.coord,
+  #doc-content code[class*="language-diff"] .token.coord {
+    display: block;
+    background: var(--diff-hunk-bg);
+    color: var(--diff-hunk-ink);
+  }
+  #doc-content pre[class*="language-diff"] .token.inserted-sign,
+  #doc-content pre[class*="language-diff"] .token.inserted:not(.prefix),
+  #doc-content code[class*="language-diff"] .token.inserted-sign,
+  #doc-content code[class*="language-diff"] .token.inserted:not(.prefix) {
+    display: block;
+    background: var(--diff-add-bg);
+    color: var(--diff-add-ink);
+  }
+  #doc-content pre[class*="language-diff"] .token.deleted-sign,
+  #doc-content pre[class*="language-diff"] .token.deleted:not(.prefix),
+  #doc-content code[class*="language-diff"] .token.deleted-sign,
+  #doc-content code[class*="language-diff"] .token.deleted:not(.prefix) {
+    display: block;
+    background: var(--diff-delete-bg);
+    color: var(--diff-delete-ink);
+  }
+  #doc-content .diff-line { display: inline-block; min-width: 100%; }
+  #doc-content .diff-line-hunk { background: var(--diff-hunk-bg); color: var(--diff-hunk-ink); }
+  #doc-content .diff-line-add { background: var(--diff-add-bg); color: var(--diff-add-ink); }
+  #doc-content .diff-line-delete { background: var(--diff-delete-bg); color: var(--diff-delete-ink); }
+  #doc-content .diff-line-context { color: var(--ink); }
   #doc-content pre.mermaid-block {
     background: transparent;
     padding: 8px 0;
@@ -1267,6 +1709,16 @@
   .meta-stat-draft { color: var(--teal); }
   .meta-stat-pending { color: var(--pending-dark); }
 
+  #thread-selection-actions {
+    position: fixed;
+    z-index: 1000;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: 0 4px 16px #0003;
+  }
+
   #selection-popup {
     position: fixed;
     z-index: 200;
@@ -1663,6 +2115,8 @@
   <h1>Discuss</h1>
   <span class="header-version" id="header-version" hidden></span>
   <div class="meta" id="meta-status">Loading…</div>
+  <div class="pr-header" id="pr-header" aria-live="polite" hidden></div>
+  <nav class="demo-scenarios" id="demo-scenarios" aria-label="Demo scenarios" hidden></nav>
   <span class="spacer"></span>
   <a class="header-icon-link" id="github-link" href="https://github.com/codesoda/discuss-cli" target="_blank" rel="noopener noreferrer" title="View source on GitHub" aria-label="View source on GitHub">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.635 22.412c.575.107.785-.25.785-.555 0-.273-.01-.998-.015-1.96-3.198.695-3.873-1.541-3.873-1.541-.523-1.328-1.276-1.683-1.276-1.683-1.044-.713.079-.699.079-.699 1.155.082 1.762 1.187 1.762 1.187 1.026 1.758 2.692 1.25 3.348.955.103-.744.401-1.25.73-1.538-2.553-.291-5.236-1.276-5.236-5.681 0-1.255.448-2.282 1.184-3.087-.119-.291-.513-1.46.112-3.045 0 0 .967-.31 3.167 1.179a10.96 10.96 0 0 1 2.882-.388c.978.005 1.962.132 2.881.388 2.198-1.489 3.163-1.179 3.163-1.179.627 1.585.233 2.754.115 3.045.737.805 1.182 1.832 1.182 3.087 0 4.416-2.687 5.387-5.247 5.672.413.355.78 1.057.78 2.131 0 1.539-.014 2.778-.014 3.156 0 .308.207.668.79.554A11.5 11.5 0 0 0 12 .5z"/></svg>
@@ -1718,9 +2172,25 @@
   </div>
 </div>
 
+<div class="pr-modal" id="pr-modal" hidden>
+  <div class="pr-dialog" id="pr-dialog" role="dialog" aria-modal="true" aria-labelledby="pr-dialog-title" aria-describedby="pr-dialog-status" tabindex="-1">
+    <div class="pr-dialog-heading">
+      <div>
+        <h2 id="pr-dialog-title">Publish GitHub review</h2>
+        <p class="pr-phase-label" id="pr-dialog-phase"></p>
+      </div>
+    </div>
+    <div id="pr-dialog-body"></div>
+    <div class="pr-status" id="pr-dialog-status" role="status" aria-live="polite"></div>
+    <div class="pr-error" id="pr-dialog-error" role="alert" aria-live="assertive"></div>
+    <div class="pr-modal-actions" id="pr-dialog-actions"></div>
+  </div>
+</div>
+
 <div class="workspace" id="workspace">
   <div class="workspace-grid" id="workspace-grid">
     <nav class="file-sidebar" id="file-sidebar" aria-label="Files under review"></nav>
+    <div class="file-sidebar-resizer" id="file-sidebar-resizer" role="separator" tabindex="0" aria-label="Resize file list" aria-controls="file-sidebar" aria-orientation="vertical" aria-valuemin="160" aria-valuemax="480" aria-valuenow="236"></div>
     <div class="pane-left" id="pane-left">
       <!-- ==================== REPLACE THIS BLOCK WITH YOUR CONTENT ==================== -->
       <section id="doc-content">
@@ -1850,6 +2320,7 @@
   let inspectOn = false;
   const lastDetachedByFile = new Map();
   const pendingDetachedByFile = new Map();
+  const htmlRouteByFile = new Map();
   let htmlThreadStateNeedsRender = false;
 
   function threadFileId(t) {
@@ -1872,10 +2343,16 @@
     const wrapper = htmlFrameWrappers.get(activeFileId);
     return wrapper ? wrapper.querySelector('.prototype-frame') : null;
   }
+  function prototypeOrigin(frame) {
+    if (!frame) return null;
+    try { return new URL(frame.src, location.href).origin; }
+    catch (_) { return null; }
+  }
   function postToPrototype(type, payload = {}) {
     const frame = activePrototypeFrame();
-    if (!frame || !frame.contentWindow) return;
-    frame.contentWindow.postMessage({ type, ...payload }, location.origin);
+    const origin = prototypeOrigin(frame);
+    if (!frame || !frame.contentWindow || !origin) return;
+    frame.contentWindow.postMessage({ type, ...payload }, origin);
   }
 
   function emptyDiscussionState() {
@@ -1890,6 +2367,8 @@
       sourceVersion: 0,
       files: [],
       verdictConfig: null,
+      prSession: null,
+      demoScenarios: [],
     };
   }
   function normalizeState(raw) {
@@ -1907,7 +2386,41 @@
     state.sourceVersion = Number.isFinite(sourceVersion) && sourceVersion >= 0 ? sourceVersion : 0;
     state.files = normalizeFilesList(raw.files);
     state.verdictConfig = normalizeVerdictConfig(raw.verdictConfig);
+    state.prSession = normalizePrSession(raw.prSession);
+    state.demoScenarios = Array.isArray(raw.demoScenarios)
+      ? raw.demoScenarios
+        .filter(item => item && typeof item.url === 'string' && typeof item.label === 'string')
+        .map(item => ({
+          id: String(item.id || ''),
+          label: item.label,
+          description: typeof item.description === 'string' ? item.description : '',
+          url: item.url,
+          active: item.active === true,
+        }))
+      : [];
     return state;
+  }
+  function normalizePrSession(rawSession) {
+    if (!rawSession || typeof rawSession !== 'object' || typeof rawSession.url !== 'string') return null;
+    const phases = ['loading', 'reviewing', 'preparing', 'editing', 'confirming', 'publishing', 'failed', 'published'];
+    return {
+      phase: phases.includes(rawSession.phase) ? rawSession.phase : 'loading',
+      url: rawSession.url,
+      demo: rawSession.demo === true,
+      pr: rawSession.pr && typeof rawSession.pr === 'object' ? { ...rawSession.pr } : null,
+      files: Array.isArray(rawSession.files) ? rawSession.files.map(file => ({ ...file })) : [],
+      viewedFiles: Array.isArray(rawSession.viewedFiles)
+        ? rawSession.viewedFiles
+          .filter(file => file && file.fileId)
+          .map(file => ({ fileId: String(file.fileId), viewedAt: file.viewedAt || '', headSha: file.headSha || '' }))
+        : [],
+      draft: rawSession.draft && typeof rawSession.draft === 'object'
+        ? JSON.parse(JSON.stringify(rawSession.draft))
+        : null,
+      publicationResult: rawSession.publicationResult && typeof rawSession.publicationResult === 'object'
+        ? JSON.parse(JSON.stringify(rawSession.publicationResult))
+        : null,
+    };
   }
   function normalizeVerdictConfig(rawConfig) {
     if (!rawConfig || typeof rawConfig !== 'object' || !Array.isArray(rawConfig.options)) return null;
@@ -1979,6 +2492,8 @@
       fallbacks: Array.isArray(raw.fallbacks) ? raw.fallbacks.filter(value => typeof value === 'string') : [],
       tag,
       ...(typeof raw.textDigest === 'string' && raw.textDigest ? { textDigest: raw.textDigest } : {}),
+      ...(typeof raw.accessibleName === 'string' && raw.accessibleName ? { accessibleName: raw.accessibleName } : {}),
+      ...(typeof raw.route === 'string' && raw.route.startsWith('/') ? { route: raw.route } : {}),
       outerHtml,
     };
   }
@@ -2092,12 +2607,14 @@
   async function hydrateState() {
     if (stateSeed) {
       currentState = normalizeState(stateSeed);
+      syncPrepopulatedFromState(currentState);
       return;
     }
     try {
       const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error(`GET /api/state returned ${response.status}`);
       currentState = normalizeState(await response.json());
+      syncPrepopulatedFromState(currentState);
     } catch (error) {
       console.error('Failed to hydrate discussion state:', error);
       currentState = emptyDiscussionState();
@@ -2108,6 +2625,7 @@
   }
   function setCurrentState(s) {
     currentState = normalizeState(s);
+    syncPrepopulatedFromState(currentState);
     return currentState;
   }
   function cloneState(s) {
@@ -2133,7 +2651,11 @@
       const message = data && data.error && data.error.message
         ? data.error.message
         : `${method} ${path} returned ${response.status}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      error.code = data && data.error ? data.error.code : null;
+      error.responseData = data;
+      throw error;
     }
     return data;
   }
@@ -2164,10 +2686,58 @@
     'draft.cleared',
     'source.updated',
     'anchors.resolved',
+    'pr.imported',
+    'pr.file.viewed',
+    'pr.file.unviewed',
+    'pr.draft.ready',
+    'pr.publication.failed',
+    'pr.publication.succeeded',
   ];
   const SSE_RECONNECT_DELAY_MS = 1000;
   let eventSource = null;
   let eventReconnectTimer = null;
+  let prImportReloaded = false;
+  let prReconcileInFlight = false;
+
+  async function reconcilePrSessionFromServer() {
+    const localSession = loadState().prSession;
+    if (!localSession || prReconcileInFlight || reviewComplete) return;
+    prReconcileInFlight = true;
+    try {
+      const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
+      if (!response.ok) return;
+      const remoteState = normalizeState(await response.json());
+      const remote = remoteState.prSession;
+      if (!remote) return;
+      if (localSession.phase === 'loading' && remote.phase !== 'loading') {
+        // Imported files are server-rendered into the page shell, so state
+        // reconciliation alone cannot install them safely.
+        window.location.reload();
+        return;
+      }
+      loadState().prSession = remote;
+      renderPrHeader();
+      updateFinishReviewButtonLabel();
+      updateFileSidebar();
+      installPrFileViewedControl();
+      if (prModalState.view === 'preparing' && remote.phase === 'editing' && remote.draft) {
+        adoptPrDraft(remote.draft);
+        renderPrEditView();
+      } else if (prModalState.view === 'publishing' && remote.phase === 'failed') {
+        if (remote.draft) adoptPrDraft(remote.draft);
+        prModalState.confirmation = null;
+        renderPrPublicationFailure(remote.publicationResult || {});
+      } else if (remote.phase === 'published') {
+        applyPrPublicationSucceededEvent({ result: remote.publicationResult || {} });
+      }
+      // Never replace controls in an editing/confirming modal: they may hold
+      // newer unsaved text than the server snapshot.
+    } catch (error) {
+      console.warn('Failed to reconcile PR session after SSE reconnect:', error);
+    } finally {
+      prReconcileInFlight = false;
+    }
+  }
 
   function startEventStream() {
     if (reviewComplete) return;
@@ -2179,6 +2749,7 @@
 
     const source = new EventSource('/api/events');
     eventSource = source;
+    source.onopen = () => { reconcilePrSessionFromServer(); };
     SSE_EVENT_KINDS.forEach(kind => {
       source.addEventListener(kind, (event) => {
         const payload = parseEventPayload(kind, event);
@@ -2244,13 +2815,35 @@
       case 'anchors.resolved':
         applyAnchorsResolvedEvent(payload);
         break;
+      case 'pr.imported':
+        if (!prImportReloaded && loadState().prSession?.phase === 'loading') {
+          prImportReloaded = true;
+          window.location.reload();
+        }
+        break;
+      case 'pr.file.viewed':
+        applyPrFileViewedEvent(payload);
+        break;
+      case 'pr.file.unviewed':
+        applyPrFileUnviewedEvent(payload);
+        break;
+      case 'pr.draft.ready':
+        applyPrDraftReadyEvent(payload);
+        break;
+      case 'pr.publication.failed':
+        applyPrPublicationFailedEvent(payload);
+        break;
+      case 'pr.publication.succeeded':
+        applyPrPublicationSucceededEvent(payload);
+        break;
     }
   }
 
-  function applyElementDetachment(state, fileId, detached) {
+  function applyElementDetachment(state, fileId, detached, route = null) {
     let changed = false;
     const update = thread => {
       if (threadFileId(thread) !== fileId || !thread.elementAnchor) return;
+      if (route && thread.elementAnchor.route !== route) return;
       const orphaned = detached.has(String(thread.id));
       if (thread.orphaned !== orphaned) {
         thread.orphaned = orphaned;
@@ -2276,8 +2869,9 @@
     if (!payload || !payload.fileId) return;
     const fileId = String(payload.fileId);
     const detached = new Set((payload.detachedThreadIds || []).map(String));
+    const route = typeof payload.route === 'string' && payload.route.startsWith('/') ? payload.route : null;
     const state = cloneState(loadState());
-    if (!applyElementDetachment(state, fileId, detached)) return;
+    if (!applyElementDetachment(state, fileId, detached, route)) return;
     setCurrentState(state);
     if (fileId === activeFileId) renderElementThreadStateWhenSafe();
     else renderMetaStatus();
@@ -2455,7 +3049,34 @@
     const banner = document.getElementById('done-banner');
     if (!banner) return;
     banner.classList.remove('with-feedback');
-    if (verdictSummary && verdictSummary.label) {
+    if (verdictSummary && verdictSummary.prResult) {
+      banner.textContent = '';
+      banner.classList.add('with-feedback');
+      const summary = document.createElement('span');
+      summary.textContent = loadState().prSession?.demo
+        ? `Demo publication simulated locally — ${prActionLabel(verdictSummary.action)} ✓ · Nothing was sent to GitHub.`
+        : `GitHub review published — ${prActionLabel(verdictSummary.action)} ✓`;
+      banner.appendChild(summary);
+      const links = document.createElement('div');
+      links.className = 'pr-publication-links';
+      const result = verdictSummary.prResult;
+      const publishedLinks = [];
+      if (!loadState().prSession?.demo) {
+        if (result.review && safePreviewUrl(result.review.url)) publishedLinks.push(['Open published review', result.review.url]);
+        (Array.isArray(result.replies) ? result.replies : []).forEach((reply, index) => {
+          if (reply && safePreviewUrl(reply.url)) publishedLinks.push([`Open reply ${index + 1}`, reply.url]);
+        });
+      }
+      publishedLinks.forEach(([label, url]) => {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = label;
+        links.appendChild(link);
+      });
+      if (publishedLinks.length) banner.appendChild(links);
+    } else if (verdictSummary && verdictSummary.label) {
       banner.textContent = '';
       const summary = document.createElement('span');
       summary.textContent = `Review finished — ${verdictSummary.label} ✓`;
@@ -2498,7 +3119,7 @@
       eventSource = null;
     }
     if (newThreadEditor) closeNewThreadEditor();
-    document.querySelectorAll('button, textarea').forEach(control => {
+    document.querySelectorAll('button, textarea, input, select').forEach(control => {
       control.disabled = true;
     });
     const btn = document.getElementById('finish-review');
@@ -2511,7 +3132,7 @@
 
   function blockCompletedInteraction(event) {
     if (!reviewComplete) return;
-    if (event.target.closest && event.target.closest('#done-banner')) return;
+    if (event.target.closest && event.target.closest('#done-banner, #thread-selection-actions')) return;
     event.preventDefault();
     event.stopPropagation();
   }
@@ -2519,6 +3140,19 @@
   function updateFinishReviewButtonLabel() {
     const btn = document.getElementById('finish-review');
     if (!btn || reviewComplete) return;
+    const prSession = loadState().prSession;
+    if (prSession) {
+      const loading = prSession.phase === 'loading';
+      btn.disabled = loading;
+      btn.textContent = loading ? 'Importing PR…' : 'Finish review…';
+      btn.title = loading
+        ? 'Waiting for the pull request import to complete'
+        : (prSession.demo
+          ? 'Edit, preview, and locally simulate this synthetic review'
+          : 'Prepare and publish this review to GitHub');
+      return;
+    }
+    btn.disabled = false;
     btn.textContent = loadState().verdictConfig ? 'Finish review…' : 'Finish review';
   }
 
@@ -3159,17 +3793,14 @@
   }
 
   // ---------- File sidebar (multi-file sessions) ----------
-  // Browser storage here holds a UI preference only (collapsed vs expanded),
-  // mirroring the theme pref pattern. Review state never touches storage.
-  const FILES_COLLAPSED_KEY = 'discuss-files-collapsed';
+  // A UI preference only (collapsed vs expanded), mirroring the theme pref
+  // pattern. Review state never goes through the prefs store.
   function isFilesCollapsed() {
-    let stored = null;
-    try { stored = localStorage.getItem(FILES_COLLAPSED_KEY); } catch (_) {}
-    // Anything but the exact stored '1' means expanded (the first-run default).
-    return stored === '1';
+    // Expanded is the first-run default.
+    return window.discussReadPref('filesCollapsed', false) === true;
   }
   function setFilesCollapsedPref(collapsed) {
-    try { localStorage.setItem(FILES_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
+    window.discussWritePref('filesCollapsed', collapsed);
   }
   function applyFilesCollapsed(collapsed, toggle) {
     document.body.classList.toggle('files-collapsed', collapsed);
@@ -3200,6 +3831,97 @@
     svg.innerHTML = paths;
     return svg;
   }
+  function createFileSidebarItem(file, displayName) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'file-item';
+    item.setAttribute('data-file-id', file.id);
+    item.title = file.path;
+    item.appendChild(fileKindIcon(file.kind));
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = displayName;
+    item.appendChild(name);
+    const viewedMarker = document.createElement('span');
+    viewedMarker.className = 'file-viewed-marker';
+    viewedMarker.setAttribute('aria-hidden', 'true');
+    viewedMarker.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4z"/><circle cx="8" cy="8" r="1.8"/></svg>';
+    item.appendChild(viewedMarker);
+    const path = String(file.path || '');
+    // aria-label replaces the button's content wholesale for assistive tech,
+    // so retain the complete path even when the visual tree shows a basename.
+    item.dataset.a11yBase =
+      file.kind && file.kind !== 'markdown' ? `${path}, ${file.kind}` : path;
+    item.setAttribute('aria-label', item.dataset.a11yBase);
+    if (file.kind !== 'markdown') {
+      const tag = document.createElement('span');
+      tag.className = 'file-kind';
+      tag.textContent = file.kind;
+      item.appendChild(tag);
+    }
+    const count = document.createElement('span');
+    count.className = 'file-count zero';
+    item.appendChild(count);
+    item.addEventListener('click', () => switchToFile(file.id));
+    return item;
+  }
+
+  function buildFileTree(files) {
+    const root = { name: '', path: '', files: [], folders: new Map() };
+    files.forEach(file => {
+      const path = String(file.path || '');
+      // Absolute local paths stay as one root item. Repository-relative paths
+      // become a folder tree like GitHub's changed-files navigation.
+      const parts = path.startsWith('/') ? [path] : path.split('/').filter(Boolean);
+      if (!parts.length) parts.push(path || '(unnamed)');
+      let node = root;
+      parts.slice(0, -1).forEach(part => {
+        if (!node.folders.has(part)) {
+          const folderPath = node.path ? `${node.path}/${part}` : part;
+          node.folders.set(part, { name: part, path: folderPath, files: [], folders: new Map() });
+        }
+        node = node.folders.get(part);
+      });
+      node.files.push({ file, name: parts[parts.length - 1] });
+    });
+    return root;
+  }
+
+  function appendFileTree(container, node) {
+    node.files
+      .sort((left, right) => {
+        if (left.file.id === 'pr-overview') return -1;
+        if (right.file.id === 'pr-overview') return 1;
+        return left.name.localeCompare(right.name);
+      })
+      .forEach(entry => container.appendChild(createFileSidebarItem(entry.file, entry.name)));
+
+    [...node.folders.values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .forEach(folder => {
+        const details = document.createElement('details');
+        details.className = 'file-folder';
+        details.open = true;
+        details.dataset.folderPath = folder.path;
+        const summary = document.createElement('summary');
+        summary.dataset.a11yBase = `Folder ${folder.path}`;
+        summary.setAttribute('aria-label', summary.dataset.a11yBase);
+        summary.title = folder.path;
+        summary.innerHTML = '<svg class="file-folder-chevron" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3.5L10.5 8 6 12.5"/></svg><svg class="file-folder-icon" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 4.5h5l1.2 1.5h6.8v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/><path d="M1.5 4.5v-1a1 1 0 0 1 1-1h3L6.7 4"/></svg>';
+        const label = document.createElement('span');
+        label.className = 'file-folder-name';
+        label.textContent = folder.name;
+        const count = document.createElement('span');
+        count.className = 'file-folder-count zero';
+        summary.append(label, count);
+        const children = document.createElement('div');
+        children.className = 'file-folder-children';
+        appendFileTree(children, folder);
+        details.append(summary, children);
+        container.appendChild(details);
+      });
+  }
+
   function initFileSidebar() {
     const nav = document.getElementById('file-sidebar');
     if (!nav) return;
@@ -3225,57 +3947,15 @@
       const collapsed = !document.body.classList.contains('files-collapsed');
       applyFilesCollapsed(collapsed, toggle);
       setFilesCollapsedPref(collapsed);
-      // No resize event fires on a class toggle. Only pane-right's width
-      // changes (pane-left keeps its own --left-w share of the grid), so the
-      // open thread cards are the one thing positioned in pixels that has to
-      // be re-laid-out; gutter markers, the heading minimap, and image pins
-      // re-anchor on their own from --files-w / percentage offsets.
       scheduleReposition();
     });
     header.appendChild(toggle);
     nav.appendChild(header);
-    // Missing/unreadable pref means expanded: the first-run default.
     applyFilesCollapsed(isFilesCollapsed(), toggle);
-    discussFiles.forEach(file => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'file-item';
-      item.setAttribute('data-file-id', file.id);
-      item.title = file.path;
-      item.appendChild(fileKindIcon(file.kind));
-      const name = document.createElement('span');
-      name.className = 'file-name';
-      const path = String(file.path || '');
-      // aria-label replaces the button's content wholesale for assistive tech,
-      // so the accessible name has to carry everything the visual item shows.
-      // The kind belongs here in particular: the icon is aria-hidden and the
-      // .file-kind tag is display:none in the collapsed rail, so without this
-      // a screen-reader user gets no kind signal at all. updateFileSidebar
-      // appends the open-thread count to this base.
-      item.dataset.a11yBase =
-        file.kind && file.kind !== 'markdown' ? `${path}, ${file.kind}` : path;
-      item.setAttribute('aria-label', item.dataset.a11yBase);
-      const slash = path.lastIndexOf('/');
-      if (slash >= 0) {
-        const dir = document.createElement('span');
-        dir.className = 'file-dir';
-        dir.textContent = path.slice(0, slash + 1);
-        name.appendChild(dir);
-      }
-      name.appendChild(document.createTextNode(slash >= 0 ? path.slice(slash + 1) : path));
-      item.appendChild(name);
-      if (file.kind !== 'markdown') {
-        const tag = document.createElement('span');
-        tag.className = 'file-kind';
-        tag.textContent = file.kind;
-        item.appendChild(tag);
-      }
-      const count = document.createElement('span');
-      count.className = 'file-count zero';
-      item.appendChild(count);
-      item.addEventListener('click', () => switchToFile(file.id));
-      nav.appendChild(item);
-    });
+    const tree = document.createElement('div');
+    tree.className = 'file-tree';
+    appendFileTree(tree, buildFileTree(discussFiles));
+    nav.appendChild(tree);
     updateFileSidebar();
   }
 
@@ -3287,6 +3967,9 @@
     if (!nav || !document.body.classList.contains('multi-file')) return;
     const state = loadState();
     const resolvedIds = new Set(Object.keys(state.resolutions || {}).map(String));
+    const viewedByFile = new Map(
+      (state.prSession?.viewedFiles || []).map(viewed => [String(viewed.fileId), viewed])
+    );
     const openByFile = new Map();
     (state.userThreads || []).forEach(t => {
       if (resolvedIds.has(String(t.id))) return;
@@ -3300,7 +3983,23 @@
     });
     nav.querySelectorAll('.file-item').forEach(item => {
       const id = item.getAttribute('data-file-id');
-      item.classList.toggle('active', id === activeFileId);
+      const active = id === activeFileId;
+      const viewed = viewedByFile.get(id) || null;
+      item.classList.toggle('active', active);
+      item.classList.toggle('viewed', !!viewed);
+      const viewedMarker = item.querySelector('.file-viewed-marker');
+      if (viewedMarker) {
+        viewedMarker.title = viewed
+          ? `Viewed ${viewed.viewedAt || ''} at ${String(viewed.headSha || '').slice(0, 12)}`.trim()
+          : '';
+      }
+      if (active) {
+        let parent = item.parentElement;
+        while (parent && parent !== nav) {
+          if (parent.matches('details.file-folder')) parent.open = true;
+          parent = parent.parentElement;
+        }
+      }
       const open = openByFile.get(id) || 0;
       const badge = item.querySelector('.file-count');
       if (badge) {
@@ -3311,11 +4010,267 @@
       // open-thread count must live in the label, not only the visual badge.
       // The base already carries path + kind (see initFileSidebar).
       const base = item.dataset.a11yBase || item.title || '';
+      const viewedLabel = viewed ? ', viewed' : '';
       item.setAttribute(
         'aria-label',
-        open > 0 ? `${base}, ${open} open thread${open === 1 ? '' : 's'}` : base
+        (open > 0 ? `${base}, ${open} open thread${open === 1 ? '' : 's'}` : base) + viewedLabel
       );
     });
+    nav.querySelectorAll('details.file-folder').forEach(folder => {
+      const fileItems = [...folder.querySelectorAll('.file-item')];
+      const open = fileItems
+        .reduce((total, item) => total + (openByFile.get(item.dataset.fileId) || 0), 0);
+      folder.classList.toggle(
+        'all-viewed',
+        fileItems.length > 0 && fileItems.every(item => viewedByFile.has(item.dataset.fileId))
+      );
+      const badge = folder.querySelector(':scope > summary .file-folder-count');
+      if (badge) {
+        badge.textContent = open > 0 ? String(open) : '';
+        badge.classList.toggle('zero', open === 0);
+      }
+      const summary = folder.querySelector(':scope > summary');
+      if (summary) {
+        const base = summary.dataset.a11yBase || 'Folder';
+        summary.setAttribute(
+          'aria-label',
+          open > 0 ? `${base}, ${open} open thread${open === 1 ? '' : 's'}` : base
+        );
+      }
+    });
+  }
+
+  function prViewedFile(fileId = activeFileId) {
+    return (loadState().prSession?.viewedFiles || [])
+      .find(viewed => String(viewed.fileId) === String(fileId)) || null;
+  }
+
+  function setLocalPrViewedFile(viewedFile) {
+    const session = loadState().prSession;
+    if (!session || !viewedFile?.fileId) return;
+    const fileId = String(viewedFile.fileId);
+    session.viewedFiles = (session.viewedFiles || []).filter(item => String(item.fileId) !== fileId);
+    session.viewedFiles.push({ ...viewedFile, fileId });
+  }
+
+  function clearLocalPrViewedFile(fileId) {
+    const session = loadState().prSession;
+    if (!session) return;
+    session.viewedFiles = (session.viewedFiles || [])
+      .filter(item => String(item.fileId) !== String(fileId));
+  }
+
+  function nextUnviewedPrFileId(fileId) {
+    // Follow the rendered tree's depth-first alphabetical order, not the raw
+    // import order. That keeps automatic advancement identical to what the
+    // reviewer sees in the sidebar, including nested folders.
+    const orderedIds = [...document.querySelectorAll('#file-sidebar .file-item')]
+      .map(item => String(item.dataset.fileId || ''));
+    const start = orderedIds.indexOf(String(fileId));
+    if (start < 0) return null;
+    for (let index = start + 1; index < orderedIds.length; index += 1) {
+      const candidate = discussFiles.find(file => String(file.id) === orderedIds[index]);
+      if (candidate?.kind === 'diff' && !prViewedFile(candidate.id)) return String(candidate.id);
+    }
+    return null;
+  }
+
+  function formatViewedMeta(viewed) {
+    if (!viewed) return '';
+    const date = new Date(viewed.viewedAt);
+    const when = Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+    const sha = String(viewed.headSha || '').slice(0, 8);
+    return [when, sha].filter(Boolean).join(' · ');
+  }
+
+  async function animateDiffHeaderIntoFileList(fileId) {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const heading = document.querySelector('#doc-content > h3.diff-file-header-ready');
+    const item = [...document.querySelectorAll('#file-sidebar .file-item')]
+      .find(candidate => String(candidate.dataset.fileId) === String(fileId));
+    if (!heading || !item || typeof heading.animate !== 'function') return;
+
+    item.scrollIntoView({ block: 'nearest' });
+    const sourceRect = heading.getBoundingClientRect();
+    const name = item.querySelector('.file-name');
+    const nameRect = name?.getBoundingClientRect();
+    const targetRect = nameRect?.width && nameRect?.height ? nameRect : item.getBoundingClientRect();
+    if (!sourceRect.width || !sourceRect.height || !targetRect.width || !targetRect.height) return;
+
+    const ghost = heading.cloneNode(true);
+    ghost.querySelector('.diff-file-actions')?.remove();
+    ghost.className = 'diff-file-close-ghost';
+    Object.assign(ghost.style, {
+      top: `${sourceRect.top}px`,
+      left: `${sourceRect.left}px`,
+      width: `${sourceRect.width}px`,
+      height: `${sourceRect.height}px`,
+    });
+    ghost.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(ghost);
+
+    const translateX = targetRect.left + targetRect.width / 2 - (sourceRect.left + sourceRect.width / 2);
+    const translateY = targetRect.top + targetRect.height / 2 - (sourceRect.top + sourceRect.height / 2);
+    const scaleX = Math.max(0.08, Math.min(1, targetRect.width / sourceRect.width));
+    const scaleY = Math.max(0.2, Math.min(1, targetRect.height / sourceRect.height));
+    const animation = ghost.animate([
+      { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+      { transform: `translate(${translateX * 0.12}px, ${translateY * 0.12}px) scale(0.96)`, opacity: 1, offset: 0.22 },
+      { transform: `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`, opacity: 0.18 },
+    ], {
+      duration: 380,
+      easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
+      fill: 'forwards',
+    });
+    heading.animate([
+      { opacity: 1, transform: 'scale(1)' },
+      { opacity: 0, transform: 'scale(0.985)' },
+    ], { duration: 180, easing: 'ease-out', fill: 'forwards' });
+    try {
+      // Decorative animation must never block Viewed progression. Browser
+      // engines can leave `finished` pending when stylesheets are unavailable
+      // or a background frame is throttled (notably the offline demo).
+      await Promise.race([
+        animation.finished,
+        new Promise(resolve => setTimeout(resolve, 600)),
+      ]);
+    } catch (_) {
+      // Navigation or teardown may cancel the decorative transition.
+    } finally {
+      ghost.remove();
+    }
+    item.animate?.([
+      { transform: 'scale(1)' },
+      { transform: 'scale(1.035)' },
+      { transform: 'scale(1)' },
+    ], { duration: 180, easing: 'ease-out' });
+  }
+
+  function installPrFileViewedControl() {
+    document.querySelectorAll('.diff-file-actions, .diff-file-stats').forEach(control => control.remove());
+    if (fileKind() !== 'diff') return;
+    const heading = document.querySelector('#doc-content > h3');
+    if (!heading) return;
+    heading.classList.add('diff-file-header-ready');
+
+    const metadata = heading.nextElementSibling?.tagName === 'P'
+      ? heading.nextElementSibling
+      : null;
+    const stats = document.createElement('span');
+    stats.className = 'diff-file-stats';
+    const metadataText = (metadata?.textContent || heading.dataset.diffMetadata || '').trim();
+    if (metadata) heading.dataset.diffMetadata = metadataText;
+    const counts = metadataText.match(/^\+(\d+)\s+[−-](\d+)(?:\s+·\s+)?(.*)$/);
+    if (counts) {
+      const additions = document.createElement('span');
+      additions.className = 'diff-file-additions';
+      additions.textContent = `+${counts[1]}`;
+      const deletions = document.createElement('span');
+      deletions.className = 'diff-file-deletions';
+      deletions.textContent = `−${counts[2]}`;
+      stats.append(additions, deletions);
+      if (counts[3]) {
+        const note = document.createElement('span');
+        note.className = 'diff-file-status-note';
+        note.textContent = counts[3];
+        stats.appendChild(note);
+      }
+    } else if (metadataText) {
+      const note = document.createElement('span');
+      note.className = 'diff-file-status-note';
+      note.textContent = metadataText;
+      stats.appendChild(note);
+    }
+    heading.appendChild(stats);
+    if (metadata) metadata.remove();
+
+    const actions = document.createElement('span');
+    actions.className = 'diff-file-actions';
+    const comment = document.createElement('button');
+    comment.type = 'button';
+    comment.className = 'diff-file-comment';
+    comment.title = 'Start a thread on the file itself, not a particular line';
+    comment.setAttribute('aria-label', `Start a thread on ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'the file'} itself, not a particular line`);
+    comment.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M2 2.5h12v8H8l-3.5 3v-3H2z"/></svg>';
+    comment.addEventListener('pointerdown', event => event.stopPropagation());
+    comment.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const anchor = parseInt(heading.getAttribute('data-anchor-idx'), 10);
+      if (!Number.isFinite(anchor)) return;
+      if (!showAllBtn.classList.contains('on')) closeAllThreads();
+      openNewThreadEditor(anchor, anchor);
+    });
+    actions.appendChild(comment);
+
+    const session = loadState().prSession;
+    if (session) {
+      const viewed = prViewedFile();
+      const label = document.createElement('label');
+      label.className = 'pr-file-viewed-control';
+      label.title = viewed
+        ? `Viewed at ${viewed.viewedAt} for PR head ${viewed.headSha}`
+        : 'Mark this changed file as viewed and continue to the next unviewed file';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!viewed;
+      checkbox.setAttribute('aria-label', `Mark ${discussFiles.find(file => String(file.id) === activeFileId)?.path || 'file'} as viewed`);
+      const text = document.createElement('span');
+      text.textContent = 'Viewed';
+      const meta = document.createElement('span');
+      meta.className = 'viewed-meta';
+      meta.textContent = formatViewedMeta(viewed);
+      label.append(checkbox, text, meta);
+      ['click', 'pointerdown'].forEach(type => label.addEventListener(type, event => event.stopPropagation()));
+      checkbox.addEventListener('change', async event => {
+        event.stopPropagation();
+        const fileId = activeFileId;
+        const markViewed = checkbox.checked;
+        checkbox.disabled = true;
+        label.classList.add('busy');
+        try {
+          if (markViewed) {
+            const record = await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`);
+            setLocalPrViewedFile(record);
+            updateFileSidebar();
+            const nextFileId = nextUnviewedPrFileId(fileId);
+            if (nextFileId) {
+              await animateDiffHeaderIntoFileList(fileId);
+              if (activeFileId === fileId) switchToFile(nextFileId);
+            } else {
+              installPrFileViewedControl();
+            }
+          } else {
+            await apiJson(`/api/pr/files/${encodeURIComponent(fileId)}/viewed`, { method: 'DELETE' });
+            clearLocalPrViewedFile(fileId);
+            updateFileSidebar();
+            installPrFileViewedControl();
+          }
+        } catch (error) {
+          console.error('Failed to update viewed file state:', error);
+          checkbox.checked = !markViewed;
+          checkbox.disabled = false;
+          label.classList.remove('busy');
+          meta.textContent = 'Could not save — retry';
+        }
+      });
+      actions.insertBefore(label, comment);
+    }
+    heading.appendChild(actions);
+  }
+
+  function applyPrFileViewedEvent(payload) {
+    if (!payload?.viewedFile) return;
+    setLocalPrViewedFile(payload.viewedFile);
+    updateFileSidebar();
+    if (String(payload.viewedFile.fileId) === activeFileId) installPrFileViewedControl();
+  }
+
+  function applyPrFileUnviewedEvent(payload) {
+    if (!payload?.fileId) return;
+    clearLocalPrViewedFile(payload.fileId);
+    updateFileSidebar();
+    if (String(payload.fileId) === activeFileId) installPrFileViewedControl();
   }
 
   function setInspectMode(on) {
@@ -3342,6 +4297,7 @@
 
   function activateFileUi() {
     document.body.classList.toggle('html-file', isHtmlFile());
+    document.body.classList.toggle('diff-file', fileKind() === 'diff');
     if (!isHtmlFile()) setInspectMode(false);
     else {
       // HTML review defaults to commenting and stays armed across saves;
@@ -3386,14 +4342,34 @@
     doc.innerHTML = renderedFileHtml.get(fileId) || '';
   }
 
+  function reflectLiveRoute(route) {
+    if (typeof route !== 'string' || !route.startsWith('/')) return;
+    htmlRouteByFile.set(activeFileId, route);
+    const wrapper = htmlFrameWrappers.get(activeFileId);
+    const label = wrapper?.querySelector('.live-route-value');
+    if (label) label.textContent = route;
+  }
+
   window.addEventListener('message', event => {
     const frame = activePrototypeFrame();
-    if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin) return;
+    const origin = prototypeOrigin(frame);
+    if (!frame || !origin || event.source !== frame.contentWindow || event.origin !== origin) return;
     const message = event.data;
     if (!message || typeof message.type !== 'string' || !message.type.startsWith('discuss:')) return;
     if (message.type === 'discuss:ready') {
+      reflectLiveRoute(message.route);
       postToPrototype('discuss:set-inspect', { on: inspectOn });
       syncHtmlAnchors();
+    } else if (message.type === 'discuss:route-changed') {
+      reflectLiveRoute(message.route);
+      syncHtmlAnchors();
+    } else if (message.type === 'discuss:external-navigation') {
+      const destination = typeof message.url === 'string' ? message.url : '';
+      if (!/^https?:\/\//i.test(destination)) return;
+      document.body.dataset.discussExternalNavigation = destination;
+      if (window.confirm(`This live review wants to open an external site:\n\n${destination}\n\nOpen it in a new tab?`)) {
+        window.open(destination, '_blank', 'noopener,noreferrer');
+      }
     } else if (message.type === 'discuss:element-selected') {
       openHtmlThreadEditor(message);
     } else if (message.type === 'discuss:marker-clicked') {
@@ -3401,18 +4377,19 @@
       if (thread) openThread(thread);
     } else if (message.type === 'discuss:anchors-resolved') {
       const detached = Array.isArray(message.detached) ? message.detached.map(String).sort() : [];
-      const key = detached.join('\n');
+      const route = typeof message.route === 'string' && message.route.startsWith('/') ? message.route : null;
+      const key = `${route || ''}\n${detached.join('\n')}`;
       if (lastDetachedByFile.get(activeFileId) === key || pendingDetachedByFile.get(activeFileId) === key) return;
       const fileId = activeFileId;
       pendingDetachedByFile.set(fileId, key);
       const state = cloneState(loadState());
       const detachedSet = new Set(detached);
-      if (applyElementDetachment(state, fileId, detachedSet)) {
+      if (applyElementDetachment(state, fileId, detachedSet, route)) {
         setCurrentState(state);
         renderElementThreadStateWhenSafe();
       }
       apiJson('/api/anchors/resolve', {
-        body: { fileId, detachedThreadIds: detached },
+        body: { fileId, detachedThreadIds: detached, ...(route ? { route } : {}) },
       }).then(() => {
         lastDetachedByFile.set(fileId, key);
       }).catch(error => {
@@ -3463,6 +4440,7 @@
     wrapCollapsibleSectionsDom();
     buildHeadingMinimap();
     highlightCodeBlocks();
+    installPrFileViewedControl();
     if (typeof window.__discussRenderMermaid === 'function') window.__discussRenderMermaid();
   }
 
@@ -3643,6 +4621,39 @@
   try {
     prepopulated = JSON.parse(document.getElementById('prepopulated-threads').textContent.trim() || '[]');
   } catch { prepopulated = []; }
+  const scriptPrepopulatedIds = new Set(prepopulated.map(thread => String(thread.id)));
+
+  function githubUrlFromBreadcrumb(breadcrumb) {
+    const match = String(breadcrumb || '').match(/https:\/\/github\.com\/[^\s]+/);
+    return match ? match[0] : '';
+  }
+
+  function serverPrepopulatedThread(thread) {
+    if (!thread || thread.kind !== 'prepopulated' || !thread.id) return null;
+    const anchorIdx = parseInt(thread.anchorStart, 10);
+    if (!Number.isFinite(anchorIdx)) return null;
+    return {
+      id: String(thread.id),
+      fileId: threadFileId(thread),
+      anchorIdx,
+      lineRange: normalizeLineRange(thread.lineRange),
+      userComment: thread.text || thread.snippet || '',
+      breadcrumb: thread.breadcrumb || '',
+      subtitle: thread.breadcrumb || '',
+      githubUrl: githubUrlFromBreadcrumb(thread.breadcrumb),
+      pending: false,
+    };
+  }
+
+  function syncPrepopulatedFromState(state) {
+    if (!Array.isArray(prepopulated)) return;
+    const scripted = prepopulated.filter(thread => scriptPrepopulatedIds.has(String(thread.id)));
+    const imported = (Array.isArray(state?.threads) ? state.threads : [])
+      .map(serverPrepopulatedThread)
+      .filter(thread => thread && !scriptPrepopulatedIds.has(thread.id));
+    prepopulated = scripted.concat(imported);
+  }
+
   // Resolve anchorSelector only when it selects a server-stamped anchor.
   prepopulated.forEach(t => {
     if (!t.anchorIdx && t.anchorSelector) {
@@ -3654,9 +4665,11 @@
   });
 
   // ---------- Send-shortcut setting ----------
-  const CMD_ENTER_KEY = 'discuss-cmd-enter-to-send';
-  function isCmdEnterRequired() { return localStorage.getItem(CMD_ENTER_KEY) !== 'false'; }
-  function setCmdEnterRequired(v) { localStorage.setItem(CMD_ENTER_KEY, v ? 'true' : 'false'); document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v); }
+  function isCmdEnterRequired() { return window.discussReadPref('cmdEnterToSend', true) !== false; }
+  function setCmdEnterRequired(v) {
+    window.discussWritePref('cmdEnterToSend', v);
+    document.querySelectorAll('.enter-to-send input').forEach(cb => cb.checked = v);
+  }
   function enterSendCheckboxHtml() {
     return `<label class="enter-to-send"><input type="checkbox" ${isCmdEnterRequired() ? 'checked' : ''}> ⌘ Enter to send</label>`;
   }
@@ -3686,6 +4699,10 @@
     el.setAttribute('data-thread-id', t.id);
     el.setAttribute('data-anchor-start', t.anchorIdx);
     el.setAttribute('data-anchor-end', t.anchorIdx);
+    if (t.lineRange && Number.isFinite(t.lineRange.start) && Number.isFinite(t.lineRange.end)) {
+      el.setAttribute('data-line-start', t.lineRange.start);
+      el.setAttribute('data-line-end', t.lineRange.end);
+    }
 
     const hasTake = typeof t.take === 'string' && t.take.trim().length > 0;
     const hasDecision = typeof t.decision === 'string' && t.decision.trim().length > 0;
@@ -3696,17 +4713,23 @@
          ${hasDecision ? `<div class="section-mini-label">Decision</div><div class="thread-decision">${escapeHtml(t.decision)}</div>` : ''}`;
 
     const headIndex = t.index != null ? `Comment ${t.index}` : 'Comment';
+    const lineLabel = t.lineRange
+      ? (t.lineRange.start === t.lineRange.end ? `, line ${t.lineRange.start}` : `, lines ${t.lineRange.start}–${t.lineRange.end}`)
+      : '';
+    const githubLink = t.githubUrl
+      ? `<a href="${escapeHtml(t.githubUrl)}" target="_blank" rel="noopener noreferrer">View on GitHub</a>`
+      : '';
     el.innerHTML = `
       <div class="thread-head">
         <span>${escapeHtml(headIndex)}${t.pending ? ' · INITIAL TAKE' : ''}</span>
         <span>
-          <span class="thread-anchor">#${t.anchorIdx}</span>
+          <span class="thread-anchor">#${t.anchorIdx}${escapeHtml(lineLabel)}</span>
           <button class="thread-nav thread-nav-prev" title="Previous thread" aria-label="Previous thread">‹</button>
           <button class="thread-nav thread-nav-next" title="Next thread" aria-label="Next thread">›</button>
           <button class="thread-close" title="Close">×</button>
         </span>
       </div>
-      ${t.subtitle ? `<div class="thread-sub">${escapeHtml(t.subtitle)}</div>` : ''}
+      ${t.subtitle ? `<div class="thread-sub">${escapeHtml(t.subtitle)}${githubLink ? ` · ${githubLink}` : ''}</div>` : githubLink}
       <div class="thread-body">
         ${t.userComment ? `<div class="thread-quote">${escapeHtml(t.userComment)}</div>` : ''}
         ${takeBlock}
@@ -3809,6 +4832,114 @@
     renderResolution(el, t.id);
     return el;
   }
+
+  // Sidebar selection actions: use the existing input event to persist quoted drafts.
+  function appendQuotedSelection(textarea, text) {
+    const separator = textarea.value ? (textarea.value.endsWith('\n\n') ? '' : textarea.value.endsWith('\n') ? '\n' : '\n\n') : '';
+    textarea.value += separator + text.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.scrollTop = textarea.scrollHeight;
+  }
+
+  const selectionActions = document.createElement('div');
+  selectionActions.id = 'thread-selection-actions';
+  selectionActions.hidden = true;
+  selectionActions.setAttribute('role', 'group');
+  selectionActions.setAttribute('aria-label', 'Selected message text');
+  selectionActions.innerHTML = '<button type="button" data-action="copy">Copy</button> <button type="button" data-action="quote">Add to chat</button><span role="status"></span>';
+  const copySelectionButton = selectionActions.querySelector('[data-action="copy"]');
+  const quoteSelectionButton = selectionActions.querySelector('[data-action="quote"]');
+  document.body.appendChild(selectionActions);
+  let selectedMessage = null;
+  let selectionActionsTimer;
+  function canQuoteInto(thread, textarea) {
+    return !reviewComplete && thread.isConnected && thread.classList.contains('open') && textarea && textarea.isConnected && !textarea.disabled && !textarea.closest('.hidden');
+  }
+  function hideSelectionActions() {
+    clearTimeout(selectionActionsTimer);
+    selectionActions.hidden = true;
+    selectedMessage = null;
+  }
+  selectionActions.addEventListener('pointerdown', event => event.preventDefault());
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    const previous = selectedMessage?.range;
+    if (previous && selection?.rangeCount && !selection.isCollapsed) {
+      const current = selection.getRangeAt(0);
+      if (current.startContainer === previous.startContainer && current.startOffset === previous.startOffset && current.endContainer === previous.endContainer && current.endOffset === previous.endOffset) return;
+    }
+    hideSelectionActions();
+    selectionActionsTimer = setTimeout(updateSelectionActions, 80);
+  });
+  function updateSelectionActions() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const element = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    const message = element?.closest('.user-comment, .thread-quote, .thread-take, .thread-decision');
+    const thread = message?.closest('.thread.open');
+    if (!thread || element.closest('.meta')) return;
+    // Do not quote timestamps, controls, or selections spanning multiple messages.
+    if (Array.from(message.querySelectorAll('.meta')).some(meta => {
+      const overlap = range.cloneRange();
+      const metadata = document.createRange();
+      metadata.selectNodeContents(meta);
+      if (overlap.compareBoundaryPoints(Range.START_TO_START, metadata) < 0) overlap.setStart(metadata.startContainer, metadata.startOffset);
+      if (overlap.compareBoundaryPoints(Range.END_TO_END, metadata) > 0) overlap.setEnd(metadata.endContainer, metadata.endOffset);
+      return !overlap.collapsed && !!overlap.toString();
+    })) return;
+    const text = selection.toString();
+    if (!text.trim()) return;
+    const textarea = thread.querySelector('.followup textarea');
+    const rect = range.getBoundingClientRect();
+    selectedMessage = { text, textarea, thread, range: range.cloneRange() };
+    selectionActions.querySelector('[role="status"]').textContent = '';
+    copySelectionButton.disabled = false;
+    quoteSelectionButton.disabled = !canQuoteInto(thread, textarea);
+    selectionActions.hidden = false;
+    selectionActions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - selectionActions.offsetWidth - 8)) + 'px';
+    selectionActions.style.top = Math.max(8, Math.min(rect.top - selectionActions.offsetHeight - 8, window.innerHeight - selectionActions.offsetHeight - 8)) + 'px';
+  }
+  copySelectionButton.addEventListener('click', async () => {
+    if (!selectedMessage) return;
+    const message = selectedMessage;
+    try {
+      const copying = copyTextToClipboard(message.text);
+      // The synchronous legacy fallback selects a temporary textarea. Restore
+      // the message range before its queued selectionchange events run.
+      if (!navigator.clipboard?.writeText) {
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(message.range);
+      }
+      await copying;
+      if (selectedMessage === message) hideSelectionActions();
+    } catch (_) {
+      if (selectedMessage === message) selectionActions.querySelector('[role="status"]').textContent = 'Copy failed — try again.';
+    }
+  });
+  quoteSelectionButton.addEventListener('click', () => {
+    if (!selectedMessage || reviewComplete) return;
+    const { text, textarea, thread } = selectedMessage;
+    if (!canQuoteInto(thread, textarea)) return hideSelectionActions();
+    hideSelectionActions();
+    window.getSelection().removeAllRanges();
+    appendQuotedSelection(textarea, text);
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!selectionActions.contains(event.target)) hideSelectionActions();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !selectionActions.hidden) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hideSelectionActions();
+    }
+  }, true);
+  document.addEventListener('scroll', hideSelectionActions, true);
+  window.addEventListener('resize', hideSelectionActions);
 
   function renderFollowups(threadEl, threadId) {
     const list = threadEl.querySelector('.user-comment-list');
@@ -4425,7 +5556,43 @@
     return stack;
   }
 
+  function updateTablePresentation(wrap) {
+    const scroll = wrap.querySelector(':scope > .table-scroll');
+    if (!scroll) return;
+    wrap.classList.toggle('can-scroll-right', scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft > 1);
+    wrap.querySelectorAll(':scope > .thread-marker-stack[data-row-anchor-idx]').forEach(stack => {
+      const row = wrap.querySelector(`tr[data-anchor-idx="${stack.getAttribute('data-row-anchor-idx')}"]`);
+      if (row) stack.style.top = (row.getBoundingClientRect().top - wrap.getBoundingClientRect().top + 1) + 'px';
+    });
+  }
+  const tablePresentationObserver = new ResizeObserver(entries => {
+    entries.forEach(entry => {
+      const wrap = entry.target.closest('.table-wrap');
+      if (wrap) updateTablePresentation(wrap);
+    });
+  });
+  function prepareTablePresentation() {
+    // Disconnect old file DOM on every render; never assign or renumber anchors.
+    tablePresentationObserver.disconnect();
+    document.querySelectorAll('#doc-content .table-wrap').forEach(wrap => {
+      const table = wrap.querySelector(':scope > table');
+      if (table) {
+        const scroll = document.createElement('div');
+        scroll.className = 'table-scroll';
+        table.before(scroll);
+        scroll.appendChild(table);
+        scroll.addEventListener('scroll', () => updateTablePresentation(wrap), { passive: true });
+      }
+      const scroll = wrap.querySelector(':scope > .table-scroll');
+      if (!scroll) return;
+      tablePresentationObserver.observe(scroll);
+      tablePresentationObserver.observe(scroll.querySelector('table'));
+      updateTablePresentation(wrap);
+    });
+  }
+
   function renderMarkers() {
+    prepareTablePresentation();
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
     document.querySelectorAll('[data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
@@ -4479,7 +5646,7 @@
         marker.setAttribute('data-thread-id', tid);
         marker.textContent = resolved ? '✓' : (data && data.index != null ? data.index : '•');
         const userThread = userThreadById.get(tid);
-        const lineRange = userThread && userThread.lineRange;
+        const lineRange = (userThread && userThread.lineRange) || (data && data.lineRange);
         const row = lineRange && rows ? rows.children[lineRange.start - 1] : null;
         if (row) {
           // Position the marker next to its anchored line in the gutter.
@@ -4586,7 +5753,12 @@
         span.classList.remove('has-thread-line', 'thread-resolved-line');
       });
     const userThreads = Array.isArray(state.userThreads) ? state.userThreads : [];
-    userThreads.forEach(thread => {
+    const lineThreads = userThreads.concat(prepopulated.map(thread => ({
+      id: thread.id,
+      anchorStart: thread.anchorIdx,
+      lineRange: thread.lineRange,
+    })));
+    lineThreads.forEach(thread => {
       if (!thread.lineRange) return;
       const anchorEl = getAnchorElByIdx(thread.anchorStart);
       if (!anchorEl) return;
@@ -5434,6 +6606,7 @@
   document.addEventListener('click', (e) => {
     if (e.target.closest('#finish-review')) return;
     if (e.target.closest('#verdict-modal')) return;
+    if (e.target.closest('#pr-modal')) return;
     if (e.target.closest('#show-all')) return;
     if (e.target.closest('#inspect-toggle')) return;
     if (e.target.closest('#thread-summary-wrap')) return;
@@ -5443,7 +6616,9 @@
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
+    if (e.target.closest('#thread-selection-actions')) return;
     if (e.target.closest('#toast-host')) return;
+    if (e.target.closest('.diff-file-actions')) return;
 
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) return;
@@ -5458,6 +6633,10 @@
 
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
     if (anchorEl) {
+      const isDiffFileHeader = fileKind() === 'diff'
+        && anchorEl.tagName === 'H3'
+        && anchorEl.parentElement?.id === 'doc-content';
+      if (isDiffFileHeader) return;
       const idx = parseInt(anchorEl.getAttribute('data-anchor-idx'));
       const existingThreads = Array.from(document.querySelectorAll('.thread')).filter(t => {
         const s = parseInt(t.getAttribute('data-anchor-start'));
@@ -5483,6 +6662,13 @@
   // Escape closes
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (isPrModalOpen()) {
+        e.preventDefault();
+        if (prModalState.view === 'publishing' || prModalState.busy) return;
+        if (prModalState.view === 'confirming') goBackToPrEdit();
+        else cancelPrToReview();
+        return;
+      }
       if (isVerdictModalOpen()) { closeVerdictModal(); return; }
       if (newThreadEditor) { closeNewThreadEditor(); return; }
       if (!showAllBtn.classList.contains('on')) closeAllThreads();
@@ -5511,6 +6697,47 @@
     }
   });
 
+  // File list width is a session-only UI preference; collapse preserves it.
+  const fileResizer = document.getElementById('file-sidebar-resizer');
+  function resizeFileSidebar(width) {
+    const gridWidth = document.getElementById('workspace-grid').clientWidth;
+    const maxWidth = Math.max(160, Math.min(480, gridWidth - paneLeft.getBoundingClientRect().width - 240));
+    width = Math.round(Math.max(160, Math.min(width, maxWidth)));
+    document.body.style.setProperty('--files-expanded-w', width + 'px');
+    fileResizer.setAttribute('aria-valuemax', String(maxWidth));
+    fileResizer.setAttribute('aria-valuenow', String(width));
+    scheduleReposition();
+  }
+  fileResizer.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = document.getElementById('file-sidebar').getBoundingClientRect().width;
+    fileResizer.setPointerCapture(e.pointerId);
+    fileResizer.classList.add('resizing');
+    document.body.classList.add('dragging');
+    function move(ev) {
+      resizeFileSidebar(startWidth + ev.clientX - startX);
+    }
+    function stop() {
+      fileResizer.classList.remove('resizing');
+      document.body.classList.remove('dragging');
+      fileResizer.removeEventListener('pointermove', move);
+      fileResizer.removeEventListener('lostpointercapture', stop);
+    }
+    fileResizer.addEventListener('pointermove', move);
+    fileResizer.addEventListener('lostpointercapture', stop);
+  });
+  fileResizer.addEventListener('keydown', e => {
+    const width = document.getElementById('file-sidebar').getBoundingClientRect().width;
+    const step = e.shiftKey ? 40 : 10;
+    const next = { ArrowLeft: width - step, ArrowRight: width + step, Home: 160, End: 480 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    resizeFileSidebar(next);
+  });
+  fileResizer.addEventListener('dblclick', () => resizeFileSidebar(236));
+
   // Divider drag
   const divider = document.getElementById('divider');
   divider.addEventListener('pointerdown', (e) => {
@@ -5536,6 +6763,704 @@
     }
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+  });
+
+  // ---------- Bundled demo scenarios ----------
+  function renderDemoScenarios() {
+    const nav = document.getElementById('demo-scenarios');
+    const scenarios = loadState().demoScenarios || [];
+    if (!nav) return;
+    nav.textContent = '';
+    nav.hidden = scenarios.length === 0;
+    scenarios.forEach(scenario => {
+      const link = document.createElement('a');
+      link.href = scenario.url;
+      link.textContent = scenario.label;
+      link.title = scenario.description;
+      link.dataset.demoScenario = scenario.id;
+      if (scenario.active) link.setAttribute('aria-current', 'page');
+      nav.appendChild(link);
+    });
+  }
+
+  // ---------- Pull request publication ----------
+  const prModalState = {
+    view: null,
+    draft: null,
+    confirmation: null,
+    busy: false,
+    prepareAccepted: false,
+    lastFocus: null,
+  };
+
+  function isDemoPr() {
+    return loadState().prSession?.demo === true;
+  }
+
+  function prActionLabel(action) {
+    return ({
+      approve: 'Approve',
+      requestChanges: 'Request changes',
+      commentOnly: 'Comment only',
+    })[action] || 'Comment only';
+  }
+
+  function renderPrHeader() {
+    const header = document.getElementById('pr-header');
+    const session = loadState().prSession;
+    if (!header) return;
+    header.textContent = '';
+    header.hidden = !session;
+    if (!session) return;
+
+    const main = document.createElement(session.demo ? 'span' : 'a');
+    main.className = 'pr-header-main';
+    if (!session.demo) {
+      main.href = session.pr?.url || session.url;
+      main.target = '_blank';
+      main.rel = 'noopener noreferrer';
+    }
+    main.textContent = session.pr
+      ? `${session.pr.owner}/${session.pr.repo}#${session.pr.number}`
+      : session.url;
+    header.appendChild(main);
+
+    if (!session.pr) {
+      const loading = document.createElement('span');
+      loading.className = 'pr-header-detail';
+      loading.textContent = 'Importing pull request…';
+      header.appendChild(loading);
+      return;
+    }
+
+    const detail = document.createElement('span');
+    detail.className = 'pr-header-detail';
+    detail.textContent = `${session.pr.title} · @${session.pr.author} · ${session.pr.baseRef} → ${session.pr.headRef}${session.demo ? ' · SYNTHETIC DEMO DATA' : ''}`;
+    detail.title = detail.textContent;
+    const separator = document.createElement('span');
+    separator.className = 'pr-header-separator';
+    separator.textContent = '·';
+    const files = document.createElement(session.demo ? 'span' : 'a');
+    if (!session.demo) {
+      files.href = `${session.pr.url || session.url}/files`;
+      files.target = '_blank';
+      files.rel = 'noopener noreferrer';
+    }
+    files.textContent = session.demo ? 'Demo links disabled' : 'Files on GitHub';
+    header.append(detail, separator, files);
+  }
+
+  function setPrSessionPhase(phase, fields = {}) {
+    const session = loadState().prSession;
+    if (!session) return;
+    session.phase = phase;
+    Object.assign(session, fields);
+    renderPrHeader();
+    updateFinishReviewButtonLabel();
+  }
+
+  function isPrModalOpen() {
+    const modal = document.getElementById('pr-modal');
+    return !!modal && !modal.hidden;
+  }
+
+  function showPrModal(view) {
+    const modal = document.getElementById('pr-modal');
+    if (!modal) return;
+    if (modal.hidden) prModalState.lastFocus = document.activeElement;
+    prModalState.view = view;
+    modal.hidden = false;
+    requestAnimationFrame(() => {
+      const focusTarget = modal.querySelector('textarea:not(:disabled), input:not(:disabled), button:not(:disabled)');
+      (focusTarget || document.getElementById('pr-dialog'))?.focus();
+    });
+  }
+
+  function hidePrModal({ restoreFocus = true } = {}) {
+    if (prModalState.busy || prModalState.view === 'publishing') return;
+    const modal = document.getElementById('pr-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    prModalState.view = null;
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    if (restoreFocus) (prModalState.lastFocus || document.getElementById('finish-review'))?.focus?.();
+  }
+
+  function resetPrModalChrome(phaseLabel) {
+    const title = document.getElementById('pr-dialog-title');
+    if (title) title.textContent = isDemoPr() ? 'Simulate demo PR review' : 'Publish GitHub review';
+    const body = document.getElementById('pr-dialog-body');
+    const actions = document.getElementById('pr-dialog-actions');
+    const status = document.getElementById('pr-dialog-status');
+    const phase = document.getElementById('pr-dialog-phase');
+    if (body) body.textContent = '';
+    if (actions) actions.textContent = '';
+    if (status) {
+      status.textContent = '';
+      status.classList.remove('busy');
+    }
+    if (phase) phase.textContent = phaseLabel || '';
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    return { body, actions, status };
+  }
+
+  function prButton(label, onClick, { primary = false, disabled = false } = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `pr-button${primary ? ' primary' : ''}`;
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function setPrBusy(busy, message = '') {
+    prModalState.busy = busy;
+    const modal = document.getElementById('pr-modal');
+    modal?.querySelectorAll('button, input, textarea, select').forEach(control => {
+      control.disabled = busy || control.dataset.permanentlyDisabled === 'true';
+    });
+    const status = document.getElementById('pr-dialog-status');
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle('busy', busy && !!message);
+    }
+  }
+
+  function adoptPrDraft(draft) {
+    if (!draft || typeof draft !== 'object') return;
+    prModalState.draft = JSON.parse(JSON.stringify(draft));
+    setPrSessionPhase(draft.summaryPending ? 'preparing' : 'editing', { draft: prModalState.draft });
+  }
+
+  function renderPrPreparing(message = '') {
+    if (!message) message = isDemoPr()
+      ? 'Building the deterministic local demo summary…'
+      : 'Generating an AI review summary. Your review remains open while this finishes…';
+    const { body, actions, status } = resetPrModalChrome('Preparing draft');
+    const note = document.createElement('p');
+    note.textContent = isDemoPr()
+      ? 'Discuss is collecting your review threads into a local-only simulation draft.'
+      : 'Discuss is collecting your review threads and preparing a server-owned publication draft.';
+    body?.appendChild(note);
+    if (status) {
+      status.textContent = message;
+      status.classList.add('busy');
+    }
+    actions?.appendChild(prButton('Cancel', cancelPrToReview));
+    showPrModal('preparing');
+    setPrBusy(false, message);
+    status?.classList.add('busy');
+  }
+
+  async function preparePrDraft() {
+    if (prModalState.busy) return;
+    prModalState.prepareAccepted = false;
+    renderPrPreparing('Starting draft preparation…');
+    setPrBusy(true, 'Starting draft preparation…');
+    try {
+      const response = await apiJson('/api/pr/prepare', { body: {} });
+      const responseDraft = response?.draft || response;
+      const eventDraft = prModalState.draft;
+      const readyEventArrived = eventDraft
+        && eventDraft.draftId === responseDraft?.draftId
+        && !eventDraft.summaryPending
+        && Number(eventDraft.revision) >= Number(responseDraft?.revision);
+      prModalState.prepareAccepted = true;
+      // The SSE handler has already rendered the newer ready draft. Do not
+      // redraw it here and erase typing that began while this request settled.
+      if (readyEventArrived) return;
+      const draft = responseDraft;
+      adoptPrDraft(draft);
+      if (draft && !draft.summaryPending) renderPrEditView();
+      else renderPrPreparing();
+    } catch (error) {
+      console.error('Failed to prepare PR draft:', error);
+      setPrBusy(false, 'Draft preparation could not start. Your review is unchanged.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't prepare draft — retry?", preparePrDraft);
+    }
+  }
+
+  function prDestinationDescription(destination) {
+    if (!destination || destination.kind === 'none') {
+      return { label: 'Will not publish', context: destination?.reason || 'No GitHub destination is available.' };
+    }
+    if (destination.kind === 'existingReviewThread') {
+      return {
+        label: isDemoPr() ? 'Demo target: existing review thread' : 'Reply to existing review thread',
+        context: `${isDemoPr() ? 'Synthetic' : 'GitHub'} root comment #${destination.rootCommentId}`,
+      };
+    }
+    const side = String(destination.side || '').toUpperCase();
+    return {
+      label: isDemoPr() ? 'Demo target: new inline comment' : 'New review comment',
+      context: `${destination.path} · ${side} line ${destination.line}`,
+    };
+  }
+
+  function renderPrEditView() {
+    const draft = prModalState.draft;
+    if (!draft) {
+      loadPrDraftForEditing();
+      return;
+    }
+    const { body, actions } = resetPrModalChrome(`Draft revision ${draft.revision}`);
+
+    const actionHeading = document.createElement('h3');
+    actionHeading.id = 'pr-action-heading';
+    actionHeading.textContent = 'Review action';
+    const choices = document.createElement('div');
+    choices.className = 'pr-actions-choice';
+    choices.setAttribute('role', 'radiogroup');
+    choices.setAttribute('aria-labelledby', actionHeading.id);
+    [
+      ['approve', 'Approve'],
+      ['requestChanges', 'Request changes'],
+      ['commentOnly', 'Comment only'],
+    ].forEach(([value, labelText]) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'pr-review-action';
+      input.value = value;
+      input.checked = draft.action === value;
+      label.append(input, document.createTextNode(labelText));
+      choices.appendChild(label);
+    });
+
+    const summaryLabel = document.createElement('label');
+    summaryLabel.className = 'pr-field-label';
+    summaryLabel.htmlFor = 'pr-review-summary';
+    summaryLabel.textContent = isDemoPr() ? 'Deterministic demo review summary' : 'AI-generated review summary';
+    const summary = document.createElement('textarea');
+    summary.className = 'pr-summary';
+    summary.id = 'pr-review-summary';
+    summary.value = draft.summary || '';
+    summary.disabled = draft.reviewCompleted === true;
+    if (summary.disabled) {
+      summary.dataset.permanentlyDisabled = 'true';
+      summary.title = 'Already published as part of the grouped review';
+    }
+    choices.querySelectorAll('input').forEach(input => {
+      input.disabled = draft.reviewCompleted === true;
+      if (input.disabled) input.dataset.permanentlyDisabled = 'true';
+    });
+
+    const itemsHeading = document.createElement('h3');
+    itemsHeading.textContent = `Review comments (${Array.isArray(draft.items) ? draft.items.length : 0})`;
+    const items = document.createElement('div');
+    items.className = 'pr-items';
+    (Array.isArray(draft.items) ? draft.items : []).forEach((item, index) => {
+      const card = document.createElement('section');
+      card.className = `pr-item${item.publishable ? '' : ' unpublishable'}`;
+      card.dataset.itemId = item.id;
+      const head = document.createElement('div');
+      head.className = 'pr-item-head';
+      const destination = prDestinationDescription(item.destination);
+      const destinationWrap = document.createElement('div');
+      const destinationLabel = document.createElement('div');
+      destinationLabel.className = 'pr-destination';
+      destinationLabel.textContent = destination.label;
+      const context = document.createElement('div');
+      context.className = 'pr-destination-context';
+      context.textContent = destination.context;
+      destinationWrap.append(destinationLabel, context);
+
+      const includeLabel = document.createElement('label');
+      includeLabel.className = 'pr-item-include';
+      const include = document.createElement('input');
+      include.type = 'checkbox';
+      include.className = 'pr-item-include-checkbox';
+      include.checked = item.include === true;
+      include.disabled = item.publishable === false || item.completed === true;
+      if (include.disabled) include.dataset.permanentlyDisabled = 'true';
+      include.setAttribute('aria-label', `Include comment ${index + 1} in GitHub review`);
+      includeLabel.append(include, document.createTextNode('Include'));
+      head.append(destinationWrap, includeLabel);
+      card.appendChild(head);
+
+      if (item.destination?.kind === 'newInlineComment' && item.destination.approximate) {
+        const warning = document.createElement('div');
+        warning.className = 'pr-approximate';
+        warning.textContent = 'Approximate target: verify the path, side, line, and context note in the comment before publishing.';
+        card.appendChild(warning);
+      }
+      if (item.completed) {
+        const published = document.createElement('div');
+        published.className = 'pr-approximate';
+        published.textContent = 'Already published — this destination and text are locked to prevent duplicate comments.';
+        card.appendChild(published);
+      }
+      if (!item.publishable) {
+        const reason = document.createElement('div');
+        reason.className = 'pr-unpublishable';
+        reason.textContent = `Will not publish: ${item.destination?.reason || 'no valid GitHub destination'}`;
+        card.appendChild(reason);
+      }
+
+      const textLabel = document.createElement('label');
+      textLabel.className = 'pr-field-label';
+      textLabel.htmlFor = `pr-item-text-${index}`;
+      textLabel.textContent = `Comment ${index + 1}`;
+      const text = document.createElement('textarea');
+      text.className = 'pr-item-text';
+      text.id = `pr-item-text-${index}`;
+      text.value = item.text || '';
+      text.disabled = item.completed === true;
+      if (text.disabled) text.dataset.permanentlyDisabled = 'true';
+      card.append(textLabel, text);
+      items.appendChild(card);
+    });
+    body?.append(actionHeading, choices, summaryLabel, summary, itemsHeading, items);
+    actions?.append(
+      prButton('Cancel', cancelPrToReview),
+      prButton('Preview', saveAndConfirmPrDraft, { primary: true })
+    );
+    showPrModal('editing');
+    setPrBusy(false);
+  }
+
+  function collectPrDraftEdits() {
+    const draft = prModalState.draft;
+    const action = document.querySelector('input[name="pr-review-action"]:checked')?.value || draft.action;
+    const summary = document.getElementById('pr-review-summary')?.value || '';
+    const itemCards = Array.from(document.querySelectorAll('#pr-dialog-body .pr-item'));
+    return {
+      draftId: draft.draftId,
+      revision: draft.revision,
+      action,
+      summary,
+      items: itemCards.map(card => ({
+        itemId: card.dataset.itemId,
+        include: card.querySelector('.pr-item-include-checkbox')?.checked === true,
+        text: card.querySelector('.pr-item-text')?.value || '',
+      })),
+    };
+  }
+
+  async function recoverPrDraftAfterAmbiguousSave(edits) {
+    try {
+      const stateResponse = await apiJson('/api/state', { method: 'GET' });
+      const remoteSession = normalizePrSession(stateResponse?.prSession);
+      if (remoteSession?.phase === 'confirming') {
+        await apiJson('/api/pr/cancel', { body: { mode: 'confirm' } });
+      }
+      const draft = await apiJson('/api/pr/draft', { method: 'GET' });
+      const updates = new Map((edits.items || []).map(item => [item.itemId, item]));
+      draft.action = edits.action;
+      draft.summary = edits.summary;
+      (draft.items || []).forEach(item => {
+        const update = updates.get(item.id);
+        if (!update || item.completed) return;
+        item.include = update.include;
+        item.text = update.text;
+      });
+      adoptPrDraft(draft);
+      renderPrEditView();
+      const status = document.getElementById('pr-dialog-status');
+      if (status) status.textContent = 'Recovered the server draft and your local edits. Preview again when ready.';
+      return true;
+    } catch (recoveryError) {
+      console.warn('Could not reconcile ambiguous PR draft response:', recoveryError);
+      return false;
+    }
+  }
+
+  async function saveAndConfirmPrDraft() {
+    if (prModalState.busy || !prModalState.draft) return;
+    clearMutationError(document.getElementById('pr-dialog-error'));
+    const edits = collectPrDraftEdits();
+    setPrBusy(true, 'Saving every draft item…');
+    try {
+      const updated = await apiJson('/api/pr/draft', { body: edits });
+      adoptPrDraft(updated);
+      setPrBusy(true, 'Building exact GitHub preview…');
+      const confirmation = await apiJson('/api/pr/confirm', {
+        body: { draftId: updated.draftId, revision: updated.revision },
+      });
+      prModalState.confirmation = confirmation;
+      setPrSessionPhase('confirming');
+      renderPrConfirmationView();
+    } catch (error) {
+      console.error('Failed to preview PR draft:', error);
+      const ambiguous = !error.status || error.code === 'stale_draft' || error.code === 'invalid_pr_phase';
+      if (ambiguous && await recoverPrDraftAfterAmbiguousSave(edits)) return;
+      setPrBusy(false, 'Preview was not created. Your edits are still here.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't create preview — retry?", saveAndConfirmPrDraft);
+    }
+  }
+
+  function safePreviewUrl(value) {
+    const trimmed = String(value || '').trim();
+    return /^(https?:\/\/|mailto:|#|\/(?!\/))/i.test(trimmed) ? trimmed : '';
+  }
+
+  function setSafePreviewHtml(container, html) {
+    const template = document.createElement('template');
+    template.innerHTML = typeof html === 'string' ? html : '';
+    // Preserve the inert visual state of GFM task-list checkboxes, then strip
+    // every active control and remote-loading image. A private preview must
+    // not contact a URL embedded in an unpublished draft.
+    template.content.querySelectorAll('input[type="checkbox"][disabled]').forEach(node => {
+      node.replaceWith(document.createTextNode(node.checked ? '☑' : '☐'));
+    });
+    template.content.querySelectorAll('script, iframe, object, embed, img, form, input, button, textarea, select, style, link, meta').forEach(node => node.remove());
+    template.content.querySelectorAll('*').forEach(node => {
+      Array.from(node.attributes).forEach(attribute => {
+        const name = attribute.name.toLowerCase();
+        if (name.startsWith('on')) node.removeAttribute(attribute.name);
+        if ((name === 'href' || name === 'src' || name === 'xlink:href') && !safePreviewUrl(attribute.value)) {
+          node.removeAttribute(attribute.name);
+        }
+      });
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+    container.replaceChildren(template.content);
+  }
+
+  function renderPrConfirmationView() {
+    const confirmation = prModalState.confirmation;
+    if (!confirmation) {
+      renderPrConfirmationRecovery();
+      return;
+    }
+    const { body, actions } = resetPrModalChrome(`Confirm draft revision ${confirmation.revision}`);
+    const heading = document.createElement('h3');
+    heading.textContent = 'Exact GitHub-flavored Markdown';
+    const raw = document.createElement('pre');
+    raw.className = 'pr-preview-raw';
+    raw.id = 'pr-preview-gfm';
+    raw.textContent = confirmation.previewGfm || '';
+    const rendered = document.createElement('section');
+    rendered.className = 'pr-preview-rendered';
+    const renderedLabel = document.createElement('div');
+    renderedLabel.className = 'pr-preview-rendered-label';
+    renderedLabel.textContent = 'Secondary rendered preview';
+    const renderedContent = document.createElement('div');
+    renderedContent.className = 'pr-preview-rendered-content';
+    setSafePreviewHtml(renderedContent, confirmation.previewHtml);
+    rendered.append(renderedLabel, renderedContent);
+    body?.append(heading, raw, rendered);
+    actions?.append(
+      prButton('Cancel', cancelPrToReview),
+      prButton('Go back', goBackToPrEdit),
+      prButton(isDemoPr() ? 'OK — Simulate locally' : 'OK — Publish', publishConfirmedPrDraft, { primary: true })
+    );
+    showPrModal('confirming');
+    setPrBusy(false);
+  }
+
+  function renderPrConfirmationRecovery() {
+    const { body, actions, status } = resetPrModalChrome('Confirmation interrupted');
+    const note = document.createElement('p');
+    note.textContent = 'The exact preview is not available after this page reload. Go back to the saved draft and create it again.';
+    body?.appendChild(note);
+    if (status) status.textContent = 'Nothing will publish until you create a new preview and press OK.';
+    actions?.append(
+      prButton('Cancel review publication', cancelPrToReview),
+      prButton('Go back to edit', goBackToPrEdit, { primary: true })
+    );
+    showPrModal('confirming');
+  }
+
+  async function loadPrDraftForEditing() {
+    if (prModalState.busy) return;
+    const { body } = resetPrModalChrome('Loading saved draft');
+    const note = document.createElement('p');
+    note.textContent = 'Loading the server-owned publication draft…';
+    body?.appendChild(note);
+    showPrModal('editing');
+    setPrBusy(true, 'Loading saved draft…');
+    try {
+      const draft = await apiJson('/api/pr/draft', { method: 'GET' });
+      adoptPrDraft(draft);
+      renderPrEditView();
+    } catch (error) {
+      console.error('Failed to load PR draft:', error);
+      setPrBusy(false, 'The saved draft could not be loaded.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't load draft — retry?", loadPrDraftForEditing);
+    }
+  }
+
+  async function goBackToPrEdit() {
+    if (prModalState.busy) return;
+    setPrBusy(true, 'Returning to draft…');
+    try {
+      await apiJson('/api/pr/cancel', { body: { mode: 'confirm' } });
+      prModalState.confirmation = null;
+      setPrSessionPhase('editing');
+      renderPrEditView();
+    } catch (error) {
+      console.error('Failed to return to PR draft:', error);
+      setPrBusy(false, 'Could not return to the draft.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't return to draft — retry?", goBackToPrEdit);
+    }
+  }
+
+  async function cancelPrToReview() {
+    if (prModalState.busy || prModalState.view === 'publishing') return;
+    if (prModalState.view === 'preparing' && !prModalState.prepareAccepted) {
+      hidePrModal();
+      return;
+    }
+    setPrBusy(true, 'Returning to review…');
+    try {
+      await apiJson('/api/pr/cancel', { body: { mode: 'review' } });
+      prModalState.confirmation = null;
+      prModalState.prepareAccepted = false;
+      setPrSessionPhase('reviewing');
+      prModalState.busy = false;
+      hidePrModal();
+    } catch (error) {
+      console.error('Failed to cancel PR publication:', error);
+      setPrBusy(false, 'Could not return to review. Your draft remains saved.');
+      showMutationError(document.getElementById('pr-dialog-error'), "couldn't cancel publication — retry?", cancelPrToReview);
+    }
+  }
+
+  function renderPrPublishing() {
+    const { body, status } = resetPrModalChrome('Publishing');
+    const note = document.createElement('p');
+    note.textContent = isDemoPr()
+      ? 'Simulating the exact confirmed review locally. No GitHub command or publication request can run.'
+      : 'Publishing the exact confirmed review and selected comments to GitHub.';
+    body?.appendChild(note);
+    showPrModal('publishing');
+    setPrBusy(true, isDemoPr() ? 'Simulating locally…' : 'Publishing… Keep this tab open.');
+    if (status) status.classList.add('busy');
+  }
+
+  async function publishConfirmedPrDraft() {
+    const confirmation = prModalState.confirmation;
+    if (prModalState.busy || !confirmation) return;
+    renderPrPublishing();
+    try {
+      await apiJson('/api/pr/publish', {
+        body: {
+          draftId: confirmation.draftId,
+          revision: confirmation.revision,
+          digest: confirmation.digest,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to start PR publication:', error);
+      renderPrPublicationFailure({ error: { message: error.message || 'Publication could not start.' } });
+    }
+  }
+
+  function renderPrPublicationFailure(result) {
+    setPrSessionPhase('failed', { publicationResult: result });
+    const { body, actions, status } = resetPrModalChrome('Publication failed');
+    const heading = document.createElement('h3');
+    heading.textContent = 'GitHub did not accept the complete publication.';
+    const error = document.createElement('p');
+    const code = result?.error?.code ? ` (${result.error.code})` : '';
+    error.textContent = `${result?.error?.message || 'An unknown publication error occurred.'}${code}`;
+    body?.append(heading, error);
+    const unknownOutcomes = Array.isArray(result?.unknownOperations) ? result.unknownOperations : [];
+    if (status) {
+      status.textContent = unknownOutcomes.length
+        ? 'Retry is blocked until the unknown GitHub operation outcomes are reconciled. Your draft remains saved.'
+        : 'Your action, summary, comment text, and include choices remain in the saved draft.';
+    }
+    if (prModalState.confirmation && !unknownOutcomes.length) {
+      actions?.appendChild(prButton('Retry exact publication', publishConfirmedPrDraft, { primary: true }));
+    }
+    actions?.append(
+      prButton('Edit draft', goBackToPrEdit),
+      prButton('Cancel', cancelPrToReview)
+    );
+    showPrModal('failed');
+    setPrBusy(false);
+  }
+
+  function applyPrDraftReadyEvent(payload) {
+    if (!payload?.draft || reviewComplete || prModalState.view !== 'preparing') return;
+    adoptPrDraft(payload.draft);
+    prModalState.prepareAccepted = true;
+    renderPrEditView();
+  }
+
+  function applyPrPublicationFailedEvent(payload) {
+    if (reviewComplete) return;
+    if (payload?.draft) adoptPrDraft(payload.draft);
+    renderPrPublicationFailure(payload?.result || {});
+  }
+
+  function applyPrPublicationSucceededEvent(payload) {
+    if (reviewComplete) return;
+    const result = payload?.result || {};
+    setPrSessionPhase('published', { publicationResult: result });
+    prModalState.busy = false;
+    const modal = document.getElementById('pr-modal');
+    if (modal) modal.hidden = true;
+    markReviewComplete({
+      prResult: result,
+      action: prModalState.draft?.action || loadState().prSession?.draft?.action,
+    });
+  }
+
+  function resumePrSessionUi() {
+    const session = loadState().prSession;
+    if (!session) return;
+    prModalState.draft = session.draft ? JSON.parse(JSON.stringify(session.draft)) : null;
+    renderPrHeader();
+    updateFinishReviewButtonLabel();
+    switch (session.phase) {
+      case 'preparing':
+        prModalState.prepareAccepted = true;
+        renderPrPreparing();
+        break;
+      case 'editing':
+        renderPrEditView();
+        break;
+      case 'confirming':
+        renderPrConfirmationRecovery();
+        break;
+      case 'publishing':
+        renderPrPublishing();
+        break;
+      case 'failed':
+        renderPrPublicationFailure(session.publicationResult || {});
+        break;
+      case 'published':
+        applyPrPublicationSucceededEvent({ result: session.publicationResult || {} });
+        break;
+    }
+  }
+
+  function prModalFocusableControls() {
+    const modal = document.getElementById('pr-modal');
+    if (!modal || modal.hidden) return [];
+    return Array.from(modal.querySelectorAll('textarea, input, select, button, a[href], [tabindex]'))
+      .filter(control => !control.disabled && control.getAttribute('tabindex') !== '-1' && !control.hidden);
+  }
+
+  document.getElementById('pr-modal')?.addEventListener('click', event => {
+    if (event.target !== event.currentTarget || prModalState.view === 'publishing') return;
+    if (prModalState.view === 'confirming') goBackToPrEdit();
+    else cancelPrToReview();
+  });
+  document.getElementById('pr-modal')?.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const controls = prModalFocusableControls();
+    if (!controls.length) {
+      event.preventDefault();
+      document.getElementById('pr-dialog')?.focus();
+      return;
+    }
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   // ---------- Done ----------
@@ -5764,6 +7689,14 @@
     const btn = document.getElementById('finish-review');
     const doneControl = document.getElementById('done-control');
     if (reviewComplete || !btn) return;
+    const prSession = loadState().prSession;
+    if (prSession) {
+      clearMutationError(doneControl);
+      if (prSession.phase === 'loading') return;
+      if (prSession.phase === 'reviewing') preparePrDraft();
+      else resumePrSessionUi();
+      return;
+    }
     const verdictConfig = loadState().verdictConfig;
     if (verdictConfig) {
       clearMutationError(doneControl);
@@ -5853,7 +7786,6 @@
   });
 
   // ---------- Theme toggle ----------
-  const THEME_STORAGE_KEY = 'discuss-theme';
   const THEME_MODES = ['system', 'light', 'dark'];
   const themeMediaQuery = window.matchMedia
     ? window.matchMedia('(prefers-color-scheme: dark)')
@@ -5913,7 +7845,7 @@
       event.stopPropagation();
       const mode = item.getAttribute('data-mode');
       if (!THEME_MODES.includes(mode)) return;
-      try { localStorage.setItem(THEME_STORAGE_KEY, mode); } catch (_) {}
+      window.discussWritePref('theme', mode);
       applyThemeMode(mode);
       closeMenu();
       btn.focus();
@@ -5949,13 +7881,37 @@
     const code = pre.querySelector(':scope > code');
     return !!(code && code.classList.contains('language-mermaid'));
   }
+  function applyPlainDiffColors(code) {
+    if (!code || ![...code.classList].some(name => name === 'language-diff' || name.startsWith('language-diff-'))) return;
+    if (code.querySelector('.token.inserted-sign, .token.inserted, .token.deleted-sign, .token.deleted, .token.coord')) return;
+    const lines = code.textContent.split('\n');
+    code.textContent = '';
+    lines.forEach((line, index) => {
+      const span = document.createElement('span');
+      span.className = 'diff-line ' + (
+        line.startsWith('@@') ? 'diff-line-hunk'
+          : line.startsWith('+') && !line.startsWith('+++') ? 'diff-line-add'
+            : line.startsWith('-') && !line.startsWith('---') ? 'diff-line-delete'
+              : 'diff-line-context'
+      );
+      span.textContent = line;
+      code.appendChild(span);
+      if (index < lines.length - 1) code.appendChild(document.createTextNode('\n'));
+    });
+  }
   function highlightCodeBlocks() {
-    if (!window.Prism) return;
     document.querySelectorAll('#doc-content pre').forEach(pre => {
       if (isMermaidPre(pre)) return;
-      pre.classList.add('line-numbers');
       const code = pre.querySelector(':scope > code');
-      if (code) Prism.highlightElement(code);
+      if (!window.Prism || typeof Prism.highlightElement !== 'function') {
+        applyPlainDiffColors(code);
+        return;
+      }
+      pre.classList.add('line-numbers');
+      if (code) {
+        Prism.highlightElement(code);
+        applyPlainDiffColors(code);
+      }
     });
   }
   function attachPrismCompleteHook() {
@@ -5967,7 +7923,9 @@
       const docContent = document.getElementById('doc-content');
       if (!docContent || !docContent.contains(env.element)) return;
       // Re-attach line-range gutter bars once the line-numbers plugin has
-      // produced the per-line spans inside this <pre>.
+      // produced the per-line spans inside this <pre>. If a diff grammar is
+      // unavailable, deterministic prefix classes still provide local colors.
+      applyPlainDiffColors(env.element);
       renderMarkers();
     });
   }
@@ -5982,10 +7940,13 @@
     if (isHtmlFile()) stashHtmlFrame(activeFileId);
     activateFileUi();
     updateFinishReviewButtonLabel();
+    renderPrHeader();
+    renderDemoScenarios();
     initFileSidebar();
     if (!isHtmlFile()) prepareActiveFileDocument();
     renderAllThreads();
     scheduleReposition();
+    resumePrSessionUi();
     startEventStream();
     startHeartbeat();
     setTimeout(scheduleReposition, 600);
