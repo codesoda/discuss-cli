@@ -6,19 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- **Concurrent sessions and self-describing startup** — no-override sessions now bind `127.0.0.1:0` directly and use the OS-assigned port, while explicit nonzero CLI, environment, and TOML ports bind exactly and fail on collision without fallback. Startup acquires all required loopback listeners before readiness and releases partial acquisitions on failure. `session.started` preserves its existing fields and adds `apiBaseUrl`, an exact endpoint map, and agent instructions; ordinary sessions omit the optional `proxyUrl`. Stderr now reports `review UI/API: <actual-url>`, and bundled integrations consume reported endpoints instead of scanning ports or assuming `7777`. Closes [#33](https://github.com/codesoda/discuss-cli/issues/33).
-- **Table rows are commentable** — `<tr>` joins the commentable selector, so clicking a row (header rows included) anchors a thread to it, and drag-selecting several rows produces one range comment via the existing multi-element mechanism. Cells are deliberately not commentable: anchors bind to the outermost match, so rows and cells are mutually exclusive. Rows sit inside a horizontal scroll container, so marker stacks are hosted on the unclipped `.table-wrap` and offset to the row, tagged with `data-for-anchor` because one wrap holds a stack per commented row; a `ResizeObserver` re-offsets them when a resize rewraps a cell. Row snippets join cell text with `·` so the thread card and transcript stay readable. Row state highlights are left to the generic `[data-anchor-idx]` rules rather than restated, so they track the shared palette; only the outline is suppressed (an offset outline on a `<tr>` draws outside the table) and `thead th` takes `background-color: inherit` so its opaque header fill doesn't hide the row state.
-
 ### Changed
 
-- **Tables render compact instead of falling back to browser defaults** — `discuss.html` previously had no table CSS at all. Tables now get `border-collapse`, 13px text, tight padding, hairline row separators, and a header band, all from existing theme variables. `max-width: 100%` lets auto layout shrink columns to the pane so a long prose column wraps rather than squeezing its neighbours; sideways scrolling only engages once even the minimum widths don't fit, inside a two-layer `.table-wrap` / `.table-scroll` wrapper that keeps gutter markers out of the overflow clip. A right-edge fade appears only while there is more table to scroll to.
-- **Column headers are left-aligned** — `<th>` no longer inherits the browser's centred default. Scoped as `th:not([align])` so explicit markdown alignment (`|---:|`, which comrak emits as `align="right"`) is preserved.
+- **Compact table presentation** — tighter spacing, header styling, alignment-preserving defaults, horizontal scrolling and an overflow fade. Existing server-stamped whole-table and row anchors are preserved, with gutter markers repositioned on resize.
 
 ### Fixed
 
-- **Links are readable in dark mode** — `#doc-content` had no link styling at all, so links fell back to the UA blue (`#0000EE`, 2.3:1 on the dark page) and the UA visited purple, both effectively unreadable. Links now use a new `--link` token, with `:visited` matching so the second colour can't reintroduce the problem. `--link` is deliberately not `--accent`: on the dark page `--accent` measures 5.5:1, which passes AA but sits far below body text at 12.5:1, so links read as the dimmest thing on the page despite being the one thing you want to click. The dark value is lifted to `#7cb0ff` (6.9:1); the light value is `#0b5fff` (5.13:1), unchanged from what `--accent` already gave, so light mode looks the same.
+- **Readable document links** — theme-aware link colours also apply to visited links.
+
+- **UI settings are remembered between sessions** — ⌘ Enter to send, the theme, and the file-sidebar collapse state survive closing a review. Each session binds a fresh port, so the browser treated every run as a new origin and started with empty `localStorage`; these preferences now live in `~/.discuss/prefs.json`, seeded into the page at render and written back through `POST /api/prefs`. Settings saved by an earlier build in the browser are not carried over, so each one needs to be set once more.
+
+## [0.11.1] - 2026-09-14
+
+### Added
+
+- **Resizable, compact file sidebar** — drag the sidebar's right edge to adjust its width, use keyboard controls for accessible resizing, or double-click to reset. Collapsing and reopening preserves the chosen width for the session. Tighter row padding, smaller icons, and reduced spacing give filenames more room.
+
+- **Expanded self-contained demo** — one `discuss demo` launch now exposes the existing six-file feature tour, a deterministic synthetic private-first PR review, and a bundled running local-app review through a shared header switcher. The PR scenario uses the production import/state/UI contracts for nested changed files, GitHub-style diffs, imported issue/review/inline discussion, local takes, Viewed progression, editable Finish Review, and exact GFM confirmation; its exclusive demo execution mode generates a local summary and simulates OK locally, making `gh`, agent publication events, and the real publisher unreachable. The mini app serves root-relative CSS/JavaScript, an app API, and SPA routes in-process on its own loopback origin, then uses the production live proxy and inspector for route-scoped element anchors, markers, and canned responses. All five listeners bind before readiness, demo update checks stay offline, history stays disabled, and no LLM, GitHub authentication, external app process, or public network is required. README video/GIF and the deterministic recording pipeline now cover both workflows. Closes [#56](https://github.com/codesoda/discuss-cli/issues/56).
+
+## [0.11.0] - 2026-09-04
+
+### Added
+
+- **Private-first GitHub PR review** — `discuss pr <full-github-pr-url>` starts a loopback-only PR session and automatically loads it by invoking the user's authenticated `gh` CLI plus read-only `git` commands; Discuss never receives or stores the token. Missing `gh` fails before readiness with macOS, Windows, Linux, and authentication instructions. Metadata and discussion fetches run concurrently with a temporary filtered clone, immutable base/head SHAs are verified, and exactly one aggregate git diff becomes a GFM overview plus one anchored diff file per changed path with existing discussion provenance. PR diffs use ten unchanged context lines by default, configurable with `discuss pr --unified <N>`. Every new thread and answer remains local by default. Finish Review supports PR actions, editable summary/comments, explicit include controls, an exact GFM confirmation step, grouped inline review publication, resolvable thread replies, and retry-safe direct publication through authenticated `gh`; nothing reaches GitHub before the reviewer confirms OK. Changed files appear in a GitHub-style expandable folder tree, and diff headers/hunks/additions/deletions use self-contained GitHub-like colors even when Prism's diff grammar is unavailable. Each diff header carries its addition/deletion totals and has a dedicated whole-file comment button instead of acting as a generic click target, plus a **Viewed** control that records the file, timestamp, and immutable PR head SHA, marks the sidebar entry with an eye indicator, animates the closing header into that entry, and advances to the next unviewed file. Standalone PR comments and separate OAuth/token configuration remain out of scope. Closes [#51](https://github.com/codesoda/discuss-cli/issues/51).
+
+- **Live website review** — a sole HTTP/S URL starts a fixed-upstream reverse proxy on a second loopback origin and loads that origin in the review iframe. Root-relative assets, application `/api/*` routes, request bodies, and WebSockets stay with the upstream; HTML responses receive frame-header/CSP neutralization, an early service-worker guard, and the element inspector, while non-HTML bytes stream unchanged. Same-upstream redirects remain proxied and cross-origin redirects require explicit reviewer confirmation. SPA `pushState`, `replaceState`, `popstate`, and hash changes are reported to the parent, with route and accessible-name context persisted on element anchors. Startup reports `mode: "live"`, `upstreamUrl`, `proxyUrl`, and the existing API endpoint map after both listeners bind; Done/external shutdown terminates both. Authentication remains explicit out-of-scope for v1 because upstream cookies do not implicitly belong to the loopback proxy origin. Closes [#32](https://github.com/codesoda/discuss-cli/issues/32).
+
+## [0.10.0] - 2026-08-30
+
+### Added
+
+- **Row-level table comments** — markdown tables retain their whole-table anchor for compatibility and now add a server-stamped anchor for each header/body row, so clicking a cell or selecting text targets that specific row. Row threads use row-limited snippets and identifying breadcrumbs, while their markers stay aligned in the table wrapper gutter instead of entering the table layout. A dependency-free Chrome DevTools Protocol smoke test covers row selection, persistence, and marker placement. Closes [#45](https://github.com/codesoda/discuss-cli/issues/45).
+
+- **What’s new version history** — when the header detects an available update, its version badge now opens a popover containing the GitHub release notes for every stable version newer than the running binary, plus the existing copyable `discuss update -y` command. Release-history lookup is non-fatal and uses the same process-lifetime cache as the latest-version check.
+
+### Changed
+
+- **Server-stamped markdown anchors** — commentable block indices are now planned and stamped into rendered HTML by the same server-side AST pass that serves `GET /api/files/{fileId}/blocks`. The browser consumes those stamps instead of independently re-segmenting the DOM, eliminating drift between browser and agent anchors and providing the single source of truth used by row-level table anchors. Closes [#43](https://github.com/codesoda/discuss-cli/issues/43).
+
+## [0.9.1] - 2026-08-28
+
+### Added
+
+- **Demo mode** — `discuss demo` opens a fully bundled six-file feature gallery: the feature-tour GIF (selected on load), two revised markdown documents pre-annotated with agent takes anchored to the changed passages, a matching diff, a dashboard screenshot, and a self-contained HTML prototype. Every file is embedded in the binary (which grows by roughly the size of the tour GIF, ~3 MB), and the session takes no file arguments of its own. A deterministic Demo agent answers threads you open and replies you send, in-process after a ~1.5 s pause, as ordinary takes over the normal SSE flow — tailored follow-ups on the pre-seeded threads, kind-aware prose (markdown, diff, image pin, HTML element) on your own — and stays silent once a thread is resolved, deleted, or the review is finished. No agent session, no LLM, no history writes; the review page still loads Prism syntax highlighting from a CDN and runs the usual release check, so with no network the demo runs minus code highlighting and per-line diff comments. Top-level flags go first: `discuss --port 4000 --no-open demo`.
+- **Collapsible file sidebar** — multi-file sessions can collapse the sidebar from full width to a ~50px icon rail with per-kind file icons (markdown, diff, image, HTML) and compact open-thread badges. The toggle is a labelled button whose tooltip and `aria-expanded` state track the sidebar, and each file button keeps its path as a hover tooltip plus an accessible name mirroring the visible row — path, the kind tag when one is shown, and the open-thread count — so the rail stays legible to screen readers once the names and badges shrink away. Defaults to expanded and persists to `localStorage` under `discuss-files-collapsed` — a UI preference only, and, like the theme preference, scoped to the session's origin, so it carries across sessions only when you pin a fixed `--port`.
+
+## [0.9.0] - 2026-08-27
+
+### Added
+
+- **Agent-initiated review annotations** — agents that edited the document under review can now pre-annotate it before the human comments. `POST /api/threads` accepts an optional `kind: "agent"` that allocates an `a-N` thread whose opening prose is stored as its first take, rendered in the browser with the pending-take visual language and the normal reply/resolve/delete lifecycle. A new `GET /api/files/{fileId}/blocks` endpoint returns the server's commentable-block segmentation (index, snippet, breadcrumb, `sourceVersion`) so agents can compute anchors without reimplementing the markdown splitter, and `session.started` advertises the capability via a new `agentInstructions` line and an `endpoints.blocksTemplate` entry. Closes [#39](https://github.com/codesoda/discuss-cli/issues/39).
+
+- **Prominent thread navigation** — the "X of Y resolved" control moved out of the muted header meta text into the right-hand tool area next to "Show all", restyled as a real bordered button with a ▾ caret and an accent state while its thread-summary popover is open; the popover now anchors to the right edge of the header. Open thread panels gain ‹ / › buttons that step to the previous/next thread in the same order the summary popover uses (file order → anchor position → creation order), switching files when needed; ‹ disables on the first thread and › on the last. Closes [#40](https://github.com/codesoda/discuss-cli/issues/40).
+
+### Fixed
+
+- **Tables are now commentable in markdown reviews** — each rendered GFM table gets a `.table-wrap` anchor (the same pattern as code blocks' `.pre-wrap`), so clicking a table or selecting cell text opens the comment affordance instead of doing nothing. The server-side block splitter counts each table as one block to match, so `GET /api/files/{fileId}/blocks` and agent-computed anchors stay in lockstep with the browser. Closes [#36](https://github.com/codesoda/discuss-cli/issues/36).
+
+## [0.8.0] - 2026-08-25
+
+### Added
+
+- **Header version badge with update check** — the browser header now reads "Discuss" and shows the running version. `GET /api/version` performs a non-fatal, cached background check against the latest GitHub release; when a newer version exists the badge becomes a one-click button that copies `discuss update -y` for pasting into a terminal or agent.
+
+- **Concurrent sessions and self-describing startup** — no-override sessions now bind `127.0.0.1:0` directly and use the OS-assigned port, while explicit nonzero CLI, environment, and TOML ports bind exactly and fail on collision without fallback. Startup acquires all required loopback listeners before readiness and releases partial acquisitions on failure. `session.started` preserves its existing fields and adds `apiBaseUrl`, an exact endpoint map, and agent instructions; ordinary sessions omit the optional `proxyUrl`. Stderr now reports `review UI/API: <actual-url>`, and bundled integrations consume reported endpoints instead of scanning ports or assuming `7777`. Closes [#33](https://github.com/codesoda/discuss-cli/issues/33).
 
 ## [0.7.0] - 2026-08-24
 

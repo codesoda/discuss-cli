@@ -8,11 +8,13 @@ use axum::http::header;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use std::sync::OnceLock;
 use tokio::sync::broadcast;
 
 use crate::assets;
 use crate::state::{File, FileId, FileKind};
-use crate::{render, template};
+use crate::update::{self, VersionStatus};
+use crate::{prefs, render, template};
 
 use super::app_state::AppState;
 use super::response::{OkResponse, api_error_response, javascript_response};
@@ -46,7 +48,11 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .iter()
         .map(|file| RenderedFile {
             id: file.id.clone(),
-            html: render_file_html_with_version(file, app_state.raw_file_version(&file.id)),
+            html: render_file_html_with_version(
+                file,
+                app_state.raw_file_version(&file.id),
+                app_state.live_frame_url(),
+            ),
         })
         .collect();
     let rendered_files_json = serde_json::to_string(&rendered_files)
@@ -57,11 +63,28 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .map(|file| file.html.clone())
         .unwrap_or_default();
 
-    Ok(template::render_page(
+    // Demo sessions render with default preferences so recordings do not pick
+    // up whatever the developer has saved.
+    let prefs_json = if app_state.is_offline_demo() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&prefs::load(&app_state.prefs_path))
+                .map_err(|error| format!("failed to serialize preferences: {error}"))?,
+        )
+    };
+
+    let page = template::render_page(
         &first_file_html,
         &initial_state_json,
         &rendered_files_json,
-    ))
+        prefs_json.as_deref(),
+    );
+    Ok(if app_state.is_offline_demo() {
+        template::without_external_prism_assets(page)
+    } else {
+        page
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -75,10 +98,14 @@ pub(super) struct RenderedFile {
 /// renderer directly, diff files through a synthesized markdown document,
 /// and images through the stable raw-file route with a pin overlay.
 pub(super) fn render_file_html(file: &File) -> String {
-    render_file_html_with_version(file, None)
+    render_file_html_with_version(file, None, None)
 }
 
-fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> String {
+fn render_file_html_with_version(
+    file: &File,
+    raw_version: Option<&str>,
+    live_frame_url: Option<&str>,
+) -> String {
     match file.kind {
         FileKind::Markdown => render::render(&file.content),
         FileKind::Diff => render::render(&crate::diff::diff_content_to_markdown(
@@ -98,9 +125,16 @@ fn render_file_html_with_version(file: &File, raw_version: Option<&str>) -> Stri
         FileKind::Html => {
             let file_id = escape_html_attribute(&file.id.0);
             let title = escape_html_attribute(&file.path);
-            format!(
-                "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
-            )
+            if let Some(frame_url) = live_frame_url {
+                let frame_url = escape_html_attribute(frame_url);
+                format!(
+                    "<div class=\"html-review live-review\" data-file-id=\"{file_id}\"><div class=\"live-route\"><span>Live route</span><code class=\"live-route-value\">{frame_url}</code></div><iframe class=\"prototype-frame\" data-live-review src=\"{frame_url}\" title=\"Live website: {title}\" sandbox=\"allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads\"></iframe></div>"
+                )
+            } else {
+                format!(
+                    "<div class=\"html-review\" data-file-id=\"{file_id}\"><iframe class=\"prototype-frame\" src=\"/files/{file_id}\" title=\"HTML prototype: {title}\" sandbox=\"allow-scripts allow-same-origin\"></iframe></div>"
+                )
+            }
         }
     }
 }
@@ -150,6 +184,29 @@ pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> 
             api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
         }
     }
+}
+
+/// Successful release lookups are cached for the life of the process so
+/// page reloads do not re-hit GitHub; failed lookups stay uncached and
+/// retry on the next request.
+static VERSION_STATUS_CACHE: OnceLock<VersionStatus> = OnceLock::new();
+
+pub(super) async fn get_api_version(AxumState(app_state): AxumState<AppState>) -> Response {
+    if app_state.is_offline_demo() {
+        return Json(VersionStatus::current_only()).into_response();
+    }
+    if let Some(status) = VERSION_STATUS_CACHE.get() {
+        return Json(status.clone()).into_response();
+    }
+
+    let status = tokio::task::spawn_blocking(update::version_status)
+        .await
+        .unwrap_or_else(|_| VersionStatus::current_only());
+    if status.latest.is_some() && (!status.update_available || !status.releases.is_empty()) {
+        let _ = VERSION_STATUS_CACHE.set(status.clone());
+    }
+
+    Json(status).into_response()
 }
 
 pub(super) async fn post_api_heartbeat(AxumState(app_state): AxumState<AppState>) -> Response {

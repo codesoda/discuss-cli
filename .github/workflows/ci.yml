@@ -44,3 +44,16 @@ jobs:
 
       - name: cargo test
         run: cargo test
+
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+
+      - name: live website browser e2e
+        if: runner.os == 'Linux'
+        run: node tests/browser/live-website-smoke.mjs
+
+      - name: bundled demo browser e2e (offline)
+        if: runner.os == 'Linux'
+        run: node tests/browser/demo-scenarios-smoke.mjs

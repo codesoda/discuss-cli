@@ -10,7 +10,8 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
     match error {
         DiscussError::ConfigParseError { .. }
         | DiscussError::DuplicateInputPath { .. }
-        | DiscussError::VerdictSpecError { .. } => EXIT_CONFIG_ERROR,
+        | DiscussError::VerdictSpecError { .. }
+        | DiscussError::ConfigError { .. } => EXIT_CONFIG_ERROR,
         DiscussError::PortInUse { .. } | DiscussError::ServerBindError { .. } => EXIT_SERVER_ERROR,
         DiscussError::FileNotFound { .. }
         | DiscussError::FileNotReadable { .. }
@@ -18,6 +19,7 @@ pub fn exit_code_for_error(error: &DiscussError) -> i32 {
         | DiscussError::LoggingInitError { .. }
         | DiscussError::UpdateCheckError { .. }
         | DiscussError::UpdateError { .. }
+        | DiscussError::PrError { .. }
         | DiscussError::DiffError { .. } => EXIT_GENERIC_FAILURE,
     }
 }
@@ -71,6 +73,12 @@ mod tests {
                 EXIT_CONFIG_ERROR,
             ),
             (
+                DiscussError::ConfigError {
+                    message: "`discuss demo` does not accept file arguments".to_string(),
+                },
+                EXIT_CONFIG_ERROR,
+            ),
+            (
                 DiscussError::RenderError {
                     source: Box::new(io::Error::other("render failed")),
                 },
@@ -99,6 +107,12 @@ mod tests {
             (
                 DiscussError::UpdateError {
                     message: "stdin is not a TTY - rerun with `discuss update -y`".to_string(),
+                },
+                EXIT_GENERIC_FAILURE,
+            ),
+            (
+                DiscussError::PrError {
+                    message: "failed to fetch PR metadata".to_string(),
                 },
                 EXIT_GENERIC_FAILURE,
             ),

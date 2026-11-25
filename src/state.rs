@@ -3,7 +3,7 @@ pub mod types;
 
 pub use store::{SharedState, State, StateSnapshot};
 pub use types::{
-    Draft, Drafts, ElementAnchor, File, FileId, FileKind, FileMeta, ImageAnchor, LineRange,
-    NewThreadDraftKey, Reply, Resolution, Source, Take, Thread, ThreadId, ThreadKind,
+    DemoScenarioLink, Draft, Drafts, ElementAnchor, File, FileId, FileKind, FileMeta, ImageAnchor,
+    LineRange, NewThreadDraftKey, Reply, Resolution, Source, Take, Thread, ThreadId, ThreadKind,
     default_file_id,
 };

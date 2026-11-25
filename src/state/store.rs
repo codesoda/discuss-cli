@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::verdict::VerdictConfig;
 
 use super::{
-    Draft, Drafts, FileMeta, NewThreadDraftKey, Reply, Resolution, Take, Thread, ThreadId,
+    DemoScenarioLink, Draft, Drafts, FileMeta, NewThreadDraftKey, Reply, Resolution, Take, Thread,
+    ThreadId,
 };
 
 pub type SharedState = Arc<RwLock<State>>;
@@ -37,6 +38,10 @@ pub struct StateSnapshot {
     pub files: Vec<FileMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict_config: Option<VerdictConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_session: Option<crate::pr::PrSessionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demo_scenarios: Option<Vec<DemoScenarioLink>>,
 }
 
 impl State {
@@ -163,6 +168,8 @@ impl State {
             source_version: self.source_version,
             files: Vec::new(),
             verdict_config: None,
+            pr_session: None,
+            demo_scenarios: None,
         }
     }
 }

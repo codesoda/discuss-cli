@@ -1,18 +1,18 @@
 ---
 name: discuss
-description: Launch the discuss CLI on markdown, diff, image, or HTML prototype files (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting "takes" on threads the user opens.
+description: Launch the discuss CLI on markdown, diff, image, HTML prototypes, a live HTTP/S website, or a private-first GitHub PR review (or piped markdown) through a monitor-type background tool, stream its event log, and participate by posting takes and handling PR import/publication events.
 allowed-tools: Bash, Monitor, TaskStop, monitor_start, monitor_stop, Read, ToolSearch
 ---
 
 # discuss — Interactive review session
 
-Open markdown, diffs, images, or HTML prototypes in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
+Open markdown, diffs, images, HTML prototypes, a running HTTP/S website, or a private-first GitHub PR in `discuss`, watch the user drop comments and replies, and respond with *takes* — the agent's view on each question or thread. Takes are semantically distinct from replies: the human types replies in the browser; the agent posts takes via the API.
 
-The source can be either a file on disk or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
+The source can be a file on disk, a sole HTTP/S URL, or markdown piped in on stdin (e.g. an ad-hoc summary of a staged diff that the agent generates and pipes straight into discuss without writing to disk).
 
 ## Arguments
 
-- `$ARGUMENTS` — A path (or paths) to Markdown, diff, image, or HTML prototype files, OR Markdown content to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop.
+- `$ARGUMENTS` — A path (or paths) to Markdown, diff, image, or HTML prototype files; one `http://` or `https://` URL for live website review; OR Markdown content to review without writing it to disk. If missing and the user has not described the content, ask which file/content and stop. A sole URL must be passed unchanged to `discuss`—never resolve it as a local path or download it first.
 
 ### Stdin mode
 
@@ -62,6 +62,26 @@ discuss plan.md diff          # markdown file(s) + diff in one session
 - Each changed file is its own sidebar entry with its own `fileId`; per-file prose is optional — post takes on file threads when intent needs explaining, stay silent on mechanical changes.
 - Diff output is capped at 5 MB (`--max-diff-bytes` / `DISCUSS_MAX_DIFF_BYTES` / `max_diff_bytes` config to override; `0` disables).
 
+### Private-first GitHub PR mode
+
+Pass exactly one full public-GitHub PR URL to the `pr` subcommand:
+
+```
+discuss pr https://github.com/OWNER/REPO/pull/NUMBER
+```
+
+Do not shorten this to `OWNER/REPO#NUMBER`, add query/fragment text, combine it with file arguments, or add `--verdict-options`. The optional PR flag `--unified <N>` controls unchanged diff context and defaults to 10. PR mode requires the GitHub CLI to be installed and authenticated. Discuss exits before readiness with installation guidance when `gh` is absent; it never asks for, receives, or stores a token.
+
+Discuss performs the read-only import itself by shelling directly to authenticated `gh` and `git`. On `session.started` with `mode: "pr"`:
+
+1. Retain the exact `prUrl`, `prSessionSecret`, protected PR callback URLs, and `agentInstructions`. Never print or persist the secret. `prImportMode` is `"automatic"`; do not fetch the PR, clone it, build an import bundle, or call `/api/pr/import`.
+2. Wait for `pr.imported`, then retain its concrete overview/diff file IDs. Continue the ordinary take loop for local `thread.created` and `reply.added` events. Everything remains private, including your takes.
+3. On `pr.summary.requested`, generate only the requested editable review summary from the supplied local conversations and POST it to the event's callback with the bearer secret. Do not select items or destinations for the reviewer.
+4. Ignore edit, preview, cancel, Go back, and publication UI operations; they require no agent action. Only the reviewer's **OK** authorizes Discuss itself to recheck the PR head and publish the exact confirmed grouped review/thread replies through `gh`.
+5. Never call GitHub or the publication-result callback yourself. Continue handling local discussion and requested summaries until `session.done`.
+
+The browser's include controls default off. Binary/no-hunk/outdated/ambiguous items stay unpublished with a reason. Standalone issue/PR comments are deliberately out of scope; use the provided GitHub links as the escape hatch.
+
 ### HTML prototype mode
 
 Pass `.html` or `.htm` files directly:
@@ -73,6 +93,23 @@ discuss prototype.html
 The browser renders each prototype in a sandboxed iframe and offers **Inspect** mode. HTML `thread.created` events carry `elementAnchor` with `selector`, ordered `fallbacks`, `tag`, optional `textDigest`, and a truncated `outerHtml` snippet. Use `breadcrumb` and `snippet` for readable context; inspect `outerHtml` when the visual element is ambiguous. Agent takes still use `POST /api/threads/{id}/takes`.
 
 Prototype-relative assets are served from the HTML file's directory. Root-absolute URLs are not rewritten. `POST /api/source` and live file watching are not supported for HTML files in this version.
+
+### Live website mode
+
+Pass exactly one HTTP/S URL to review a running application:
+
+```
+discuss http://localhost:3000
+discuss https://example.test/path
+```
+
+Discuss starts two loopback-only origins: the review UI/API and a fixed-upstream website proxy. The iframe always loads `session.started.payload.proxyUrl`, never the upstream directly. The proxy owns `/`, `/api/*`, root-absolute assets, and WebSocket upgrades for the configured upstream, injects the inspector into HTML only, and is not an arbitrary network proxy.
+
+Retain `mode: "live"`, `upstreamUrl`, `proxyUrl`, `apiBaseUrl`, and the complete reported `endpoints` map from `session.started`. **Never call `proxyUrl` for Discuss state or mutations.** Continue using `endpoints.state`, `endpoints.events`, `endpoints.createThread`, substituted `endpoints.addTakeTemplate`, and `endpoints.done`. Live `thread.created` events include route-scoped `elementAnchor` context: use `route`, `selector`, `accessibleName`, and `outerHtml`, plus `breadcrumb` and `snippet`, when forming a take.
+
+The live iframe sandbox permits scripts, same-origin app behavior, forms, modals, popups, and downloads, but not top-level navigation; the separate proxy origin remains the trust boundary. Cross-origin redirects are blocked in-frame and require an explicit reviewer choice.
+
+Authentication is intentionally limited in v1. Upstream browser cookies belong to the upstream origin, not the loopback proxy, and there are no `--cookie` or `--cookie-file` flags yet. Authenticated/public production sites may show login pages or fail because of Secure/Domain/SameSite cookies, SSO, anti-bot checks, or hard-coded origin assumptions. Do not attempt browser-profile cookie discovery or promise production-site compatibility.
 
 ### Verdict options
 
@@ -143,7 +180,7 @@ The monitor treats each stdout line from its command as an event notification de
 
 **The command string must start with `discuss`** — commands beginning with `discuss` are pre-approved and start immediately; any prefix (`cd … && discuss`, `VAR=x discuss`, `git … | discuss`) requires human approval before the monitor can start. Never prefix with `cd`: the monitor already runs in the session's working directory, so launch from the right cwd and pass repo-relative or absolute paths instead. When piping content in, prefer the heredoc form (`discuss - <<'EOF' … EOF`, which starts with `discuss`) over an upstream-command pipe.
 
-**File mode** (Claude Code):
+**File, live-URL, or PR mode** (Claude Code):
 
 ```
 Monitor(
@@ -216,7 +253,7 @@ curl -s "$STATE_URL" | jq -e 'has("threads")' > /dev/null \
   || { cat "$ERROR_LOG"; exit 1; }
 ```
 
-Launch without `--port` and do not probe a port range. `$SESSION_DIR` is unique per process; retain it, `$DISCUSS_PID`, and the saved `session-started.json` as that session's identity and endpoint state. Never reuse one session's variables or logs for another concurrent session. Use `$API_BASE` only for API routes not represented in the endpoint map.
+Launch without `--port` and do not probe a port range. In live mode both actual listener addresses come from `session.started`; never assume the proxy is adjacent to the API unless the human explicitly supplied `--port`. `$SESSION_DIR` is unique per process; retain it, `$DISCUSS_PID`, and the saved `session-started.json` as that session's identity and endpoint state. Never reuse one session's variables or logs for another concurrent session. Use `$API_BASE` only for API routes not represented in the endpoint map, and never use `$proxyUrl` for Discuss REST mutations.
 
 **2. Enter the event loop — blocking poller:**
 
@@ -258,10 +295,10 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 The first notification from the monitor should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","blocksTemplate":".../api/files/{fileId}/blocks","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
 ```
 
-Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` when posting a take. Use `apiBaseUrl` only for routes absent from the endpoint map. Optional `proxyUrl` is present only when a secondary proxy listener exists and is omitted for ordinary sessions.
+Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` when posting a take and the literal `{fileId}` in `endpoints.blocksTemplate` when fetching block anchors. Use `apiBaseUrl` only for routes absent from the endpoint map. `proxyUrl` is present only for `mode: "live"`; it is the iframe website origin and must never be used for Discuss REST mutations. Live payloads also include the unchanged `upstreamUrl`.
 
 If the monitor ends without emitting `session.started`, startup failed before readiness and no partial session exists. Read its stderr log for the error, report it, and stop.
 
@@ -278,7 +315,7 @@ Actionable events: `thread.created`, `reply.added`, `thread.resolved`, `thread.d
 ### `thread.created` (new thread opened by the user)
 
 1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` / `elementAnchor` from the payload.
-2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through the `files` field fetched from `endpoints.state` and inspect `imageAnchor`'s percentage coordinates. For HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml` to identify the reviewed DOM element.
+2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through the `files` field fetched from `endpoints.state` and inspect `imageAnchor`'s percentage coordinates. For static HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml`. For live threads, also use `elementAnchor.route` and `elementAnchor.accessibleName`; selectors are route-scoped and must not be interpreted against a different SPA route.
 3. Read the user's comment in `text`.
 4. Form a substantive take — answer the question, critique the anchored text, or add the missing piece. Be specific. Reference the anchored content, not just the question in isolation.
 5. Post it as a **take**, not a reply. Replace `{threadId}` in the retained `endpoints.addTakeTemplate` value:
@@ -302,6 +339,15 @@ Replies come only from the human (the API uses `/replies` for humans, `/takes` f
 ### `thread.resolved` / `thread.deleted`
 
 Acknowledge in chat ("`u-3` resolved" / "`u-2` deleted") but do not post anything to the thread.
+
+## Pre-annotating an edited document
+
+When **you** edited the document under review (you rewrote the plan, then launched discuss for approval), you can pre-annotate it with leading takes before the human comments — guided review markers the reviewer sees the moment the browser opens. `session.started.payload.agentInstructions` and `endpoints.blocksTemplate` advertise the capability; treat `payload.endpoints` as authoritative and never construct routes by hand.
+
+1. **Compute anchors.** Fetch `endpoints.state` to get the `files` array, substitute the target `{fileId}` into `endpoints.blocksTemplate`, and GET it. The response is `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` — the server's own segmentation into 1-based commentable blocks, the same units as `anchorStart`. Match each of your edits to a block `index` and note the returned `sourceVersion`.
+2. **Create annotations.** For each meaningful change, POST to `endpoints.createThread` with `kind: "agent"`, the anchor range, the block `snippet`, the `sourceVersion`, and prose covering: what changed, why, and what the reviewer should verify. The server allocates an `a-N` thread and stores your text as its opening take (`takeId` in the response); on `409 stale_source_version`, re-fetch blocks and retry.
+3. **Annotate intent, not mechanics.** One annotation per logical change; stay silent on mechanical changes (same rule as diff mode).
+4. **Event handling.** Ignore `thread.created` echoes whose `id` starts with `a-` — those are your own annotations (unlike takes, `thread.created` does echo to stdout). Respond normally when `reply.added` arrives on them. The human resolving an agent thread means "reviewed this change"; if you push new markdown via `POST /api/source`, your `a-N` threads need `threadAnchors` entries like any other active thread.
 
 ## Step 4: Stop conditions
 
@@ -327,8 +373,9 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | GET | `/api/files/{fileId}/raw` | — | Startup-stable bytes for an image file |
 | GET | `/files/{fileId}` | — | Served HTML prototype document |
 | POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
-| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors | Create a thread. Rare — usually the user does this. `fileId` required with multiple files. |
-| DELETE | `/api/threads/{id}` | — | Soft delete (`kind="user"` only; prepopulated returns 403) |
+| GET | `/api/files/{fileId}/blocks` | — | Server's commentable-block segmentation `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` for computing anchors (markdown/diff only) |
+| POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors; optional `kind: "agent"` stores `text` as the opening take and returns `takeId` | Create a thread. User threads are rare via API; `kind: "agent"` is how you pre-annotate. `fileId` required with multiple files. |
+| DELETE | `/api/threads/{id}` | — | Soft delete (`kind = "user"` or `"agent"`; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
@@ -350,13 +397,13 @@ If you regenerate the markdown mid-session (e.g. the user fixed code under revie
 }
 ```
 
-Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
+Anchors are 1-based indices of commentable block elements (headings, paragraphs, list items, code blocks, tables) in document order — the same units as `anchorStart` on `thread.created`. On success the server re-renders, bumps `sourceVersion` (visible in `/api/state`), and broadcasts `source.updated` on SSE and stdout; the browser swaps the document in place and keeps every conversation. Orphaned threads stay visible to the user, flagged as orphaned. You may pass `sourceVersion` when creating threads via `POST /api/threads` to get a `409 stale_source_version` instead of anchoring against a document that changed under you.
 
 ## Stdout event kinds
 
-- `session.started` → `{url, apiBaseUrl, proxyUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), and `done`; ordinary sessions omit `proxyUrl`
+- `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, while HTML anchors include selector fallbacks and `outerHtml` context
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`

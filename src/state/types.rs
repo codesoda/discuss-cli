@@ -60,11 +60,23 @@ impl From<&File> for FileMeta {
     }
 }
 
+/// One locally hosted scenario exposed by the bundled demo launcher.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoScenarioLink {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub url: String,
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadKind {
     User,
     Prepopulated,
+    Agent,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -91,6 +103,10 @@ pub struct ElementAnchor {
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessible_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
     pub outer_html: String,
 }
 
@@ -308,6 +324,32 @@ mod tests {
     }
 
     #[test]
+    fn thread_kind_agent_serializes_lowercase() {
+        let thread = Thread {
+            id: ThreadId("a-1".to_string()),
+            file_id: FileId("f-1".to_string()),
+            anchor_start: 2,
+            anchor_end: 4,
+            image_anchor: None,
+            snippet: "selected text".to_string(),
+            breadcrumb: String::new(),
+            text: String::new(),
+            created_at: timestamp(),
+            kind: ThreadKind::Agent,
+            line_range: None,
+            orphaned: false,
+            element_anchor: None,
+        };
+
+        let value = serde_json::to_value(&thread).expect("serialize agent thread");
+        assert_eq!(value["kind"], "agent");
+
+        let round_tripped: Thread =
+            serde_json::from_value(value).expect("deserialize agent thread");
+        assert_eq!(round_tripped, thread);
+    }
+
+    #[test]
     fn image_anchor_round_trips_with_camel_case_basis_points() {
         let mut thread = Thread {
             id: ThreadId("u-pin".to_string()),
@@ -428,10 +470,14 @@ mod tests {
             fallbacks: vec!["body > section:nth-child(2) > button".to_string()],
             tag: "button".to_string(),
             text_digest: Some("Buy now".to_string()),
+            accessible_name: Some("Buy now".to_string()),
+            route: Some("/pricing".to_string()),
             outer_html: "<button>Buy now</button>".to_string(),
         };
         let value = serde_json::to_value(&anchor).expect("serialize element anchor");
         assert_eq!(value["textDigest"], "Buy now");
+        assert_eq!(value["accessibleName"], "Buy now");
+        assert_eq!(value["route"], "/pricing");
         assert_eq!(value["outerHtml"], "<button>Buy now</button>");
         assert!(value.get("text_digest").is_none());
         assert_eq!(

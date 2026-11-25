@@ -43,6 +43,13 @@ pub(super) async fn post_api_done(
     AxumState(app_state): AxumState<AppState>,
     body: Bytes,
 ) -> Response {
+    if app_state.is_pr_session() {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "pr_publication_required",
+            "PR sessions finish only after confirmed publication succeeds",
+        );
+    }
     let emitted_at = Utc::now();
     let verdict = match validate_done_verdict(&app_state, &body, emitted_at) {
         Ok(verdict) => verdict,
@@ -59,6 +66,17 @@ pub(super) async fn post_api_done(
             );
         }
     };
+    // Past validation, this request will emit a transcript. Claim the shared
+    // finalization slot before taking the read lock so another demo scenario
+    // cannot emit a second terminal transcript during the shutdown grace.
+    let finalization = "done";
+    if !app_state.claim_done(finalization) {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "review_complete",
+            "another demo scenario already finished this session",
+        );
+    }
     let transcript = match app_state.state.read() {
         Ok(state) => {
             let transcript = build_transcript_with_source(&state, &source);
@@ -68,6 +86,7 @@ pub(super) async fn post_api_done(
             }
         }
         Err(_) => {
+            app_state.fail_done(finalization);
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -78,6 +97,7 @@ pub(super) async fn post_api_done(
     let payload = match serde_json::to_value(transcript) {
         Ok(payload) => payload,
         Err(error) => {
+            app_state.fail_done(finalization);
             return api_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
@@ -91,6 +111,7 @@ pub(super) async fn post_api_done(
         at: emitted_at,
         payload: payload.clone(),
     }) {
+        app_state.fail_done(finalization);
         return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -110,6 +131,7 @@ pub(super) async fn post_api_done(
         }
     }
 
+    app_state.complete_done(finalization);
     app_state.record_mutation();
     app_state.shutdown.signal();
 

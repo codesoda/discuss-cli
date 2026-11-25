@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ledgerly Operations — Discuss demo app</title>
+  <link rel="stylesheet" href="/demo-app.css">
+  <script src="/demo-app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" data-route="/">Ledgerly <span>demo app</span></a>
+    <nav aria-label="Demo app">
+      <a href="/" data-route="/">Overview</a>
+      <a href="/payments" data-route="/payments">Payments</a>
+      <a href="/settings/alerts" data-route="/settings/alerts">Alert settings</a>
+    </nav>
+  </header>
+  <main>
+    <p class="eyebrow">RUNNING LOCALLY · SYNTHETIC DATA</p>
+    <h1 id="page-title">Operations overview</h1>
+    <p id="page-copy">Monitor retry health before widening the rollout.</p>
+    <section class="metrics" aria-label="Payment metrics">
+      <article><span>Recovery rate</span><strong id="recovery-rate">Loading…</strong></article>
+      <article><span>Retry budget</span><strong id="retry-budget">Loading…</strong></article>
+      <article><span>API status</span><strong id="api-status">Loading local API…</strong></article>
+    </section>
+    <section class="deploy-card" id="deploy-card" aria-label="Retry rollout control">
+      <div>
+        <p class="eyebrow">STAGE 2 · 5% OF MERCHANTS</p>
+        <h2>Payment retry rollout</h2>
+        <p>The error rate is below the 0.3% gate. Review this card with Inspect mode before continuing.</p>
+      </div>
+      <button id="advance-rollout" type="button">Advance rollout</button>
+    </section>
+    <p class="route-hint">Use the navigation above to exercise SPA <code>pushState</code>; browser Back exercises <code>popstate</code>.</p>
+  </main>
+</body>
+</html>

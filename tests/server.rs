@@ -46,7 +46,10 @@ async fn get_root_renders_template_and_shutdown_completes() {
             .to_ascii_lowercase()
             .contains("cache-control: no-store")
     );
-    assert!(doc_content(response_body(&response)).contains("<h1>Review Plan</h1>"));
+    assert!(
+        doc_content(response_body(&response))
+            .contains("<h1 data-anchor-idx=\"1\">Review Plan</h1>")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), shutdown_rx.changed())
@@ -122,7 +125,9 @@ async fn get_root_seeds_current_state_for_reload() {
 
     assert!(initial_state.contains("\"u-one\""));
     assert!(initial_state.contains("\"u-two\""));
-    assert!(doc_content(response_body(&response)).contains("<h1>State Seed</h1>"));
+    assert!(
+        doc_content(response_body(&response)).contains("<h1 data-anchor-idx=\"1\">State Seed</h1>")
+    );
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -511,6 +516,12 @@ async fn post_api_threads_creates_thread_and_emits_events() {
     assert_eq!(snapshot.threads[0].snippet, "selected text");
     assert_eq!(snapshot.threads[0].text, "Needs clarification");
 
+    assert_eq!(body["kind"], Value::Null);
+    assert!(
+        body.get("takeId").is_none(),
+        "user threads must not carry a takeId: {body}"
+    );
+
     let sse_event = read_until(&mut sse, "\n\n").await;
     assert!(sse_event.contains("event: thread.created"));
     assert!(sse_event.contains("\"id\":\"u-1\""));
@@ -632,6 +643,254 @@ async fn post_api_threads_returns_structured_400_for_bad_json() {
     let body = response_json(&response);
     assert_eq!(body["error"]["code"], "bad_request");
     assert!(body["error"]["message"].as_str().is_some());
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_with_kind_agent_creates_prefixed_thread_with_initial_take() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":2,"anchorEnd":4,"snippet":"Rollout plan","text":"I rewrote this; verify the ordering.","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    assert_eq!(body["id"], "a-1");
+    assert_eq!(body["takeId"], "t-1");
+
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["threads"][0]["id"], "a-1");
+    assert_eq!(snapshot["threads"][0]["kind"], "agent");
+    assert_eq!(snapshot["threads"][0]["text"], "");
+    assert_eq!(
+        snapshot["takes"]["a-1"][0]["text"],
+        "I rewrote this; verify the ordering."
+    );
+    assert_eq!(snapshot["takes"]["a-1"][0]["id"], "t-1");
+
+    // Resolving an agent annotation is the per-annotation approval gesture.
+    let resolve = post_json_path(
+        addr,
+        "/api/threads/a-1/resolve",
+        r#"{"decision":"reviewed"}"#,
+    )
+    .await;
+    assert!(resolve.starts_with("HTTP/1.1 200"), "response: {resolve}");
+
+    // Exactly thread.created and thread.resolved on stdout; the opening take
+    // stays SSE-only like every other take.
+    let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(1)).await;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["kind"], "thread.created");
+    assert_eq!(events[0]["payload"]["id"], "a-1");
+    assert_eq!(events[0]["payload"]["kind"], "agent");
+    assert_eq!(events[0]["payload"]["text"], "");
+    assert_eq!(events[1]["kind"], "thread.resolved");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_broadcasts_thread_created_then_take_added() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"intro","text":"Leading take","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Both events may arrive in one chunk; read until the take payload shows
+    // up and assert the broadcast order within the stream.
+    let stream = read_until(&mut sse, "\"text\":\"Leading take\"").await;
+    let created_at = stream
+        .find("event: thread.created")
+        .expect("thread.created on SSE stream");
+    let take_at = stream
+        .find("event: take.added")
+        .expect("take.added on SSE stream");
+    assert!(created_at < take_at, "stream: {stream}");
+    assert!(stream.contains("\"id\":\"a-1\""));
+    assert!(stream.contains("\"kind\":\"agent\""));
+    assert!(stream.contains("\"threadId\":\"a-1\""));
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_rejects_unknown_or_prepopulated_kind() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for kind in ["prepopulated", "bogus"] {
+        let body = json!({
+            "anchorStart": 1,
+            "anchorEnd": 1,
+            "snippet": "x",
+            "text": "y",
+            "kind": kind
+        });
+        let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+        assert!(
+            response.starts_with("HTTP/1.1 400"),
+            "kind {kind}: {response}"
+        );
+        assert_eq!(response_json(&response)["error"]["code"], "bad_request");
+    }
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_requires_non_empty_text() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"x","text":"   ","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    let body = response_json(&response);
+    assert_eq!(body["error"]["code"], "validation_error");
+    assert_eq!(
+        body["error"]["message"],
+        "agent thread text must not be empty"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn agent_and_user_thread_id_counters_are_independent() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let user = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"x","text":"user first"}"#,
+    )
+    .await;
+    assert_eq!(response_json(&user)["id"], "u-1");
+
+    let agent = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":2,"anchorEnd":2,"snippet":"y","text":"agent second","kind":"agent"}"#,
+    )
+    .await;
+    assert_eq!(response_json(&agent)["id"], "a-1");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn delete_api_thread_soft_deletes_agent_threads() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    let bus = Arc::new(EventBus::new(16));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let emitter = Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone())));
+    let app_state = AppState::new(state.clone(), bus, emitter);
+    {
+        let mut state_guard = state.write().expect("state lock should not be poisoned");
+        state_guard.add_thread(thread_with_kind("a-1", 2, ThreadKind::Agent));
+    }
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = delete_path(addr, "/api/threads/a-1").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_eq!(response_json(&response)["ok"], true);
+
+    let snapshot = state
+        .read()
+        .expect("state lock should not be poisoned")
+        .snapshot();
+    assert!(snapshot.threads.is_empty());
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(1)).await;
+    assert_eq!(events[0]["kind"], "thread.deleted");
+    assert_eq!(events[0]["payload"]["threadId"], "a-1");
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2392,12 +2651,11 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
 
     let payload = response_json(&response);
     assert_eq!(payload["markdown"], "# New Title\n\nNew body.");
-    assert!(
-        payload["renderedHtml"]
-            .as_str()
-            .expect("renderedHtml string")
-            .contains("<h1>New Title</h1>")
-    );
+    let rendered_html = payload["renderedHtml"]
+        .as_str()
+        .expect("renderedHtml string");
+    assert!(rendered_html.contains("<h1 data-anchor-idx=\"1\">New Title</h1>"));
+    assert_eq!(stamped_indices(rendered_html), vec![1, 2]);
     assert_eq!(payload["sourceVersion"], 1);
     assert_eq!(payload["orphanedThreadIds"], json!(["u-lost"]));
     let anchors = payload["threadAnchors"]
@@ -2419,7 +2677,8 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
     // SSE broadcast carries the same payload.
     let event = read_until(&mut sse, "\n\n").await;
     assert!(event.contains("event: source.updated"), "event: {event}");
-    assert!(event.contains("<h1>New Title</h1>"));
+    let event_payload = sse_data_json(&event);
+    assert_eq!(event_payload["renderedHtml"], payload["renderedHtml"]);
 
     // Stdout event emitted for observing agents.
     let stdout_line = stdout_string(&stdout);
@@ -2430,7 +2689,12 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
 
     // Root page renders the new source; state reflects new anchors + version.
     let response = get_root(addr).await;
-    assert!(doc_content(response_body(&response)).contains("<h1>New Title</h1>"));
+    assert_eq!(
+        stamped_indices(doc_content(response_body(&response))),
+        vec![1, 2]
+    );
+    let blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    assert_eq!(block_indices(&blocks), vec![1, 2]);
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 1);
     let threads = state["threads"].as_array().expect("threads array");
@@ -2525,7 +2789,7 @@ async fn post_api_source_enforces_strict_thread_coverage() {
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 0);
     let response = get_root(addr).await;
-    assert!(doc_content(response_body(&response)).contains("<h1>Doc</h1>"));
+    assert!(doc_content(response_body(&response)).contains("<h1 data-anchor-idx=\"1\">Doc</h1>"));
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2576,6 +2840,353 @@ async fn post_api_threads_rejects_stale_source_version() {
     });
     let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
     assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_threads_agent_respects_stale_source_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let body = json!({ "markdown": "# Doc v2", "threadAnchors": [] });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    let body = json!({
+        "anchorStart": 1,
+        "anchorEnd": 1,
+        "snippet": "Doc",
+        "text": "leading take",
+        "kind": "agent",
+        "sourceVersion": 0
+    });
+    let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+    assert_eq!(
+        response_json(&response)["error"]["code"],
+        "stale_source_version"
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn post_api_source_requires_anchors_for_agent_threads() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_markdown_source("# Doc");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = post_json_path(
+        addr,
+        "/api/threads",
+        r#"{"anchorStart":1,"anchorEnd":1,"snippet":"Doc","text":"leading take","kind":"agent"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // Coverage is kind-agnostic: an active a-N thread missing from
+    // threadAnchors rejects the update.
+    let body = json!({ "markdown": "# Doc v2", "threadAnchors": [] });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert!(
+        response_json(&response)["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("a-1")
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn markdown_stamp_delivery_matches_blocks_api_for_every_supported_block_kind() {
+    let addr = free_loopback_addr();
+    let initial_markdown = all_commentable_blocks_markdown("Initial heading");
+    let app_state = AppState::for_process().with_markdown_source(initial_markdown.as_str());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let initial_blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    let expected_indices: Vec<u64> = (1..=18).collect();
+    assert_eq!(block_indices(&initial_blocks), expected_indices);
+
+    let root = get_root(addr).await;
+    let root_body = response_body(&root);
+    let initial_html = doc_content(root_body);
+    assert_eq!(
+        stamped_indices(initial_html),
+        block_indices(&initial_blocks)
+    );
+    assert!(initial_html.contains("class=\"front-matter\""));
+    assert!(initial_html.contains("class=\"table-wrap\" data-anchor-idx=\"11\""));
+    assert!(initial_html.contains("class=\"language-mermaid\""));
+    assert!(initial_html.contains("class=\"footnotes\""));
+    let rendered_files = rendered_files_json(root_body);
+    assert_eq!(
+        stamped_indices(
+            rendered_files[0]["html"]
+                .as_str()
+                .expect("rendered file HTML")
+        ),
+        block_indices(&initial_blocks)
+    );
+
+    let mut sse = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut sse, "\r\n\r\n").await;
+    assert_sse_headers(&headers);
+
+    let updated_markdown = all_commentable_blocks_markdown("Updated heading");
+    let update = post_json_path(
+        addr,
+        "/api/source",
+        &json!({ "markdown": updated_markdown, "threadAnchors": [] }).to_string(),
+    )
+    .await;
+    assert!(update.starts_with("HTTP/1.1 200"), "response: {update}");
+    let update_payload = response_json(&update);
+    let updated_html = update_payload["renderedHtml"]
+        .as_str()
+        .expect("source update renderedHtml");
+
+    let event = read_until(&mut sse, "\n\n").await;
+    assert!(event.contains("event: source.updated"), "event: {event}");
+    assert_eq!(
+        sse_data_json(&event)["renderedHtml"],
+        update_payload["renderedHtml"]
+    );
+
+    let updated_blocks = response_json(&get_path(addr, "/api/files/f-1/blocks").await);
+    assert_eq!(
+        stamped_indices(updated_html),
+        block_indices(&updated_blocks)
+    );
+    assert_eq!(block_indices(&updated_blocks), expected_indices);
+
+    let updated_root = get_root(addr).await;
+    let updated_root_body = response_body(&updated_root);
+    assert_eq!(
+        stamped_indices(doc_content(updated_root_body)),
+        block_indices(&updated_blocks)
+    );
+    let updated_rendered_files = rendered_files_json(updated_root_body);
+    assert_eq!(
+        stamped_indices(
+            updated_rendered_files[0]["html"]
+                .as_str()
+                .expect("updated rendered file HTML")
+        ),
+        block_indices(&updated_blocks)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_returns_segmentation_with_source_version() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Rollout plan\n\nWe will stage the rollout.\n\n- by region\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_json_headers(&response);
+    let body = response_json(&response);
+    assert_eq!(body["fileId"], "f-1");
+    assert_eq!(body["sourceVersion"], 0);
+    assert_eq!(
+        body["blocks"],
+        json!([
+            { "index": 1, "snippet": "Rollout plan", "breadcrumb": "Rollout plan" },
+            { "index": 2, "snippet": "We will stage the rollout.", "breadcrumb": "Rollout plan" },
+            { "index": 3, "snippet": "by region", "breadcrumb": "Rollout plan" }
+        ])
+    );
+
+    let root = get_root(addr).await;
+    let root_body = response_body(&root);
+    assert_eq!(
+        stamped_indices(doc_content(root_body)),
+        block_indices(&body)
+    );
+    let rendered_files = rendered_files_json(root_body);
+    assert_eq!(
+        stamped_indices(
+            rendered_files[0]["html"]
+                .as_str()
+                .expect("rendered file HTML")
+        ),
+        block_indices(&body)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_includes_whole_table_and_row_anchors() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Plan\n\nintro\n\n| a | b |\n| - | - |\n| c | d |\n\nafter\n");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    assert_eq!(
+        body["blocks"],
+        json!([
+            { "index": 1, "snippet": "Plan", "breadcrumb": "Plan" },
+            { "index": 2, "snippet": "intro", "breadcrumb": "Plan" },
+            { "index": 3, "snippet": "a b c d", "breadcrumb": "Plan" },
+            { "index": 4, "snippet": "a b", "breadcrumb": "Plan › Table header" },
+            { "index": 5, "snippet": "c d", "breadcrumb": "Plan › Table row 1" },
+            { "index": 6, "snippet": "after", "breadcrumb": "Plan" }
+        ])
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_maps_diff_files_through_synthesized_markdown() {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(Source {
+        files: vec![File {
+            id: FileId("f-1".to_string()),
+            path: "foo.rs".to_string(),
+            kind: FileKind::Diff,
+            content: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
+        }],
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let response = get_path(addr, "/api/files/f-1/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let body = response_json(&response);
+    // The synthesized diff document is a heading plus one fenced block per
+    // hunk — the same blocks the browser renders and indexes.
+    assert_eq!(body["blocks"][0]["index"], 1);
+    assert_eq!(body["blocks"][0]["snippet"], "foo.rs");
+    assert_eq!(body["blocks"][1]["index"], 2);
+    assert!(
+        body["blocks"][1]["snippet"]
+            .as_str()
+            .expect("snippet")
+            .contains("+new")
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn get_api_file_blocks_rejects_image_and_html_files_and_unknown_ids() {
+    use discuss::state::{File, FileId, FileKind, Source};
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(Source {
+        files: vec![
+            File {
+                id: FileId("f-1".to_string()),
+                path: "mockup.png".to_string(),
+                kind: FileKind::Image,
+                content: String::new(),
+            },
+            File {
+                id: FileId("f-2".to_string()),
+                path: "proto.html".to_string(),
+                kind: FileKind::Html,
+                content: "<html></html>".to_string(),
+            },
+        ],
+    });
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    for file_id in ["f-1", "f-2"] {
+        let response = get_path(addr, &format!("/api/files/{file_id}/blocks")).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+        assert_eq!(
+            response_json(&response)["error"]["code"],
+            "validation_error"
+        );
+    }
+
+    let response = get_path(addr, "/api/files/f-9/blocks").await;
+    assert!(response.starts_with("HTTP/1.1 404"), "response: {response}");
+    assert_eq!(response_json(&response)["error"]["code"], "unknown_file");
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -2928,7 +3539,7 @@ async fn get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions
 
     // First file is injected into #doc-content; every file is seeded into
     // the rendered-files map for client-side switching.
-    assert!(doc_content(body).contains("<h1>Alpha</h1>"));
+    assert!(doc_content(body).contains("<h1 data-anchor-idx=\"1\">Alpha</h1>"));
     assert!(body.contains("window.__DISCUSS_RENDERED_FILES__ = "));
     assert!(body.contains(r#"{"id":"f-1","html":"#));
     assert!(body.contains(r#"{"id":"f-2","html":"#));
@@ -3074,7 +3685,7 @@ async fn post_api_source_scopes_coverage_and_payload_to_the_updated_file() {
         payload["renderedHtml"]
             .as_str()
             .unwrap()
-            .contains("<h1>Alpha v2</h1>")
+            .contains("<h1 data-anchor-idx=\"1\">Alpha v2</h1>")
     );
     assert_eq!(payload["threadAnchors"], json!([]));
 
@@ -3252,6 +3863,82 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
 }
 
 #[tokio::test]
+async fn live_html_threads_require_routes_and_detachment_is_route_scoped() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let html_path = temp_dir.path().join("live.html");
+    fs::write(&html_path, "fixture").expect("write fixture");
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_source(html_source(&html_path, "", false))
+        .with_live_frame_url("http://127.0.0.1:49153/start");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+
+    let without_route = post_json_path(
+        addr,
+        "/api/threads",
+        r##"{"anchorStart":0,"anchorEnd":0,"snippet":"Buy","text":"Missing route","elementAnchor":{"selector":"#buy","tag":"button","outerHtml":"<button>Buy</button>"}}"##,
+    )
+    .await;
+    assert!(without_route.starts_with("HTTP/1.1 400"), "{without_route}");
+
+    for (selector, route) in [("#one", "/one"), ("#two", "/two?tab=2#details")] {
+        let created = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({
+                "anchorStart": 0,
+                "anchorEnd": 0,
+                "snippet": selector,
+                "text": "Route scoped",
+                "elementAnchor": {
+                    "selector": selector,
+                    "tag": "button",
+                    "accessibleName": selector,
+                    "route": route,
+                    "outerHtml": format!("<button id=\"{}\">Route</button>", &selector[1..]),
+                }
+            })
+            .to_string(),
+        )
+        .await;
+        assert!(created.starts_with("HTTP/1.1 200"), "{created}");
+    }
+
+    let detached = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/two?tab=2#details","detachedThreadIds":["u-2"]}"#,
+    )
+    .await;
+    assert!(detached.starts_with("HTTP/1.1 200"), "{detached}");
+    assert_eq!(response_json(&detached)["route"], "/two?tab=2#details");
+    let first_route_resolution = post_json_path(
+        addr,
+        "/api/anchors/resolve",
+        r#"{"route":"/one","detachedThreadIds":[]}"#,
+    )
+    .await;
+    assert!(
+        first_route_resolution.starts_with("HTTP/1.1 200"),
+        "{first_route_resolution}"
+    );
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(snapshot["threads"][0].get("orphaned").is_none());
+    assert_eq!(snapshot["threads"][1]["orphaned"], true);
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
 async fn html_asset_route_rejects_parent_and_symlink_escape() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let root = temp_dir.path().join("prototype");
@@ -3408,6 +4095,570 @@ async fn html_thread_creation_validates_serializes_and_reports_detachment() {
         .expect("server shutdown should succeed");
 }
 
+#[tokio::test]
+async fn pr_backend_import_draft_publish_retry_and_success_protocol() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let secret = "a".repeat(64);
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(32)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_pr_session(
+        discuss::pr::GithubPrUrl::parse("https://github.com/acme/project/pull/51").unwrap(),
+        secret.clone(),
+    )
+    .with_no_save(true)
+    .with_idle_timeout_secs(0)
+    .with_source(discuss::state::Source {
+        files: vec![discuss::state::File {
+            id: discuss::state::FileId("pr-overview".to_string()),
+            path: "pr-overview.md".to_string(),
+            kind: discuss::state::FileKind::Markdown,
+            content: "loading".to_string(),
+        }],
+    });
+    let server = tokio::spawn(serve(addr, app_state.clone(), pending()));
+    wait_for_server(addr).await;
+
+    let bundle = json!({
+        "schemaVersion": 1,
+        "importId": format!("acme/project#51@{}", "b".repeat(40)),
+        "pr": {
+            "owner": "acme", "repo": "project", "number": 51,
+            "url": "https://github.com/acme/project/pull/51",
+            "title": "Improve it", "body": "Description", "state": "OPEN", "isDraft": false,
+            "author": {"login": "octocat", "url": "https://github.com/octocat"},
+            "base": {"ref": "main", "sha": "a".repeat(40)},
+            "head": {"ref": "feature", "sha": "b".repeat(40)}
+        },
+        "overviewMarkdown": "# PR #51\n\nExisting discussion.",
+        "diff": {"contextLines": 10, "contextSource": "git-unified-10"},
+        "files": [{
+            "key": "src/lib.rs", "oldPath": "src/lib.rs", "newPath": "src/lib.rs",
+            "status": "modified", "binary": false,
+            "diff": "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        }],
+        "discussions": [{
+            "id": "review-thread:456", "kind": "reviewThread",
+            "author": {"login": "reviewer", "url": "https://github.com/reviewer"},
+            "createdAt": "2026-09-01T00:00:00Z",
+            "url": "https://github.com/acme/project/pull/51#discussion_r456",
+            "body": "Please fix", "reviewId": 123, "rootCommentId": 456,
+            "resolved": false, "outdated": false, "comments": []
+        }],
+        "seedThreads": [{
+            "discussionId": "review-thread:456", "fileKey": "src/lib.rs",
+            "rootCommentId": 456, "githubThreadNodeId": "PRRT_node", "path": "src/lib.rs",
+            "line": 1, "side": "RIGHT", "startLine": null, "startSide": null,
+            "commitId": "b".repeat(40), "body": "Please fix",
+            "url": "https://github.com/acme/project/pull/51#discussion_r456",
+            "author": {"login": "reviewer", "url": "https://github.com/reviewer"},
+            "createdAt": "2026-09-01T00:00:00Z", "resolved": false, "outdated": false
+        }]
+    })
+    .to_string();
+
+    let unauthorized = post_json_with_bearer(addr, "/api/pr/import", &bundle, None).await;
+    assert!(unauthorized.starts_with("HTTP/1.1 401"), "{unauthorized}");
+    let imported = post_json_with_bearer(addr, "/api/pr/import", &bundle, Some(&secret)).await;
+    assert!(imported.starts_with("HTTP/1.1 200"), "{imported}");
+    let imported_json = response_json(&imported);
+    assert_eq!(imported_json["idempotent"], false);
+    assert_eq!(
+        imported_json["seededThreadIds"],
+        json!(["gh-review-thread-456"])
+    );
+    let diff_file_id = imported_json["files"][0]["fileId"]
+        .as_str()
+        .expect("diff file id")
+        .to_string();
+    let imported_event = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["kind"] == "pr.imported")
+        .expect("agent receives concrete imported file IDs");
+    assert_eq!(imported_event["payload"]["overviewFileId"], "pr-overview");
+    assert_eq!(
+        imported_event["payload"]["files"][0]["fileId"],
+        diff_file_id
+    );
+    assert_eq!(
+        imported_event["payload"]["seededThreadIds"],
+        json!(["gh-review-thread-456"])
+    );
+    let repeated = post_json_with_bearer(addr, "/api/pr/import", &bundle, Some(&secret)).await;
+    assert_eq!(response_json(&repeated)["idempotent"], true);
+    let mut changed_bundle: Value = serde_json::from_str(&bundle).unwrap();
+    changed_bundle["overviewMarkdown"] = json!("# changed");
+    let conflicting = post_json_with_bearer(
+        addr,
+        "/api/pr/import",
+        &changed_bundle.to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(conflicting.starts_with("HTTP/1.1 409"), "{conflicting}");
+
+    let generic_done = post_path_no_body(addr, "/api/done").await;
+    assert!(generic_done.starts_with("HTTP/1.1 409"), "{generic_done}");
+    assert_eq!(
+        response_json(&generic_done)["error"]["code"],
+        "pr_publication_required"
+    );
+
+    let snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(snapshot["sourceVersion"], 1);
+    assert_eq!(snapshot["files"].as_array().unwrap().len(), 2);
+    assert_eq!(snapshot["threads"][0]["anchorStart"], 3);
+    assert_eq!(
+        snapshot["threads"][0]["lineRange"],
+        json!({"start": 3, "end": 3})
+    );
+    assert!(snapshot["prSession"].get("secret").is_none());
+    assert!(
+        snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let overview_viewed = post_path_no_body(addr, "/api/pr/files/pr-overview/viewed").await;
+    assert!(
+        overview_viewed.starts_with("HTTP/1.1 404"),
+        "{overview_viewed}"
+    );
+    let viewed = post_path_no_body(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(viewed.starts_with("HTTP/1.1 200"), "{viewed}");
+    let viewed = response_json(&viewed);
+    assert_eq!(viewed["fileId"], diff_file_id);
+    assert_eq!(viewed["headSha"], "b".repeat(40));
+    DateTime::parse_from_rfc3339(viewed["viewedAt"].as_str().unwrap())
+        .expect("viewedAt should be RFC3339");
+    let viewed_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(viewed_snapshot["prSession"]["viewedFiles"][0], viewed);
+
+    let cleared = delete_path(addr, &format!("/api/pr/files/{diff_file_id}/viewed")).await;
+    assert!(cleared.starts_with("HTTP/1.1 200"), "{cleared}");
+    let cleared_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert!(
+        cleared_snapshot["prSession"]["viewedFiles"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let local_thread = post_json_path(
+        addr,
+        "/api/threads",
+        &json!({
+            "fileId": diff_file_id, "anchorStart": 3, "anchorEnd": 3,
+            "lineRange": {"start": 1, "end": 1}, "snippet": "hunk", "text": "Local comment"
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(local_thread.starts_with("HTTP/1.1 200"), "{local_thread}");
+    let imported_reply = post_json_path(
+        addr,
+        "/api/threads/gh-review-thread-456/replies",
+        r#"{"text":"Local reply"}"#,
+    )
+    .await;
+    assert!(
+        imported_reply.starts_with("HTTP/1.1 200"),
+        "{imported_reply}"
+    );
+
+    let prepare = post_json_path(addr, "/api/pr/prepare", "{}").await;
+    assert!(prepare.starts_with("HTTP/1.1 202"), "{prepare}");
+    let prepare_json = response_json(&prepare);
+    assert!(
+        prepare_json["draft"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["include"] == false)
+    );
+    let events = stdout_string(&stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "pr.summary.requested")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "pr.publish.requested")
+            .count(),
+        0
+    );
+    let summary_request_id = prepare_json["requestId"].as_str().unwrap();
+    let summary = post_json_with_bearer(
+        addr,
+        "/api/pr/summary",
+        &json!({"requestId": summary_request_id, "summary": "Review summary"}).to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(summary.starts_with("HTTP/1.1 200"), "{summary}");
+    let draft = response_json(&summary);
+    let updates = draft["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            json!({
+                "itemId": item["id"], "include": true,
+                "text": format!("publish {}", item["id"].as_str().unwrap())
+            })
+        })
+        .collect::<Vec<_>>();
+    let stale = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"],
+            "revision": draft["revision"].as_u64().unwrap() - 1,
+            "action": "requestChanges", "summary": "Edited summary", "items": updates
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(stale.starts_with("HTTP/1.1 409"), "{stale}");
+
+    let mut immutable_target_update = updates.clone();
+    immutable_target_update[0]["destination"] = json!({"kind": "none"});
+    let immutable = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"], "revision": draft["revision"],
+            "action": "requestChanges", "summary": "Edited summary",
+            "items": immutable_target_update
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(immutable.starts_with("HTTP/1.1 422"), "{immutable}");
+
+    let updated = post_json_path(
+        addr,
+        "/api/pr/draft",
+        &json!({
+            "draftId": draft["draftId"], "revision": draft["revision"],
+            "action": "requestChanges", "summary": "Edited summary", "items": updates
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(updated.starts_with("HTTP/1.1 200"), "{updated}");
+    let updated = response_json(&updated);
+    let confirmed = post_json_path(
+        addr,
+        "/api/pr/confirm",
+        &json!({"draftId": updated["draftId"], "revision": updated["revision"]}).to_string(),
+    )
+    .await;
+    assert!(confirmed.starts_with("HTTP/1.1 200"), "{confirmed}");
+    let confirmed = response_json(&confirmed);
+    assert!(
+        confirmed["previewGfm"]
+            .as_str()
+            .unwrap()
+            .contains("Edited summary")
+    );
+    assert!(
+        confirmed["previewHtml"]
+            .as_str()
+            .unwrap()
+            .contains("Edited summary")
+    );
+    assert_eq!(
+        stdout_string(&stdout)
+            .lines()
+            .filter(|line| line.contains("pr.publish.requested"))
+            .count(),
+        0
+    );
+
+    let publish_body = json!({
+        "draftId": confirmed["draftId"], "revision": confirmed["revision"],
+        "digest": confirmed["digest"]
+    })
+    .to_string();
+    let publish = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert!(publish.starts_with("HTTP/1.1 200"), "{publish}");
+    let first_publish_id = response_json(&publish)["requestId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repeated_publish = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert_eq!(
+        response_json(&repeated_publish)["requestId"],
+        first_publish_id
+    );
+    let locked_thread = post_json_path(
+        addr,
+        "/api/threads",
+        &json!({
+            "fileId": diff_file_id, "anchorStart": 3, "anchorEnd": 3,
+            "lineRange": {"start": 3, "end": 3}, "snippet": "new", "text": "too late"
+        })
+        .to_string(),
+    )
+    .await;
+    assert!(locked_thread.starts_with("HTTP/1.1 409"), "{locked_thread}");
+    assert_eq!(
+        response_json(&locked_thread)["error"]["code"],
+        "pr_publication_locked"
+    );
+    let publish_events = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["kind"] == "pr.publish.requested")
+        .collect::<Vec<_>>();
+    assert_eq!(publish_events.len(), 1);
+    assert_eq!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["event"],
+        "REQUEST_CHANGES"
+    );
+    assert_eq!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["body"],
+        "Edited summary"
+    );
+    assert!(
+        publish_events[0]["payload"]["review"]["githubRequest"]["comments"][0]
+            .get("operationId")
+            .is_none()
+    );
+    assert!(
+        publish_events[0]["payload"]["replies"][0]["githubRequest"]
+            .get("operationId")
+            .is_none()
+    );
+    assert_eq!(
+        publish_events[0]["payload"]["replies"][0]["rootCommentId"],
+        456
+    );
+    let reply_operation = publish_events[0]["payload"]["replies"][0]["operationId"]
+        .as_str()
+        .unwrap();
+
+    let failure = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": first_publish_id, "status": "failed",
+            "replies": [{
+                "operationId": reply_operation, "rootCommentId": 456, "id": 888,
+                "url": "https://github.com/acme/project/pull/51#discussion_r888"
+            }],
+            "completedOperations": [reply_operation], "unknownOperations": [],
+            "error": {"code": "github_error", "message": "safe failure"}
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(failure.starts_with("HTTP/1.1 200"), "{failure}");
+    let failed_snapshot = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(failed_snapshot["prSession"]["phase"], "failed");
+    assert_eq!(
+        failed_snapshot["prSession"]["draft"]["summary"],
+        "Edited summary"
+    );
+    let completed_reply_item = failed_snapshot["prSession"]["draft"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["destination"]["kind"] == "existingReviewThread")
+        .expect("reply draft item");
+    assert_eq!(completed_reply_item["completed"], true);
+
+    let retry = post_json_path(addr, "/api/pr/publish", &publish_body).await;
+    assert!(retry.starts_with("HTTP/1.1 200"), "{retry}");
+    let retry_id = response_json(&retry)["requestId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(retry_id, first_publish_id);
+    let latest_publish = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .rfind(|event| event["kind"] == "pr.publish.requested")
+        .unwrap();
+    assert!(
+        latest_publish["payload"]["replies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let incomplete_success = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": retry_id, "status": "succeeded",
+            "replies": [], "completedOperations": [], "unknownOperations": []
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(
+        incomplete_success.starts_with("HTTP/1.1 400"),
+        "{incomplete_success}"
+    );
+
+    let success = post_json_with_bearer(
+        addr,
+        "/api/pr/publication-result",
+        &json!({
+            "requestId": retry_id, "status": "succeeded",
+            "review": {"id": 999, "url": "https://github.com/acme/project/pull/51#pullrequestreview-999"},
+            "replies": [], "completedOperations": ["review"], "unknownOperations": []
+        })
+        .to_string(),
+        Some(&secret),
+    )
+    .await;
+    assert!(success.starts_with("HTTP/1.1 200"), "{success}");
+    let events = stdout_string(&stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    assert_eq!(events.last().unwrap()["kind"], "session.done");
+    assert_eq!(
+        events.last().unwrap()["payload"]["prSession"]["phase"],
+        "published"
+    );
+    timeout(Duration::from_secs(3), server)
+        .await
+        .expect("PR success should trigger delayed shutdown")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn pr_routes_are_unavailable_outside_pr_sessions() {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, AppState::for_process(), async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let response = post_json_path(addr, "/api/pr/prepare", "{}").await;
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    assert_eq!(response_json(&response)["error"]["code"], "not_pr_session");
+    shutdown_tx.send(()).unwrap();
+    timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn ui_prefs_round_trip_to_disk_and_seed_the_page() {
+    let prefs_dir = tempfile::tempdir().expect("temp dir");
+    let prefs_path = prefs_dir.path().join("prefs.json");
+
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process()
+        .with_markdown_source("# Review Plan\n\nBody text.")
+        .with_prefs_path(&prefs_path);
+    let (shutdown_tx, shutdown_rx_signal) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx_signal.await;
+    }));
+    wait_for_server(addr).await;
+
+    let saved = post_json_path(addr, "/api/prefs", r#"{"cmdEnterToSend":false}"#).await;
+    assert!(saved.starts_with("HTTP/1.1 200"), "{saved}");
+    let body: Value = serde_json::from_str(response_body(&saved)).expect("prefs response json");
+    assert_eq!(body["prefs"]["cmdEnterToSend"], json!(false));
+
+    // A second setting must not clobber the first.
+    let merged = post_json_path(addr, "/api/prefs", r#"{"theme":"dark"}"#).await;
+    let merged_body: Value = serde_json::from_str(response_body(&merged)).expect("merged json");
+    assert_eq!(merged_body["prefs"]["cmdEnterToSend"], json!(false));
+    assert_eq!(merged_body["prefs"]["theme"], json!("dark"));
+
+    let stored = discuss::prefs::load(&prefs_path);
+    assert_eq!(stored.cmd_enter_to_send, Some(false));
+    assert_eq!(stored.theme, Some(discuss::prefs::Theme::Dark));
+
+    // The page must carry the saved values, since the browser's own storage is
+    // scoped to this session's port and starts empty on the next run.
+    let page = get_root(addr).await;
+    assert!(
+        page.contains(r#""cmdEnterToSend":false"#),
+        "prefs missing from page"
+    );
+    assert!(page.contains("window.__DISCUSS_PREFS__ = {"));
+
+    let bad_theme = post_json_path(addr, "/api/prefs", r#"{"theme":"neon"}"#).await;
+    assert!(bad_theme.starts_with("HTTP/1.1 400"), "{bad_theme}");
+    let unknown_key = post_json_path(addr, "/api/prefs", r#"{"nope":1}"#).await;
+    assert!(unknown_key.starts_with("HTTP/1.1 400"), "{unknown_key}");
+    let empty = post_json_path(addr, "/api/prefs", "{}").await;
+    assert!(empty.starts_with("HTTP/1.1 400"), "{empty}");
+    // The rejected writes must not have touched the stored preferences.
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+
+    // A demo must answer the page coherently without reaching into the user's
+    // home directory, even with a saved prefs file in place.
+    let demo_addr = free_loopback_addr();
+    let demo_state = AppState::for_process()
+        .with_markdown_source("# Demo\n\nBody text.")
+        .with_prefs_path(&prefs_path)
+        .with_offline_demo();
+    let (demo_shutdown_tx, demo_shutdown_rx) = oneshot::channel();
+    let demo_server = tokio::spawn(serve(demo_addr, demo_state, async move {
+        let _ = demo_shutdown_rx.await;
+    }));
+    wait_for_server(demo_addr).await;
+
+    let demo_response = post_json_path(demo_addr, "/api/prefs", r#"{"theme":"light"}"#).await;
+    assert!(demo_response.starts_with("HTTP/1.1 200"), "{demo_response}");
+    assert_eq!(
+        discuss::prefs::load(&prefs_path).theme,
+        Some(discuss::prefs::Theme::Dark)
+    );
+    // And the demo page renders with defaults, not the developer's own prefs.
+    assert!(
+        !get_root(demo_addr)
+            .await
+            .contains(r#"<script id="discuss-prefs">"#)
+    );
+
+    demo_shutdown_tx
+        .send(())
+        .expect("send demo shutdown signal");
+    timeout(Duration::from_secs(1), demo_server)
+        .await
+        .expect("demo server exits within timeout")
+        .expect("demo server task should not panic")
+        .expect("demo server shutdown should succeed");
+}
+
 fn free_loopback_addr() -> SocketAddr {
     let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("allocate free port");
     listener.local_addr().expect("free listener addr")
@@ -3531,10 +4782,122 @@ async fn assert_verdict_rejection_is_noop_then_valid(invalid_body: &str, expecte
     );
 }
 
+#[tokio::test]
+async fn browser_mutations_reject_cross_origin_requests_but_allow_originless_clients() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_idle_timeout_secs(0);
+    let server = tokio::spawn(serve(addr, app_state, std::future::pending()));
+    wait_for_server(addr).await;
+
+    let rejected = post_with_headers(
+        addr,
+        "/api/done",
+        &[
+            ("Origin", "http://127.0.0.1:49999"),
+            ("Sec-Fetch-Site", "same-site"),
+        ],
+    )
+    .await;
+    assert!(rejected.starts_with("HTTP/1.1 403"), "{rejected}");
+    assert_eq!(
+        response_json(&rejected)["error"]["code"],
+        "cross_origin_request"
+    );
+    assert!(
+        get_path(addr, "/api/state")
+            .await
+            .starts_with("HTTP/1.1 200"),
+        "cross-origin Done must not stop the session"
+    );
+
+    let mut rebound = TcpStream::connect(addr)
+        .await
+        .expect("connect rebound request");
+    rebound
+        .write_all(
+            b"POST /api/heartbeat HTTP/1.1\r\nHost: attacker.example\r\nOrigin: http://attacker.example\r\nSec-Fetch-Site: same-origin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .expect("write rebound request");
+    let mut rebound_response = String::new();
+    rebound
+        .read_to_string(&mut rebound_response)
+        .await
+        .expect("read rebound response");
+    assert!(
+        rebound_response.starts_with("HTTP/1.1 403"),
+        "forged matching Host/Origin must not bypass loopback origin checks: {rebound_response}"
+    );
+
+    let origin = format!("http://{addr}");
+    let same_origin = post_with_headers(
+        addr,
+        "/api/heartbeat",
+        &[("Origin", &origin), ("Sec-Fetch-Site", "same-origin")],
+    )
+    .await;
+    assert!(same_origin.starts_with("HTTP/1.1 200"), "{same_origin}");
+
+    let done = post_path_no_body(addr, "/api/done").await;
+    assert!(done.starts_with("HTTP/1.1 200"), "{done}");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 async fn post_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
     try_post_json_path(addr, path, body)
         .await
         .expect("POST request should succeed")
+}
+
+async fn post_json_with_bearer(
+    addr: SocketAddr,
+    path: &str,
+    body: &str,
+    bearer: Option<&str>,
+) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let authorization = bearer
+        .map(|secret| format!("Authorization: Bearer {secret}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n{authorization}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
+}
+
+async fn post_with_headers(addr: SocketAddr, path: &str, headers: &[(&str, &str)]) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let extra_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\n{extra_headers}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }
 
 async fn post_path_no_body(addr: SocketAddr, path: &str) -> String {
@@ -3754,6 +5117,54 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
     }
 }
 
+fn all_commentable_blocks_markdown(heading: &str) -> String {
+    r#"---
+title: Demo
+---
+# __HEADING__
+## Level two
+### Level three
+#### Level four
+##### Level five
+###### Not commentable
+
+Paragraph.
+
+> Quote
+>
+> - nested item
+> - nested code:
+>
+>   ```text
+>   nested
+>   ```
+
+- top item
+  - nested item
+- [x] task item
+
+| a | b |
+| - | - |
+| c | d |
+
+```rust
+fn main() {}
+```
+
+```mermaid
+graph TD
+A---B
+```
+
+Reference.[^note]
+
+Later.
+
+[^note]: Footnote detail.
+"#
+    .replacen("__HEADING__", heading, 1)
+}
+
 fn response_body(response: &str) -> &str {
     response
         .split_once("\r\n\r\n")
@@ -3763,6 +5174,47 @@ fn response_body(response: &str) -> &str {
 
 fn response_json(response: &str) -> Value {
     serde_json::from_str(response_body(response)).expect("response body should be JSON")
+}
+
+fn stamped_indices(html: &str) -> Vec<u64> {
+    html.split("data-anchor-idx=\"")
+        .skip(1)
+        .map(|suffix| {
+            suffix
+                .split_once('"')
+                .expect("anchor stamp should have a closing quote")
+                .0
+                .parse()
+                .expect("anchor stamp should be numeric")
+        })
+        .collect()
+}
+
+fn block_indices(response: &Value) -> Vec<u64> {
+    response["blocks"]
+        .as_array()
+        .expect("blocks array")
+        .iter()
+        .map(|block| block["index"].as_u64().expect("numeric block index"))
+        .collect()
+}
+
+fn sse_data_json(event: &str) -> Value {
+    let data = event
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("SSE event data");
+    serde_json::from_str(data).expect("SSE data should be JSON")
+}
+
+fn rendered_files_json(body: &str) -> Value {
+    let open = "window.__DISCUSS_RENDERED_FILES__ = ";
+    let start = body.find(open).expect("rendered-files script") + open.len();
+    let end = body[start..]
+        .find(";\n</script>")
+        .map(|offset| start + offset)
+        .expect("rendered-files assignment terminator");
+    serde_json::from_str(&body[start..end]).expect("rendered-files assignment should be JSON")
 }
 
 fn doc_content(body: &str) -> &str {
