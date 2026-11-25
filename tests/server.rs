@@ -3646,7 +3646,7 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
     );
 
     // Root page renders the spliced source; state carries shifted anchors
-    // and refreshed line ranges (item two is now line 7, last para line 9).
+    // without inventing code-row selections for ordinary blocks.
     let response = get_root(addr).await;
     assert!(doc_content(response_body(&response)).contains("item 1a</li>"));
     let state = response_json(&get_path(addr, "/api/state").await);
@@ -3658,7 +3658,7 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
         .expect("u-tail thread");
     assert_eq!(tail["anchorStart"], 5);
     assert_eq!(tail["anchorEnd"], 6);
-    assert_eq!(tail["lineRange"], json!({ "start": 7, "end": 9 }));
+    assert!(tail["lineRange"].is_null());
 
     // The shifted block is fetchable at its new index and version.
     let payload = response_json(&get_path(addr, "/api/blocks/6").await);
@@ -3672,6 +3672,32 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
         .expect("server exits within timeout")
         .expect("server task should not panic")
         .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_preserves_code_row_selection_when_anchor_moves() {
+    let addr = free_loopback_addr();
+    let app_state =
+        AppState::for_process().with_markdown_source("Intro.\n\n```rust\none\ntwo\nthree\n```\n");
+    let mut code_thread = thread("u-code", 2);
+    code_thread.anchor_end = 2;
+    code_thread.line_range = Some(discuss::state::LineRange { start: 2, end: 3 });
+    app_state.state.write().unwrap().add_thread(code_thread);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let body = json!({ "markdown": "First.\n\nSecond.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/1", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let state = response_json(&get_path(addr, "/api/state").await);
+    let thread = &state["threads"][0];
+    assert_eq!(thread["anchorStart"], 3);
+    assert_eq!(thread["anchorEnd"], 3);
+    assert_eq!(thread["lineRange"], json!({ "start": 2, "end": 3 }));
+    shutdown_tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test]
