@@ -3131,6 +3131,10 @@ async fn get_api_file_blocks_maps_diff_files_through_synthesized_markdown() {
     // hunk — the same blocks the browser renders and indexes.
     assert_eq!(body["blocks"][0]["index"], 1);
     assert_eq!(body["blocks"][0]["snippet"], "foo.rs");
+    for block in body["blocks"].as_array().expect("blocks") {
+        assert!(block.get("lineStart").is_none());
+        assert!(block.get("lineEnd").is_none());
+    }
     assert_eq!(body["blocks"][1]["index"], 2);
     assert!(
         body["blocks"][1]["snippet"]
@@ -3646,7 +3650,7 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
     );
 
     // Root page renders the spliced source; state carries shifted anchors
-    // and refreshed line ranges (item two is now line 7, last para line 9).
+    // without inventing code-row selections for ordinary blocks.
     let response = get_root(addr).await;
     assert!(doc_content(response_body(&response)).contains("item 1a</li>"));
     let state = response_json(&get_path(addr, "/api/state").await);
@@ -3658,7 +3662,7 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
         .expect("u-tail thread");
     assert_eq!(tail["anchorStart"], 5);
     assert_eq!(tail["anchorEnd"], 6);
-    assert_eq!(tail["lineRange"], json!({ "start": 7, "end": 9 }));
+    assert!(tail["lineRange"].is_null());
 
     // The shifted block is fetchable at its new index and version.
     let payload = response_json(&get_path(addr, "/api/blocks/6").await);
@@ -3672,6 +3676,61 @@ async fn patch_api_block_splices_block_shifts_anchors_and_broadcasts() {
         .expect("server exits within timeout")
         .expect("server task should not panic")
         .expect("server shutdown should succeed");
+}
+
+#[tokio::test]
+async fn patch_api_block_orphans_ambiguous_carry_after_markdown_restructuring() {
+    for (source, replacement) in [
+        ("First.\n\nSecond.\n", "```rust\nfirst"),
+        (
+            "Refs [^a] [^b].\n\n[^a]: Alpha\n\n[^b]: Beta\n",
+            "Refs [^b] [^a].",
+        ),
+    ] {
+        let addr = free_loopback_addr();
+        let app_state = AppState::for_process().with_markdown_source(source);
+        let mut anchored = thread("u-untouched", 2);
+        anchored.anchor_end = 2;
+        app_state.state.write().unwrap().add_thread(anchored);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(addr, app_state, async move {
+            let _ = shutdown_rx.await;
+        }));
+        wait_for_server(addr).await;
+        let body = json!({ "markdown": replacement, "sourceVersion": 0 });
+        let response = patch_json_path(addr, "/api/blocks/1", &body.to_string()).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let state = response_json(&get_path(addr, "/api/state").await);
+        assert_eq!(state["threads"][0]["orphaned"], true, "{source}");
+        shutdown_tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn patch_api_block_preserves_code_row_selection_when_anchor_moves() {
+    let addr = free_loopback_addr();
+    let app_state =
+        AppState::for_process().with_markdown_source("Intro.\n\n```rust\none\ntwo\nthree\n```\n");
+    let mut code_thread = thread("u-code", 2);
+    code_thread.anchor_end = 2;
+    code_thread.line_range = Some(discuss::state::LineRange { start: 2, end: 3 });
+    app_state.state.write().unwrap().add_thread(code_thread);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let body = json!({ "markdown": "First.\n\nSecond.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/1", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let state = response_json(&get_path(addr, "/api/state").await);
+    let thread = &state["threads"][0];
+    assert_eq!(thread["anchorStart"], 3);
+    assert_eq!(thread["anchorEnd"], 3);
+    assert_eq!(thread["lineRange"], json!({ "start": 2, "end": 3 }));
+    shutdown_tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -3991,6 +4050,43 @@ fn file_backed_source(path: &Path, content: &str) -> discuss::state::Source {
 }
 
 #[tokio::test]
+async fn shutdown_flushes_block_edits_before_the_debounce_expires() {
+    for done in [false, true] {
+        let addr = free_loopback_addr();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        fs::write(&path, BLOCK_DOC).unwrap();
+        let app = AppState::for_process()
+            .with_history_dir(dir.path().join("history"))
+            .with_source(file_backed_source(&path, BLOCK_DOC));
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server = tokio::spawn(serve(addr, app, async move {
+            let _ = shutdown_rx.await;
+        }));
+        wait_for_server(addr).await;
+        let body = json!({ "markdown": "Saved before exit.", "sourceVersion": 0 });
+        let response = patch_json_path(addr, "/api/blocks/2", &body.to_string()).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        if done {
+            let response = post_json_path(addr, "/api/done", "{}").await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        } else {
+            shutdown_tx.send(()).unwrap();
+        }
+        timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("Saved before exit.")
+        );
+    }
+}
+
+#[tokio::test]
 async fn patch_api_block_persists_to_disk_atomically() {
     let addr = free_loopback_addr();
     let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -4002,6 +4098,13 @@ async fn patch_api_block_persists_to_disk_atomically() {
         let _ = shutdown_rx.await;
     }));
     wait_for_server(addr).await;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o600))
+            .expect("restrict source permissions");
+    }
 
     // Two rapid edits: the debounce coalesces them and the file ends at the
     // second edit's content.
@@ -4025,6 +4128,15 @@ async fn patch_api_block_persists_to_disk_atomically() {
             "file was not updated in time: {on_disk}"
         );
         sleep(Duration::from_millis(50)).await;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&doc_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "atomic saves must preserve restrictive source permissions"
+        );
     }
     let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
         .expect("read tempdir")
@@ -4563,7 +4675,7 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
     let document_body = response_body(&document);
     assert!(document_body.contains(r#"<base href="/files/f-1/assets/">"#));
     assert!(
-        document_body.contains(r#"<script src="/assets/discuss-inspect.js?v=4"></script></body>"#)
+        document_body.contains(r#"<script src="/assets/discuss-inspect.js?v=5"></script></body>"#)
     );
     assert!(
         !document_body
@@ -4586,7 +4698,7 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
     let nested_css = get_path(addr, "/files/f-1/assets/pages/nested.css").await;
     assert!(nested_css.starts_with("HTTP/1.1 200"));
 
-    let inspector = get_path(addr, "/assets/discuss-inspect.js?v=4").await;
+    let inspector = get_path(addr, "/assets/discuss-inspect.js?v=5").await;
     assert!(inspector.starts_with("HTTP/1.1 200"));
     assert!(
         inspector
