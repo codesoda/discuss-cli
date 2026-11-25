@@ -6728,6 +6728,7 @@
     if (!activeFileIsEditable()) return; // diff/image/HTML pane: commenting works as usual
     if (!e.target.closest('#pane-left')) return; // header, threads, toasts work as usual
     if (e.target.closest('.block-editor')) return;
+    e.preventDefault(); // stop link navigation as well as comment handlers
     e.stopImmediatePropagation();
     const anchorEl = e.target.closest('#doc-content [data-anchor-idx]');
     if (anchorEl) {
@@ -6852,7 +6853,8 @@
     if (!blockEditor || blockEditor.committing) return;
     const editor = blockEditor;
     const value = editor.textarea.value;
-    if (value === editor.original) {
+    // Textareas normalize CRLF/CR to LF even without user input.
+    if (value === editor.original.replace(/\r\n?/g, '\n')) {
       blockEditorStashes.delete(editor.fileId);
       closeBlockEditor(true);
       return;
@@ -8310,6 +8312,7 @@
   hydrateState().then(() => {
     discussFiles = loadState().files || [];
     if (discussFiles.length) activeFileId = String(discussFiles[0].id);
+    syncEditReadonlyClass();
     if (isHtmlFile()) stashHtmlFrame(activeFileId);
     activateFileUi();
     updateFinishReviewButtonLabel();
