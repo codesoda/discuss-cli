@@ -6139,7 +6139,9 @@ async fn proposal_waits_until_accepted_then_applies_only_chosen_hunks() {
     .with_source(file_backed_source(&doc_path, BLOCK_DOC));
     {
         let mut state = app_state.state.write().expect("state lock");
-        state.add_thread(thread("u-first", 2)); // First paragraph
+        let mut first = thread("u-first", 2);
+        first.line_range = Some(discuss::state::LineRange { start: 1, end: 1 });
+        state.add_thread(first);
         state.add_thread(thread("u-last", 5)); // Last paragraph
     }
     let (addr, shutdown_tx, server) = proposal_server(app_state).await;
@@ -6173,6 +6175,19 @@ async fn proposal_waits_until_accepted_then_applies_only_chosen_hunks() {
     .await;
     assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
 
+    // An empty selection is rejected without consuming the proposal or mutating state.
+    let response = post_json_path(
+        addr,
+        &format!("/api/proposals/{id}/accept"),
+        &json!({ "hunkIds": [] }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    let unchanged = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(unchanged["sourceVersion"], 0);
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), BLOCK_DOC);
+    assert!(!stdout_string(&stdout).contains("proposal.accepted"));
+
     // Accept only the title change.
     let response = post_json_path(
         addr,
@@ -6189,7 +6204,10 @@ async fn proposal_waits_until_accepted_then_applies_only_chosen_hunks() {
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 1);
     let threads = state["threads"].as_array().expect("threads");
+    let first = threads.iter().find(|t| t["id"] == "u-first").unwrap();
+    assert_eq!(first["lineRange"], json!({"start": 1, "end": 1}));
     let last = threads.iter().find(|t| t["id"] == "u-last").unwrap();
+    assert!(last.get("lineRange").is_none_or(Value::is_null));
     assert_eq!(last["anchorStart"], 5);
     assert_ne!(last["orphaned"], true);
     let listing = response_json(&get_path(addr, "/api/proposals").await);

@@ -22,7 +22,6 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::block_map;
 use crate::events::{Event, EventKind};
 use crate::proposal_diff::BlockDiff;
 use crate::render;
@@ -30,7 +29,6 @@ use crate::sse::BroadcastEvent;
 use crate::state::{FileId, FileKind};
 
 use super::app_state::AppState;
-use super::block_edit::line_range_for;
 use super::resolve_file_id;
 use super::response::api_error_response;
 use super::source::source_updated_response;
@@ -344,6 +342,13 @@ pub(super) async fn post_api_proposal_accept(
             ids.into_iter().collect()
         }
     };
+    if accepted.is_empty() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "hunkIds must select at least one hunk; use discard to reject a proposal",
+        );
+    }
     let file_id = proposal.file_id.clone();
 
     let (updated_file, new_markdown, threads, source_version) = {
@@ -362,7 +367,6 @@ pub(super) async fn post_api_proposal_accept(
             );
         }
         let composed = proposal.diff.compose(|id| accepted.contains(&id));
-        let new_map = block_map::anchor_blocks(&composed.markdown);
 
         for existing in state.get_threads() {
             if existing.orphaned || existing.file_id != file_id {
@@ -376,7 +380,8 @@ pub(super) async fn post_api_proposal_accept(
                 Some((start, end)) => {
                     thread.anchor_start = start;
                     thread.anchor_end = end;
-                    thread.line_range = line_range_for(&new_map, start, end);
+                    // lineRange selects rows within a block, not source lines.
+                    // Preserve the reviewer's selection when carrying its anchor.
                 }
                 None => thread.orphaned = true,
             }
