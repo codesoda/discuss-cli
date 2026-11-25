@@ -18,6 +18,8 @@ pub struct Config {
     #[serde(default, deserialize_with = "deserialize_nonzero_port")]
     pub port: Option<u16>,
     pub auto_open: bool,
+    #[serde(skip)]
+    pub browser: crate::launch::Browser,
     pub idle_timeout_secs: u64,
     pub history_dir: Option<PathBuf>,
     pub no_save: bool,
@@ -79,6 +81,7 @@ impl Default for Config {
         Self {
             port: None,
             auto_open: DEFAULT_AUTO_OPEN,
+            browser: Default::default(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             history_dir: None,
             no_save: false,
@@ -309,6 +312,7 @@ mod tests {
             Config {
                 port: None,
                 auto_open: true,
+                browser: Default::default(),
                 idle_timeout_secs: 600,
                 history_dir: None,
                 no_save: false,

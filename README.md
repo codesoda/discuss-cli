@@ -88,6 +88,14 @@ First time here? `discuss demo` starts three self-contained scenarios from one c
 
 Everything runs in-process on distinct loopback origins. Demo mode never invokes `gh`, a publisher, or an LLM; it never writes history; and it needs no GitHub login, app process, JavaScript runtime, or public network. Synthetic identities, links, destinations, and the local publication simulation are labelled as demo data. With `--port N`, the launcher reserves `N` through `N + 4`; without it, the OS assigns all five listeners.
 
+### Edit and export a Markdown review copy
+
+Start `discuss --browser brave notes.md` to open Brave without changing your default browser. Omit `--browser` to keep using the system default. For a Pi session, have the agent pass the session text as Markdown on stdin; Discuss does not read agent history itself.
+
+Choose **Edit / export** on a Markdown file to edit its session copy. **Apply to review** updates the live document without writing to the original file. Existing threads on the edited file remain in the discussion but lose their anchors. A stale edit is rejected; download your draft before reopening the editor.
+
+**Download Markdown** saves the current draft. **Print / Save as PDF** prints the applied, rendered document using the browser print dialog. Select **Include discussion in export** to append the active file’s questions, replies and agent takes. Export before finishing the review. These controls are not offered for PR sessions or non-Markdown inputs.
+
 ### Piping markdown via stdin
 
 `discuss` reads from stdin when given `-` explicitly. It also auto-detects a non-TTY stdin when you give no file argument. Use this for ad-hoc review of generated markdown without a temp file:

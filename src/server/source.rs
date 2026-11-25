@@ -25,6 +25,8 @@ pub(super) struct SourceUpdateRequest {
     markdown: String,
     #[serde(default)]
     file_id: Option<FileId>,
+    #[serde(default)]
+    expected_version: Option<u64>,
     thread_anchors: Vec<ThreadAnchorUpdate>,
 }
 
@@ -155,6 +157,17 @@ pub(super) async fn post_api_source(
                 );
             }
         };
+
+        if request
+            .expected_version
+            .is_some_and(|v| v != state.source_version())
+        {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "stale_source_version",
+                "Source changed since the editor opened. Download your draft before reopening.",
+            );
+        }
 
         // Strict coverage in both directions, scoped to the updated file: a
         // silently-forgotten thread would drift onto wrong content, and an

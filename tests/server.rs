@@ -2719,6 +2719,34 @@ async fn post_api_source_swaps_source_reanchors_threads_and_broadcasts() {
 }
 
 #[tokio::test]
+async fn browser_edits_reject_a_stale_version_without_overwriting_source() {
+    let addr = free_loopback_addr();
+    let app_state = AppState::for_process().with_source(multi_file_source());
+    let (tx, rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = rx.await;
+    }));
+    wait_for_server(addr).await;
+    let edit = |text: &str| {
+        serde_json::json!({"fileId":"f-1","expectedVersion":0,"markdown":text,"threadAnchors":[]})
+            .to_string()
+    };
+    assert!(
+        post_json_path(addr, "/api/source", &edit("first edit"))
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    assert!(
+        post_json_path(addr, "/api/source", &edit("stale draft"))
+            .await
+            .starts_with("HTTP/1.1 409")
+    );
+    assert!(doc_content(response_body(&get_root(addr).await)).contains("first edit"));
+    tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn post_api_source_enforces_strict_thread_coverage() {
     let addr = free_loopback_addr();
     let app_state = AppState::for_process().with_markdown_source("# Doc");
@@ -4394,9 +4422,18 @@ async fn get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions
     // the rendered-files map for client-side switching.
     assert!(doc_content(body).contains("<h1 data-anchor-idx=\"1\">Alpha</h1>"));
     assert!(body.contains("window.__DISCUSS_RENDERED_FILES__ = "));
-    assert!(body.contains(r#"{"id":"f-1","html":"#));
-    assert!(body.contains(r#"{"id":"f-2","html":"#));
-    assert!(body.contains(r#"{"id":"f-3","html":"#));
+    let seed = body
+        .split_once("window.__DISCUSS_RENDERED_FILES__ = ")
+        .unwrap()
+        .1;
+    let files: serde_json::Value =
+        serde::Deserialize::deserialize(&mut serde_json::Deserializer::from_str(seed)).unwrap();
+    assert!(files[0]["markdown"].as_str().unwrap().contains("# Alpha"));
+    assert!(files[1]["markdown"].is_string());
+    assert!(files[2].get("markdown").is_none());
+    for file in files.as_array().unwrap() {
+        assert!(file["html"].is_string());
+    }
     // Diff files render as per-hunk diff-<lang> fenced blocks.
     assert!(body.contains("language-diff-rust"));
     // Initial state carries file metadata (no content) for the sidebar.

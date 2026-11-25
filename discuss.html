@@ -2144,6 +2144,16 @@
     from { opacity: 0; transform: translateY(-3px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+#md-workspace { width: min(44rem, 90vw); padding: 1rem; }
+#md-workspace textarea { display: block; width: 100%; height: 46vh; box-sizing: border-box; font: 1rem monospace; }
+#md-workspace button { margin: .4rem .25rem .2rem 0; }
+#md-print { display: none; }
+@media print {
+  body.print-review-copy > :not(#md-print) { display: none !important; }
+  body.print-review-copy, body.print-review-copy #md-print { display: block; overflow: visible; height: auto; background: initial; color: initial; color-scheme: light; }
+  #md-print pre { white-space: pre-wrap; }
+  #md-print img { max-width: 100%; }
+}
 </style>
 </head>
 <body>
@@ -2189,10 +2199,20 @@
       </button>
     </div>
   </span>
+  <button id="md-tools" hidden>Edit / export</button>
   <span class="done-control" id="done-control">
     <button id="finish-review" title="Finish the review and send the transcript to the agent">Finish review</button>
   </span>
 </header>
+<dialog id="md-workspace" aria-labelledby="md-title">
+  <h2 id="md-title">Markdown review copy</h2>
+  <label>Document source<textarea id="md-source" spellcheck="false"></textarea></label>
+  <p>Applying edits updates this session, not your original file. Existing threads on this file will be kept as unanchored discussions.</p>
+  <label><input type="checkbox" id="md-qa"> Include discussion in export</label>
+  <p id="md-message" role="status"></p>
+  <button id="md-apply">Apply to review</button><button id="md-download">Download Markdown</button><button id="md-pdf">Print / Save as PDF</button><button id="md-close">Close</button>
+</dialog>
+<article id="md-print"></article>
 
 <div class="done-banner" id="done-banner" role="status" aria-live="polite">
   You can close this tab.
@@ -2352,6 +2372,8 @@
       .filter(f => f && f.id != null)
       .map(f => [String(f.id), typeof f.html === 'string' ? f.html : ''])
   );
+  const markdownSources = new Map((window.__DISCUSS_RENDERED_FILES__ || [])
+    .filter(f => typeof f.markdown === 'string').map(f => [String(f.id), f.markdown]));
   let discussFiles = [];
   let activeFileId = DEFAULT_FILE_ID;
   const htmlFrameWrappers = new Map();
@@ -2943,6 +2965,7 @@
     }
     // Keep the pre-rendered copy fresh so switching to this file later shows
     // the updated content.
+    if (typeof payload.markdown === 'string' && markdownSources.has(updatedFileId)) markdownSources.set(updatedFileId, payload.markdown);
     renderedFileHtml.set(updatedFileId, payload.renderedHtml);
     const isActiveFile = updatedFileId === activeFileId;
     let editorStash = null;
@@ -3986,7 +4009,71 @@
       });
   }
 
+  const mdDialog = document.getElementById('md-workspace');
+  const mdSource = document.getElementById('md-source');
+  const mdMessage = document.getElementById('md-message');
+  let mdFile, mdVersion, mdOriginal;
+  function refreshMarkdownTools() {
+    document.getElementById('md-tools').hidden = !markdownSources.has(activeFileId) || !!loadState().prSession;
+  }
+  document.getElementById('md-tools').onclick = () => {
+    mdFile = activeFileId;
+    mdVersion = loadState().sourceVersion;
+    mdOriginal = markdownSources.get(mdFile);
+    mdSource.value = mdOriginal;
+    mdMessage.textContent = '';
+    document.getElementById('md-qa').checked = false;
+    mdDialog.showModal();
+  };
+  const draftChanged = () => mdSource.value !== mdOriginal.replace(/\r\n?/g, '\n');
+  function mayCloseDraft() { return !draftChanged() || window.confirm('Discard unapplied edits?'); }
+  mdDialog.oncancel = e => { if (!mayCloseDraft()) e.preventDefault(); };
+  document.getElementById('md-close').onclick = () => { if (mayCloseDraft()) mdDialog.close(); };
+  function fileThreads() { return loadState().threads.filter(t => threadFileId(t) === mdFile); }
+  function discussionAppendix() {
+    if (!document.getElementById('md-qa').checked) return '';
+    const state = loadState();
+    return fileThreads().map(t => {
+      const entries = commentsForThread(state, t.id).filter(c => c.kind !== 'thread');
+      return [t.text, ...entries.map(c => `${c.kind === 'take' ? 'Agent' : 'Reply'}: ${c.text}`)].join('\n\n');
+    }).join('\n\n---\n\n');
+  }
+  document.getElementById('md-apply').onclick = async e => {
+    if (!draftChanged()) { mdDialog.close(); return; }
+    const button = e.currentTarget;
+    button.disabled = true;
+    mdDialog.inert = true;
+    try {
+      const result = await apiJson('/api/source', { body: { fileId: mdFile, expectedVersion: mdVersion, markdown: mdSource.value,
+        threadAnchors: fileThreads().map(t => ({ threadId: t.id, orphaned: true })) } });
+      if (result && result.sourceVersion > loadState().sourceVersion) applySourceUpdatedEvent(result);
+      mdDialog.close();
+    } catch (error) { mdMessage.textContent = error.message; }
+    finally { button.disabled = false; mdDialog.inert = false; }
+  };
+  document.getElementById('md-download').onclick = () => {
+    const qa = discussionAppendix();
+    const url = URL.createObjectURL(new Blob([draftChanged() ? mdSource.value : mdOriginal, qa ? '\n\n## Discussion\n\n' + qa + '\n' : ''], {type:'text/markdown;charset=utf-8'}));
+    const link = document.createElement('a');
+    const path = discussFiles.find(f => String(f.id) === mdFile)?.path || '';
+    link.download = (path.split(/[\\/]/).pop().replace(/\.(md|markdown)$/i, '').replace(/[<>:"|?*]/g, '') || 'review') + '-review.md';
+    link.href = url; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  document.getElementById('md-pdf').onclick = () => {
+    if (draftChanged() || markdownSources.get(mdFile) !== mdOriginal) { mdMessage.textContent = 'Apply edits or reopen the current review copy before printing.'; return; }
+    const page = document.getElementById('md-print');
+    page.innerHTML = renderedFileHtml.get(mdFile);
+    const qa = discussionAppendix();
+    if (qa) {
+      const heading = document.createElement('h2'); heading.textContent = 'Discussion';
+      const text = document.createElement('pre'); text.textContent = qa;
+      page.append(heading, text);
+    }
+    mdDialog.close(); document.body.classList.add('print-review-copy');
+    try { window.print(); } finally { document.body.classList.remove('print-review-copy'); page.replaceChildren(); }
+  };
   function initFileSidebar() {
+    refreshMarkdownTools();
     const nav = document.getElementById('file-sidebar');
     if (!nav) return;
     if (!Array.isArray(discussFiles) || discussFiles.length < 2) {
@@ -4027,6 +4114,7 @@
   // every meta-status refresh so agent-created threads on background files
   // surface in the sidebar immediately.
   function updateFileSidebar() {
+    refreshMarkdownTools();
     const nav = document.getElementById('file-sidebar');
     if (!nav || !document.body.classList.contains('multi-file')) return;
     const state = loadState();

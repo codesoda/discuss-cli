@@ -48,6 +48,7 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
         .iter()
         .map(|file| RenderedFile {
             id: file.id.clone(),
+            markdown: (file.kind == FileKind::Markdown).then(|| file.content.clone()),
             html: render_file_html_with_version(
                 file,
                 app_state.raw_file_version(&file.id),
@@ -91,6 +92,8 @@ fn render_root_page(app_state: &AppState) -> std::result::Result<String, String>
 #[serde(rename_all = "camelCase")]
 pub(super) struct RenderedFile {
     id: FileId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    markdown: Option<String>,
     html: String,
 }
 

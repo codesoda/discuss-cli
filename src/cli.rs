@@ -31,6 +31,14 @@ pub struct Args {
     )]
     pub port: Option<u16>,
 
+    #[arg(
+        long,
+        value_enum,
+        default_value = "default",
+        help = "Browser to open for this session"
+    )]
+    pub browser: crate::launch::Browser,
+
     #[arg(long, help = "Do not open the browser after the server starts")]
     pub no_open: bool,
 
