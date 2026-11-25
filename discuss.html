@@ -113,6 +113,7 @@
     --ink: #1a1a1a;
     --muted: #666;
     --accent: #0b5fff;
+    --link: #0b5fff;
     --accent-soft: rgba(11, 95, 255, 0.10);
     --accent-hover: rgba(11, 95, 255, 0.05);
     --accent-dashed: rgba(11, 95, 255, 0.35);
@@ -178,6 +179,7 @@
     --ink: #e8e8e6;
     --muted: #a8a8a4;
     --accent: #5a9bff;
+    --link: #7cb0ff;
     --accent-soft: rgba(90, 155, 255, 0.18);
     --accent-hover: rgba(90, 155, 255, 0.10);
     --accent-dashed: rgba(90, 155, 255, 0.45);
@@ -1034,7 +1036,37 @@
     margin: 10px 0;
   }
   #doc-content .pre-wrap pre { margin: 0; }
-  #doc-content .table-wrap { position: relative; }
+  #doc-content a, #doc-content a:visited { color: var(--link); }
+  #doc-content a { text-underline-offset: 2px; }
+  /* Keep existing table/row anchors and their markers outside the scroll clip. */
+  #doc-content .table-wrap { position: relative; margin: 10px 0; }
+  #doc-content .table-scroll { overflow-x: auto; }
+  #doc-content .table-wrap.can-scroll-right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--card));
+  }
+  #doc-content table { border-collapse: collapse; max-width: 100%; font-size: 13px; line-height: 1.45; }
+  #doc-content th, #doc-content td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: break-word;
+  }
+  #doc-content th:not([align]) { text-align: left; }
+  #doc-content thead th { background: var(--pre-bg); border-bottom: 1px solid var(--line-strong); font-weight: 600; }
+  #doc-content tbody tr:last-child > td { border-bottom: none; }
+  #doc-content tr[data-anchor-idx]:hover,
+  #doc-content tr[data-anchor-idx].focused,
+  #doc-content tr[data-anchor-idx].in-range,
+  #doc-content tr[data-anchor-idx].thread-active { outline: none; box-shadow: none; }
+  #doc-content thead tr[data-anchor-idx]:is(:hover, .focused, .in-range, .has-thread, .thread-active) > th { background-color: inherit; }
+  #doc-content tr[data-anchor-idx]:is(.focused, .thread-active) > :first-child { box-shadow: inset 2px 0 0 var(--accent); }
   #doc-content pre {
     background: var(--pre-bg);
     padding: 10px 12px;
@@ -1676,6 +1708,16 @@
      into the running comma-separated string of session counts. */
   .meta-stat-draft { color: var(--teal); }
   .meta-stat-pending { color: var(--pending-dark); }
+
+  #thread-selection-actions {
+    position: fixed;
+    z-index: 1000;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+    box-shadow: 0 4px 16px #0003;
+  }
 
   #selection-popup {
     position: fixed;
@@ -3151,7 +3193,7 @@
 
   function blockCompletedInteraction(event) {
     if (!reviewComplete) return;
-    if (event.target.closest && event.target.closest('#done-banner')) return;
+    if (event.target.closest && event.target.closest('#done-banner, #thread-selection-actions')) return;
     event.preventDefault();
     event.stopPropagation();
   }
@@ -4854,6 +4896,114 @@
     return el;
   }
 
+  // Sidebar selection actions: use the existing input event to persist quoted drafts.
+  function appendQuotedSelection(textarea, text) {
+    const separator = textarea.value ? (textarea.value.endsWith('\n\n') ? '' : textarea.value.endsWith('\n') ? '\n' : '\n\n') : '';
+    textarea.value += separator + text.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n') + '\n\n';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.scrollTop = textarea.scrollHeight;
+  }
+
+  const selectionActions = document.createElement('div');
+  selectionActions.id = 'thread-selection-actions';
+  selectionActions.hidden = true;
+  selectionActions.setAttribute('role', 'group');
+  selectionActions.setAttribute('aria-label', 'Selected message text');
+  selectionActions.innerHTML = '<button type="button" data-action="copy">Copy</button> <button type="button" data-action="quote">Add to chat</button><span role="status"></span>';
+  const copySelectionButton = selectionActions.querySelector('[data-action="copy"]');
+  const quoteSelectionButton = selectionActions.querySelector('[data-action="quote"]');
+  document.body.appendChild(selectionActions);
+  let selectedMessage = null;
+  let selectionActionsTimer;
+  function canQuoteInto(thread, textarea) {
+    return !reviewComplete && thread.isConnected && thread.classList.contains('open') && textarea && textarea.isConnected && !textarea.disabled && !textarea.closest('.hidden');
+  }
+  function hideSelectionActions() {
+    clearTimeout(selectionActionsTimer);
+    selectionActions.hidden = true;
+    selectedMessage = null;
+  }
+  selectionActions.addEventListener('pointerdown', event => event.preventDefault());
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    const previous = selectedMessage?.range;
+    if (previous && selection?.rangeCount && !selection.isCollapsed) {
+      const current = selection.getRangeAt(0);
+      if (current.startContainer === previous.startContainer && current.startOffset === previous.startOffset && current.endContainer === previous.endContainer && current.endOffset === previous.endOffset) return;
+    }
+    hideSelectionActions();
+    selectionActionsTimer = setTimeout(updateSelectionActions, 80);
+  });
+  function updateSelectionActions() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const element = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    const message = element?.closest('.user-comment, .thread-quote, .thread-take, .thread-decision');
+    const thread = message?.closest('.thread.open');
+    if (!thread || element.closest('.meta')) return;
+    // Do not quote timestamps, controls, or selections spanning multiple messages.
+    if (Array.from(message.querySelectorAll('.meta')).some(meta => {
+      const overlap = range.cloneRange();
+      const metadata = document.createRange();
+      metadata.selectNodeContents(meta);
+      if (overlap.compareBoundaryPoints(Range.START_TO_START, metadata) < 0) overlap.setStart(metadata.startContainer, metadata.startOffset);
+      if (overlap.compareBoundaryPoints(Range.END_TO_END, metadata) > 0) overlap.setEnd(metadata.endContainer, metadata.endOffset);
+      return !overlap.collapsed && !!overlap.toString();
+    })) return;
+    const text = selection.toString();
+    if (!text.trim()) return;
+    const textarea = thread.querySelector('.followup textarea');
+    const rect = range.getBoundingClientRect();
+    selectedMessage = { text, textarea, thread, range: range.cloneRange() };
+    selectionActions.querySelector('[role="status"]').textContent = '';
+    copySelectionButton.disabled = false;
+    quoteSelectionButton.disabled = !canQuoteInto(thread, textarea);
+    selectionActions.hidden = false;
+    selectionActions.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - selectionActions.offsetWidth - 8)) + 'px';
+    selectionActions.style.top = Math.max(8, Math.min(rect.top - selectionActions.offsetHeight - 8, window.innerHeight - selectionActions.offsetHeight - 8)) + 'px';
+  }
+  copySelectionButton.addEventListener('click', async () => {
+    if (!selectedMessage) return;
+    const message = selectedMessage;
+    try {
+      const copying = copyTextToClipboard(message.text);
+      // The synchronous legacy fallback selects a temporary textarea. Restore
+      // the message range before its queued selectionchange events run.
+      if (!navigator.clipboard?.writeText) {
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(message.range);
+      }
+      await copying;
+      if (selectedMessage === message) hideSelectionActions();
+    } catch (_) {
+      if (selectedMessage === message) selectionActions.querySelector('[role="status"]').textContent = 'Copy failed — try again.';
+    }
+  });
+  quoteSelectionButton.addEventListener('click', () => {
+    if (!selectedMessage || reviewComplete) return;
+    const { text, textarea, thread } = selectedMessage;
+    if (!canQuoteInto(thread, textarea)) return hideSelectionActions();
+    hideSelectionActions();
+    window.getSelection().removeAllRanges();
+    appendQuotedSelection(textarea, text);
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!selectionActions.contains(event.target)) hideSelectionActions();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !selectionActions.hidden) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hideSelectionActions();
+    }
+  }, true);
+  document.addEventListener('scroll', hideSelectionActions, true);
+  window.addEventListener('resize', hideSelectionActions);
+
   function renderFollowups(threadEl, threadId) {
     const list = threadEl.querySelector('.user-comment-list');
     if (!list) return;
@@ -5469,7 +5619,43 @@
     return stack;
   }
 
+  function updateTablePresentation(wrap) {
+    const scroll = wrap.querySelector(':scope > .table-scroll');
+    if (!scroll) return;
+    wrap.classList.toggle('can-scroll-right', scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft > 1);
+    wrap.querySelectorAll(':scope > .thread-marker-stack[data-row-anchor-idx]').forEach(stack => {
+      const row = wrap.querySelector(`tr[data-anchor-idx="${stack.getAttribute('data-row-anchor-idx')}"]`);
+      if (row) stack.style.top = (row.getBoundingClientRect().top - wrap.getBoundingClientRect().top + 1) + 'px';
+    });
+  }
+  const tablePresentationObserver = new ResizeObserver(entries => {
+    entries.forEach(entry => {
+      const wrap = entry.target.closest('.table-wrap');
+      if (wrap) updateTablePresentation(wrap);
+    });
+  });
+  function prepareTablePresentation() {
+    // Disconnect old file DOM on every render; never assign or renumber anchors.
+    tablePresentationObserver.disconnect();
+    document.querySelectorAll('#doc-content .table-wrap').forEach(wrap => {
+      const table = wrap.querySelector(':scope > table');
+      if (table) {
+        const scroll = document.createElement('div');
+        scroll.className = 'table-scroll';
+        table.before(scroll);
+        scroll.appendChild(table);
+        scroll.addEventListener('scroll', () => updateTablePresentation(wrap), { passive: true });
+      }
+      const scroll = wrap.querySelector(':scope > .table-scroll');
+      if (!scroll) return;
+      tablePresentationObserver.observe(scroll);
+      tablePresentationObserver.observe(scroll.querySelector('table'));
+      updateTablePresentation(wrap);
+    });
+  }
+
   function renderMarkers() {
+    prepareTablePresentation();
     document.querySelectorAll('.thread-marker-stack, .thread-marker').forEach(el => el.remove());
     document.querySelectorAll('.image-pin-marker').forEach(el => el.remove());
     document.querySelectorAll('[data-anchor-idx].has-thread').forEach(el => el.classList.remove('has-thread'));
@@ -6803,6 +6989,7 @@
     if (e.target.closest('.new-thread-editor')) return;
     if (e.target.closest('#divider')) return;
     if (e.target.closest('#selection-popup')) return;
+    if (e.target.closest('#thread-selection-actions')) return;
     if (e.target.closest('#toast-host')) return;
     if (e.target.closest('.diff-file-actions')) return;
 

@@ -80,6 +80,29 @@ await send('Emulation.setDeviceMetricsOverride', {
 await send('Page.navigate', { url: discussUrl });
 await waitFor(`document.querySelectorAll('.table-wrap tr[data-anchor-idx]').length === 3`, 'stamped table rows');
 
+await waitFor(`document.querySelector('.table-wrap > .table-scroll > table')`, 'table scroll presentation');
+const presentation = await evaluate(`(async () => {
+  const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const wrap = document.querySelector('.table-wrap');
+  const scroll = wrap.querySelector(':scope > .table-scroll');
+  const table = scroll.querySelector('table');
+  const before = Array.from(wrap.querySelectorAll('[data-anchor-idx]'), el => el.dataset.anchorIdx);
+  await settle();
+  if (JSON.stringify(before) !== JSON.stringify(Array.from(wrap.querySelectorAll('[data-anchor-idx]'), el => el.dataset.anchorIdx))) return false;
+  if (wrap.querySelectorAll('.table-scroll').length !== 1 || !wrap.hasAttribute('data-anchor-idx')) return false;
+  table.style.minWidth = '2000px';
+  await settle();
+  const overflowing = scroll.scrollWidth > scroll.clientWidth && wrap.classList.contains('can-scroll-right');
+  scroll.scrollLeft = scroll.scrollWidth;
+  await settle();
+  const endHasNoFade = !wrap.classList.contains('can-scroll-right');
+  table.style.minWidth = '';
+  scroll.scrollLeft = 0;
+  await settle();
+  return overflowing && endHasNoFade && getComputedStyle(table).borderCollapse === 'collapse';
+})()`);
+if (!presentation) throw new Error('Table presentation changed anchors or failed overflow/fade checks');
+
 const blocks = await (await fetch(`${discussUrl}/api/files/f-1/blocks`)).json();
 const tableBlocks = blocks.blocks.filter(block => block.index >= 2 && block.index <= 5);
 if (
