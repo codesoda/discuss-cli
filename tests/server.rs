@@ -3822,7 +3822,7 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
     let document_body = response_body(&document);
     assert!(document_body.contains(r#"<base href="/files/f-1/assets/">"#));
     assert!(
-        document_body.contains(r#"<script src="/assets/discuss-inspect.js?v=4"></script></body>"#)
+        document_body.contains(r#"<script src="/assets/discuss-inspect.js?v=5"></script></body>"#)
     );
     assert!(
         !document_body
@@ -3845,7 +3845,7 @@ async fn html_prototype_routes_inject_inspector_and_serve_safe_relative_assets()
     let nested_css = get_path(addr, "/files/f-1/assets/pages/nested.css").await;
     assert!(nested_css.starts_with("HTTP/1.1 200"));
 
-    let inspector = get_path(addr, "/assets/discuss-inspect.js?v=4").await;
+    let inspector = get_path(addr, "/assets/discuss-inspect.js?v=5").await;
     assert!(inspector.starts_with("HTTP/1.1 200"));
     assert!(
         inspector

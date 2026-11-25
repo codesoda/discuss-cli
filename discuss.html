@@ -3106,8 +3106,8 @@
 
   function markReviewComplete() {
     const verdictSummary = arguments.length > 0 ? arguments[0] : null;
-    setInspectMode(false);
     reviewComplete = true;
+    setInspectMode(false);
     document.body.classList.add('review-complete');
     stopHeartbeat();
     if (eventReconnectTimer) {
@@ -4274,13 +4274,13 @@
   }
 
   function setInspectMode(on) {
-    inspectOn = isHtmlFile() && on === true;
+    inspectOn = !reviewComplete && isHtmlFile() && on === true;
     document.body.classList.toggle('inspecting', inspectOn);
     const button = document.getElementById('inspect-toggle');
     if (button) {
       // The button shows the special mode: pressed means the prototype is
       // interactive and clicks pass through instead of commenting.
-      const interacting = isHtmlFile() && !inspectOn;
+      const interacting = !reviewComplete && isHtmlFile() && !inspectOn;
       button.classList.toggle('on', interacting);
       button.setAttribute('aria-pressed', interacting ? 'true' : 'false');
     }
@@ -5476,6 +5476,10 @@
   }
 
   function renderAllThreads() {
+    // A previous save/SSE echo may render while the next comment is being typed.
+    const pendingEditor = threadsHost.querySelector('.html-thread-editor');
+    const editorFocus = pendingEditor?.contains(document.activeElement) ? document.activeElement : null;
+    pendingEditor?.remove();
     threadsHost.innerHTML = '';
     prepopulated.forEach(t => {
       if (!t.anchorIdx) return;
@@ -5486,6 +5490,10 @@
     s.userThreads
       .filter(t => threadFileId(t) === activeFileId)
       .forEach(t => threadsHost.appendChild(createUserThread(t)));
+    if (pendingEditor) {
+      threadsHost.appendChild(pendingEditor);
+      editorFocus?.focus({ preventScroll: true });
+    }
     renderMarkers();
     updateEmptyState();
     renderMetaStatus();
@@ -6352,7 +6360,7 @@
   }
 
   function openHtmlThreadEditor(selection) {
-    if (!isHtmlFile() || !selection) return;
+    if (reviewComplete || !isHtmlFile() || !selection) return;
     const elementAnchor = normalizeElementAnchor(selection.anchor);
     if (!elementAnchor) return;
     const fileId = activeFileId;

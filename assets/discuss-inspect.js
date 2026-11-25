@@ -28,6 +28,9 @@
   (document.body || document.documentElement).appendChild(host);
 
   const outline = shadow.querySelector('.outline');
+  const focusedOutline = outline.cloneNode();
+  focusedOutline.classList.add('focused-outline');
+  shadow.insertBefore(focusedOutline, outline);
   const markersHost = shadow.querySelector('.markers');
   const stableAnchors = new Map();
   const resolvedElements = new Map();
@@ -242,6 +245,16 @@
     outline.style.height = `${rect.height}px`;
   }
 
+  function renderFocusedOutline() {
+    const rect = focusedElement?.getBoundingClientRect();
+    focusedOutline.style.display = rect?.width && rect?.height ? 'block' : 'none';
+    if (!rect) return;
+    focusedOutline.style.left = `${rect.left}px`;
+    focusedOutline.style.top = `${rect.top}px`;
+    focusedOutline.style.width = `${rect.width}px`;
+    focusedOutline.style.height = `${rect.height}px`;
+  }
+
   function resolveAndRender() {
     scheduled = false;
     markersHost.replaceChildren();
@@ -272,6 +285,7 @@
       host.toggleAttribute('data-discuss-thread-focused', !!focusedElement);
       if (!inspectOn) setOutline(focusedElement);
     }
+    renderFocusedOutline();
     const markerCount = String(resolved.length);
     if (host.getAttribute('data-discuss-marker-count') !== markerCount) {
       host.setAttribute('data-discuss-marker-count', markerCount);
@@ -382,6 +396,7 @@
       focusedThreadId = payload.threadId == null ? null : String(payload.threadId);
       focusedElement = focusedThreadId ? resolvedElements.get(focusedThreadId) || null : null;
       host.toggleAttribute('data-discuss-thread-focused', !!focusedElement);
+      renderFocusedOutline();
       if (focusedThreadId) host.setAttribute('data-discuss-focused-thread', focusedThreadId);
       else host.removeAttribute('data-discuss-focused-thread');
       if (!focusedElement) {
