@@ -926,9 +926,34 @@
     display: grid;
     gap: 1px;
     margin-left: 12px;
-    padding-left: 7px;
-    border-left: 1px solid var(--line);
+    padding-left: 8px;
   }
+  /* Draw guides per direct child, not around the entire subtree. The last
+     folder's guide ends at its summary rather than trailing through descendants. */
+  .file-folder-children > * { position: relative; }
+  .file-folder-children > :not(.file-folder:last-child)::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    top: 0;
+    bottom: -1px; /* bridge the grid gap between siblings */
+    width: 1px;
+    background: var(--line);
+    pointer-events: none;
+  }
+  .file-folder-children > :last-child::before { bottom: 50%; }
+  .file-folder-children > .file-folder:last-child > summary { position: relative; }
+  .file-folder-children > .file-folder:last-child > summary::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    top: 0;
+    height: 50%;
+    width: 1px;
+    background: var(--line);
+    pointer-events: none;
+  }
+  body.files-collapsed .file-folder-children > *::before { display: none; }
   .file-item.viewed .file-name { color: var(--muted); opacity: 0.72; }
   .file-viewed-marker {
     display: none;
@@ -1262,9 +1287,11 @@
     margin: 10px 0 14px;
     border: 1px solid var(--line-strong);
     border-radius: 6px;
-    overflow: hidden;
+    /* Thread and draft markers sit outside this wrapper in the gutter.
+       Keep scrolling/clipping on the inner pre, never on the anchor host. */
+    overflow: visible;
   }
-  body.diff-file #doc-content .pre-wrap pre { border-radius: 0; }
+  body.diff-file #doc-content .pre-wrap pre { border-radius: 5px; }
   #doc-content pre[class*="language-diff"] .token.coord,
   #doc-content code[class*="language-diff"] .token.coord {
     display: block;

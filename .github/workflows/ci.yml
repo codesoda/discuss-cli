@@ -54,6 +54,19 @@ jobs:
         if: runner.os == 'Linux'
         run: node --test tests/browser/block-editing.mjs tests/browser/prefs-helper.mjs tests/browser/thread-selection-quotes.mjs tests/browser/proposal-review.mjs
 
+      - uses: actions/cache@v4
+        if: runner.os == 'Linux'
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-linux-${{ hashFiles('evals/performance/package-lock.json') }}
+
+      - name: file tree and diff marker browser regressions
+        if: runner.os == 'Linux'
+        run: |
+          npm ci --prefix evals/performance
+          evals/performance/node_modules/.bin/playwright install --with-deps chromium
+          PLAYWRIGHT_MODULE="$PWD/evals/performance/node_modules/playwright/index.mjs" node --test tests/browser/file-tree-guides.mjs tests/browser/thread-selection-quotes-e2e.mjs
+
       - name: live website browser e2e
         if: runner.os == 'Linux'
         run: node tests/browser/live-website-smoke.mjs
