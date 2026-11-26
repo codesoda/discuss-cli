@@ -942,9 +942,17 @@
     pointer-events: none;
   }
   .file-folder-children > :last-child::before { bottom: 50%; }
-  .file-folder-children > .file-folder:last-child::before {
-    bottom: auto;
-    height: 15px; /* midpoint of the 30px folder summary */
+  .file-folder-children > .file-folder:last-child::before { display: none; }
+  .file-folder-children > .file-folder:last-child > summary { position: relative; }
+  .file-folder-children > .file-folder:last-child > summary::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    top: 0;
+    height: 50%;
+    width: 1px;
+    background: var(--line);
+    pointer-events: none;
   }
   body.files-collapsed .file-folder-children > *::before { display: none; }
   .file-item.viewed .file-name { color: var(--muted); opacity: 0.72; }

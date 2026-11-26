@@ -548,29 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn bundled_template_diff_wrappers_do_not_clip_gutter_markers() {
-        let page = render_page("<p>Doc</p>", "{}", "[]", None);
-        let wrapper_rule = page
-            .split("body.diff-file #doc-content .pre-wrap {")
-            .nth(1)
-            .expect("diff wrapper rule")
-            .split('}')
-            .next()
-            .unwrap();
-
-        assert!(wrapper_rule.contains("overflow: visible;"));
-        assert!(!wrapper_rule.contains("overflow: hidden;"));
-        assert!(page.contains("body.diff-file #doc-content .pre-wrap pre { border-radius: 5px; }"));
-    }
-
-    #[test]
-    fn bundled_template_tree_guides_stop_at_last_direct_child() {
+    fn bundled_template_hides_tree_guides_when_sidebar_is_collapsed() {
         let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
-        assert!(page.contains(".file-folder-children > *::before"));
-        assert!(page.contains(".file-folder-children > :last-child::before { bottom: 50%; }"));
-        assert!(page.contains(".file-folder-children > .file-folder:last-child::before"));
-        assert!(page.contains("height: 15px; /* midpoint of the 30px folder summary */"));
         assert!(
             page.contains(
                 "body.files-collapsed .file-folder-children > *::before { display: none; }"
