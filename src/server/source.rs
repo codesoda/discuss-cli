@@ -162,11 +162,10 @@ pub(super) async fn post_api_source(
                 "anchor-only updates cannot be held as rewrite proposals; disable Hold edits and resend to apply threadAnchors",
             );
         }
-        let base_version = app_state
-            .state
-            .read()
-            .map(|state| state.source_version())
-            .unwrap_or(0);
+        let base_version = match super::proposals::current_version(&app_state) {
+            Ok(version) => version,
+            Err(response) => return *response,
+        };
         return match create_proposal(
             &app_state,
             file_id,

@@ -271,12 +271,12 @@ fn file_revision(app_state: &AppState, file_id: &FileId) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn current_version(app_state: &AppState) -> u64 {
+pub(super) fn current_version(app_state: &AppState) -> std::result::Result<u64, Box<Response>> {
     app_state
         .state
         .read()
         .map(|state| state.source_version())
-        .unwrap_or(0)
+        .map_err(|_| Box::new(lock_error("state")))
 }
 
 /// Publish on SSE, and on stdout when the agent needs to hear about it.
@@ -297,7 +297,10 @@ fn announce(app_state: &AppState, kind: EventKind, payload: Value, to_agent: boo
 }
 
 pub(super) async fn get_api_proposals(AxumState(app_state): AxumState<AppState>) -> Response {
-    let version = current_version(&app_state);
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
     let Ok(store) = app_state.proposals.lock() else {
         return lock_error("proposal");
     };
@@ -323,7 +326,10 @@ pub(super) async fn post_api_proposals(
         Ok(file_id) => file_id,
         Err(response) => return *response,
     };
-    let version = current_version(&app_state);
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
     if request.base_version > version || request.base_version < file_revision(&app_state, &file_id)
     {
         return api_error_response(
