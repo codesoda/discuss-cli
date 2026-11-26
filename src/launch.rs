@@ -25,6 +25,8 @@ pub fn session_endpoints(base_url: &str) -> serde_json::Value {
         "createThread": format!("{base_url}/api/threads"),
         "addTakeTemplate": format!("{base_url}/api/threads/{{threadId}}/takes"),
         "threadActivityTemplate": format!("{base_url}/api/threads/{{threadId}}/activity"),
+        "resolveTemplate": format!("{base_url}/api/threads/{{threadId}}/resolve"),
+        "unresolveTemplate": format!("{base_url}/api/threads/{{threadId}}/unresolve"),
         "blocksTemplate": format!("{base_url}/api/files/{{fileId}}/blocks"),
         "done": format!("{base_url}/api/done"),
     })
@@ -90,6 +92,8 @@ mod tests {
                 "createThread": "http://127.0.0.1:49152/api/threads",
                 "addTakeTemplate": "http://127.0.0.1:49152/api/threads/{threadId}/takes",
                 "threadActivityTemplate": "http://127.0.0.1:49152/api/threads/{threadId}/activity",
+                "resolveTemplate": "http://127.0.0.1:49152/api/threads/{threadId}/resolve",
+                "unresolveTemplate": "http://127.0.0.1:49152/api/threads/{threadId}/unresolve",
                 "blocksTemplate": "http://127.0.0.1:49152/api/files/{fileId}/blocks",
                 "done": "http://127.0.0.1:49152/api/done",
             })

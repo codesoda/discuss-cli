@@ -3410,7 +3410,6 @@
   function applyReplyAddedEvent(payload) {
     const reply = normalizeEventComment(payload, 'reply');
     if (!reply) return;
-    clearThreadActivity(reply.threadId);
 
     const state = cloneState(loadState());
     state.replies[reply.threadId] = upsertRawComment(state.replies[reply.threadId], reply);
@@ -5036,7 +5035,8 @@
   function clearThreadActivity(threadId) {
     const id = String(threadId);
     const entry = threadActivity.get(id);
-    if (entry) clearTimeout(entry.timer);
+    if (!entry) return;
+    clearTimeout(entry.timer);
     threadActivity.delete(id);
     document.querySelectorAll('.thread').forEach(thread => {
       if (thread.getAttribute('data-thread-id') === id) thread.querySelector('.thread-activity')?.remove();
@@ -5233,7 +5233,6 @@
       };
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
-      clearThreadActivity(threadId);
       ta.value = '';
       syncClearVisibility();
       renderResolution(threadEl, threadId);

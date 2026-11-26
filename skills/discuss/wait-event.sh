@@ -8,7 +8,7 @@
 # background job too. It checks the file every 2 seconds and costs no tokens
 # while it waits. It exits when:
 #
-#   - new event lines appear after <handled-line-count>, other than
+#   - complete event lines appear after <handled-line-count>, other than
 #     prompt.suggest_done. It prints "LINES=<new total>" and then those lines.
 #   - the state endpoint stops answering (discuss exited). It prints
 #     {"event": "session.done"}.
@@ -30,27 +30,43 @@ if [ -z "$EVENTS_FILE" ] || [ -z "$HANDLED" ] || [ -z "$STATE_URL" ]; then
   exit 1
 fi
 
+if ! [[ "$HANDLED" =~ ^[0-9]+$ ]]; then
+  echo "handled-line-count must be a nonnegative integer" >&2
+  exit 1
+fi
+
+# Bound each scan to the file size observed before reading. read succeeds only
+# for newline-terminated records; a partly written JSON event stays pending.
 new_events() {
-  tail -n +"$((HANDLED + 1))" "$EVENTS_FILE" 2>/dev/null \
-    | grep -v '"kind":"prompt.suggest_done"'
+  local bytes line
+  [ -f "$EVENTS_FILE" ] || return
+  bytes=$(wc -c < "$EVENTS_FILE" 2>/dev/null) || return
+  bytes=${bytes//[[:space:]]/}
+  LINES=$HANDLED
+  EVENTS=()
+  while IFS= read -r line; do
+    LINES=$((LINES + 1))
+    [[ "$line" == *'"kind":"prompt.suggest_done"'* ]] || EVENTS+=("$line")
+  done < <(head -c "$bytes" "$EVENTS_FILE" 2>/dev/null | tail -n +"$((HANDLED + 1))")
 }
 
 FAIL_COUNT=0
 TICKS=0
+LINES=$HANDLED
+EVENTS=()
 
 while true; do
-  if [ -n "$(new_events)" ]; then
-    # Let a burst of events land together.
-    sleep 1
-    echo "LINES=$(wc -l < "$EVENTS_FILE" | tr -d ' ')"
-    new_events
+  new_events
+  if [ "${#EVENTS[@]}" -gt 0 ]; then
+    echo "LINES=$LINES"
+    printf '%s\n' "${EVENTS[@]}"
     exit 0
   fi
 
   # Check that discuss is still up about every 10 seconds.
   TICKS=$((TICKS + 1))
   if [ $((TICKS % 5)) -eq 0 ]; then
-    if curl -s -o /dev/null -f "$STATE_URL"; then
+    if curl -s -o /dev/null -f --max-time 5 "$STATE_URL"; then
       FAIL_COUNT=0
     else
       FAIL_COUNT=$((FAIL_COUNT + 1))

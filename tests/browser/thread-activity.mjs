@@ -13,6 +13,7 @@ function between(start, end) {
 }
 const source = [
   between('  // Ephemeral activity is never written', '  function commentsForThread(state, threadId)'),
+  between('  function applyReplyAddedEvent(payload)', '  function applyTakeAddedEvent(payload)'),
   between('  function applyThreadResolvedEvent(payload)', '  function applyThreadUnresolvedEvent(payload)'),
   between('  function renderAllThreads() {', '  // ---------- Markers ----------'),
 ].join('\n');
@@ -24,7 +25,7 @@ function harness() {
   const timers = new Map();
   const mounted = [];
   const state = { threads: [{ id: 't1' }], userThreads: [{ id: 't1', fileId: 'a' }],
-    followups: {}, takes: {}, resolutions: {} };
+    followups: {}, replies: {}, takes: {}, resolutions: {} };
   const prepopulated = [{ id: 'p1', fileId: 'b', anchorIdx: 1 }];
   const threadsHost = {
     querySelector() { return null; },
@@ -71,6 +72,9 @@ function harness() {
     createPrepopulatedThread: createThread, createUserThread: createThread,
     threadFileId: thread => thread.fileId,
     commentsForThread: () => [],
+    normalizeEventComment: payload => payload.reply,
+    upsertRawComment: (items, reply) => [...(items || []), reply],
+    upsertDisplayComment: (items, reply) => [...(items || []), reply],
     escapeHtml: value => value,
     renderMarkers() {}, updateEmptyState() {}, renderMetaStatus() {},
     setTimeout(fn, ms) { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },
@@ -78,7 +82,7 @@ function harness() {
   };
   Object.defineProperty(sandbox, 'activeFileId', { get: () => activeFileId });
   vm.createContext(sandbox);
-  vm.runInContext(source + '\nthis.renderFollowups = renderFollowups; this.activity = { applyThreadActivityEvent, applyThreadResolvedEvent, clearThreadActivity, clearAllThreadActivity, renderAllThreads };', sandbox);
+  vm.runInContext(source + '\nthis.renderFollowups = renderFollowups; this.activity = { applyThreadActivityEvent, applyReplyAddedEvent, applyThreadResolvedEvent, clearThreadActivity, clearAllThreadActivity, renderAllThreads };', sandbox);
   function render(fileId) { activeFileId = fileId; sandbox.activity.renderAllThreads(); }
   render('a');
   return { sandbox, state, mounted, timers, render, setNow(value) { now = value; } };
@@ -126,6 +130,44 @@ test('off-file prepopulated activity survives file switch and full rerender unti
   h.render('b');
   assert.equal(h.mounted[0].children.length, 0);
   assert.equal(h.timers.size, 0);
+});
+
+test('human reply retains agent activity and its existing expiry timer', () => {
+  const h = harness();
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  const timer = [...h.timers.keys()][0];
+  h.sandbox.activity.applyReplyAddedEvent({ reply: { id: 'r1', threadId: 't1', text: 'Clarification' } });
+  assert.equal(h.mounted[0].children[0]['aria-label'], 'Agent thinking');
+  assert.equal(h.timers.has(timer), true);
+  assert.equal(h.state.replies.t1[0].text, 'Clarification');
+});
+
+test('failed optimistic resolve restores the indicator and original lease', async () => {
+  const h = harness();
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  const timer = [...h.timers.keys()][0];
+  const ta = { value: '' };
+  const followup = {};
+  Object.assign(h.sandbox, {
+    clearMutationError() {}, clearFollowupDraft() {}, syncClearVisibility() {},
+    renderResolution(thread, id) { h.sandbox.renderFollowups(thread, id); },
+    renderMetaStatus() {}, reposition() {}, showMutationError() {},
+    threadApiPath: () => '/resolve', apiJson: async () => { throw Error('offline'); },
+    console: { error() {} },
+  });
+  const resolveSource = between('    async function resolve() {', '    saveBtn.addEventListener');
+  vm.runInContext(`this.testResolve = async function () {
+    const threadId = 't1', threadEl = threadsHost.querySelector() || document.querySelectorAll('.thread')[0];
+    const ta = this.testTa, followup = this.testFollowup;
+    ${resolveSource}
+    await resolve();
+  }`, h.sandbox);
+  h.sandbox.testTa = ta;
+  h.sandbox.testFollowup = followup;
+  await h.sandbox.testResolve();
+  assert.equal(h.state.resolutions.t1, undefined);
+  assert.equal(h.mounted[0].children[0]['aria-label'], 'Agent thinking');
+  assert.equal(h.timers.has(timer), true);
 });
 
 test('off-file user thread activity renders on return; resolution then late renewal cannot revive it', () => {

@@ -739,7 +739,7 @@ mod tests {
         assert!(page.contains("function applyThreadActivityEvent(payload)"));
         assert!(page.contains("function clearAllThreadActivity()"));
         assert!(page.contains("clearThreadActivity(take.threadId)"));
-        assert!(page.contains("clearThreadActivity(reply.threadId)"));
+        assert!(!page.contains("clearThreadActivity(reply.threadId)"));
         assert!(page.contains("clearThreadActivity(threadId)"));
         assert!(page.contains("clearAllThreadActivity();"));
         assert!(page.contains("prefers-reduced-motion: reduce"));

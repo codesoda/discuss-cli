@@ -103,6 +103,8 @@ fn bundled_integrations_consume_reported_endpoint_map() {
         "endpoints.createThread",
         "endpoints.addTakeTemplate",
         "endpoints.threadActivityTemplate",
+        "endpoints.resolveTemplate",
+        "endpoints.unresolveTemplate",
         "endpoints.blocksTemplate",
         "endpoints.done",
         "apiBaseUrl",
@@ -131,7 +133,13 @@ fn bundled_integrations_consume_reported_endpoint_map() {
             && combined.contains("\"replying\"")
             && combined.contains("\"idle\"")
             && combined.contains("\"resolvedBy\":\"agent\"")
-            && combined.contains("reopen it via `/unresolve`"),
+            && combined.contains("reopen it via the substituted `endpoints.unresolveTemplate`")
+            && combined.contains("substituted `endpoints.resolveTemplate`")
+            && combined.contains("Fetch full state first")
+            && combined.contains("**before** posting `{\"status\":\"thinking\"}`")
+            && combined
+                .contains("On 409 `thread_resolved` from any activity request, re-fetch context")
+            && combined.contains("skip idle while still resolved"),
         "bundled skill must guide activity, attribution and clarification reopening"
     );
     assert!(

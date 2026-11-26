@@ -167,7 +167,7 @@ ToolSearch(query: "select:Monitor,TaskStop", max_results: 2)
 
 ## Step 1: Launch discuss and choose an event strategy
 
-Always launch through the monitor-type tool first. Only if no such tool is available in the current context (e.g. ToolSearch finds nothing and invoking it returns a tool-not-enabled error) fall back to the **polling fallback** described below. Do not use the poller when a monitor-type tool exists — it delivers events push-style with no polling latency. The rest of the steps are the same once you have events flowing.
+Use Option A when the monitor can stay up for the whole review (`persistent` or no deadline). If it has only a bounded deadline, use Option A2 instead; do not launch discuss inside that monitor. Only when no monitor-type tool is available use Option B, the polling fallback. The rest of the steps are the same once you have events flowing.
 
 ### Option A — monitor-type tool (preferred)
 
@@ -236,7 +236,7 @@ discuss "$ARGUMENTS" > "$SESSION_DIR/events.jsonl" 2> "$SESSION_DIR/stderr.log"
 
 Then read `session.started` from the first line of `events.jsonl` (retry for a few seconds). Retain its `endpoints` as in Step 2. If no line appears, read `stderr.log`, report the error, and stop.
 
-**2. Wait for the next event with a second background job.** This skill's directory contains `wait-event.sh`. It checks the file every 2 seconds and exits on the next event line that needs you. It skips `prompt.suggest_done`.
+**2. Wait for the next event with a second background job.** This skill's directory contains `wait-event.sh`. It checks the file every 2 seconds and exits on any complete non-`prompt.suggest_done` line, including lifecycle, PR import/summary, and source events. Handle actionable events; ignore lifecycle events without narration.
 
 ```bash
 bash <skill-dir>/wait-event.sh "$SESSION_DIR/events.jsonl" 1 "$STATE_URL"
@@ -273,6 +273,8 @@ EVENTS_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.events')
 CREATE_THREAD_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.createThread')
 TAKE_TEMPLATE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.addTakeTemplate')
 ACTIVITY_TEMPLATE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.threadActivityTemplate')
+RESOLVE_TEMPLATE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.resolveTemplate')
+UNRESOLVE_TEMPLATE=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.unresolveTemplate')
 DONE_URL=$(printf '%s' "$STARTED_PAYLOAD" | jq -r '.endpoints.done')
 curl -s "$STATE_URL" | jq -e 'has("threads")' > /dev/null \
   || { cat "$ERROR_LOG"; exit 1; }
@@ -320,10 +322,10 @@ Optionally `Read` the markdown source afterward for context on anchor snippets (
 The first notification from the monitor should be a `session.started` event:
 
 ```json
-{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","threadActivityTemplate":".../api/threads/{threadId}/activity","blocksTemplate":".../api/files/{fileId}/blocks","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
+{"kind":"session.started","at":"...","payload":{"url":"http://127.0.0.1:<os-assigned-port>","apiBaseUrl":"http://127.0.0.1:<os-assigned-port>","endpoints":{"state":".../api/state","events":".../api/events","createThread":".../api/threads","addTakeTemplate":".../api/threads/{threadId}/takes","threadActivityTemplate":".../api/threads/{threadId}/activity","resolveTemplate":".../api/threads/{threadId}/resolve","unresolveTemplate":".../api/threads/{threadId}/unresolve","blocksTemplate":".../api/files/{fileId}/blocks","done":".../api/done"},"agentInstructions":["..."],"source_file":"...","started_at":"..."}}
 ```
 
-Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` for takes and `endpoints.threadActivityTemplate` for activity, and the literal `{fileId}` in `endpoints.blocksTemplate` when fetching block anchors. Use `apiBaseUrl` only for routes absent from the endpoint map. `proxyUrl` is present only for `mode: "live"`; it is the iframe website origin and must never be used for Discuss REST mutations. Live payloads also include the unchanged `upstreamUrl`.
+Treat `payload.url`, `payload.apiBaseUrl`, and the complete `payload.endpoints` object as authoritative session state. Keep the exact payload associated with its monitor id when running multiple sessions. Use `endpoints.state`, `endpoints.events`, `endpoints.createThread`, and `endpoints.done` directly; replace the literal `{threadId}` in `endpoints.addTakeTemplate` for takes, `endpoints.threadActivityTemplate` for activity, and `endpoints.resolveTemplate` / `endpoints.unresolveTemplate` for resolution changes; replace the literal `{fileId}` in `endpoints.blocksTemplate` when fetching block anchors. Use `apiBaseUrl` only for routes absent from the endpoint map. `proxyUrl` is present only for `mode: "live"`; it is the iframe website origin and must never be used for Discuss REST mutations. Live payloads also include the unchanged `upstreamUrl`.
 
 If the monitor ends without emitting `session.started`, startup failed before readiness and no partial session exists. Read its stderr log for the error, report it, and stop.
 
@@ -339,7 +341,7 @@ Actionable events: `thread.created`, `reply.added`. Lifecycle events (`session.s
 
 ### `thread.created` (new thread opened by the user)
 
-Before reading or working, substitute `{threadId}` into the retained `endpoints.threadActivityTemplate` and POST `{"status":"thinking"}`. Renew before the 120-second lease expires while working. POST `{"status":"replying"}` immediately before a take; if you do not post a take, POST `{"status":"idle"}`. Activity is ephemeral, SSE-only and never part of the transcript. Do not use `proxyUrl`.
+Before reading or working on a new open thread, substitute `{threadId}` into the retained `endpoints.threadActivityTemplate` and POST `{"status":"thinking"}`. Renew before the 120-second lease expires while working. POST `{"status":"replying"}` immediately before a take; if you do not post a take, POST `{"status":"idle"}` only while the thread remains open. If any activity request returns 409 `thread_resolved`, re-fetch state and decide whether a response warrants reopening before retrying activity; never send idle while still resolved. Activity is ephemeral, SSE-only and never part of the transcript. Do not use `proxyUrl`.
 
 ```bash
 ACTIVITY_URL=${ACTIVITY_TEMPLATE/'{threadId}'/"$THREAD_ID"}
@@ -364,12 +366,12 @@ curl -s -X POST "$TAKE_URL" \
 
 Replies come only from the human (the API uses `/replies` for humans, `/takes` for you). Any `reply.added` event is a new user message.
 
-1. POST `{"status":"thinking"}` to the substituted `endpoints.threadActivityTemplate` before fetching context; renew before 120 seconds if work continues. Fetch full state directly from the retained map: `curl -s "$STATE_URL"` — parse the thread and all its replies/takes in order.
-2. Read the latest reply in context.
-3. Decide: is this a question, a challenge, or a genuine opening for more commentary? If yes, post a follow-up take. If it's closure ("thanks", "got it", "makes sense"), stay silent.
-4. If responding, POST `{"status":"replying"}` before another take to the same thread; otherwise POST `{"status":"idle"}`. If the reply clarifies an already resolved thread, reopen it via `/unresolve` before responding.
+1. Fetch full state first from the retained map: `curl -s "$STATE_URL"` — parse the thread, its resolution, and all replies/takes in order.
+2. Read the latest reply in context. Decide: is this a question, a challenge, or a genuine opening for more commentary? If it's closure ("thanks", "got it", "makes sense"), stay silent; do not send activity for a resolved thread.
+3. If a response is warranted and the thread is resolved, reopen it via the substituted `endpoints.unresolveTemplate` **before** posting `{"status":"thinking"}` to `endpoints.threadActivityTemplate`. Otherwise post thinking on the open thread before working; renew before 120 seconds if work continues.
+4. If responding, POST `{"status":"replying"}` before another take to the same thread; otherwise POST `{"status":"idle"}` only if the thread remains open. On 409 `thread_resolved` from any activity request, re-fetch context and decide whether to reopen; skip idle while still resolved.
 
-After answering, resolve only if the question is settled **and any required work is complete**, using `{"decision":"...","resolvedBy":"agent"}` on `/resolve`. Never resolve promised but unfinished work. The reviewer can reopen an agent-resolved thread. Do not resolve on mere acknowledgment or when further clarification is needed.
+After answering, resolve only if the question is settled **and any required work is complete**, using `{"decision":"...","resolvedBy":"agent"}` on the substituted `endpoints.resolveTemplate`. Never resolve promised but unfinished work. The reviewer can reopen an agent-resolved thread. Do not resolve on mere acknowledgment or when further clarification is needed.
 
 ### `thread.resolved` / `thread.deleted`
 
@@ -399,7 +401,7 @@ On stop:
 
 ## API reference
 
-Use the exact `session.started.payload.endpoints` value wherever a mapped key exists: `$STATE_URL`, `$EVENTS_URL`, `$CREATE_THREAD_URL`, substituted `$TAKE_TEMPLATE`, substituted `$ACTIVITY_TEMPLATE`, and `$DONE_URL`. Construct only routes absent from that map against `$API_BASE`. Request/response is JSON.
+Use the exact `session.started.payload.endpoints` value wherever a mapped key exists: `$STATE_URL`, `$EVENTS_URL`, `$CREATE_THREAD_URL`, substituted `$TAKE_TEMPLATE`, substituted `$ACTIVITY_TEMPLATE`, `$RESOLVE_TEMPLATE`, `$UNRESOLVE_TEMPLATE`, and `$DONE_URL`. Construct only routes absent from that map against `$API_BASE`. Request/response is JSON.
 
 | Method | Path | Body | Purpose |
 |---|---|---|---|
@@ -414,8 +416,8 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/activity` | `{status: "thinking" \| "replying" \| "idle"}` | Use substituted `endpoints.threadActivityTemplate`; active lease expires in 120 seconds; renew while working, idle if no take. SSE-only. |
-| POST | `/api/threads/{id}/resolve` | `{decision?, resolvedBy: "agent"}` | Resolve only after answering and completing required work; browser uses `resolvedBy: "user"`. |
-| POST | `/api/threads/{id}/unresolve` | — | Unresolve |
+| POST | `/api/threads/{id}/resolve` | `{decision?, resolvedBy: "agent"}` | Use substituted `endpoints.resolveTemplate` after answering and completing required work; browser uses `resolvedBy: "user"`. |
+| POST | `/api/threads/{id}/unresolve` | — | Use substituted `endpoints.unresolveTemplate` to reopen. |
 | POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
 | GET | `/api/blocks/{idx}` | — (`?fileId=` with multiple files) | One block's markdown source, line range and `sourceVersion` (used by the browser's edit mode) |
 | PATCH | `/api/blocks/{idx}` | `{markdown, sourceVersion, fileId?}` | Replace one block; the server re-anchors that file's threads itself (see below) |
@@ -447,7 +449,7 @@ The browser has an edit mode: the user clicks a block, edits its markdown, and t
 
 ## Stdout event kinds
 
-- `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` and `threadActivityTemplate` (both with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
+- `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate`, `threadActivityTemplate`, `resolveTemplate`, and `unresolveTemplate` (all with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
 - `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
 - `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`

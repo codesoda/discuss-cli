@@ -1357,6 +1357,23 @@ async fn thread_activity_is_ephemeral_validated_and_sse_only() {
     }
     assert!(stdout_string(&stdout).is_empty());
     assert!(state.read().unwrap().snapshot().resolutions.is_empty());
+    state.write().unwrap().set_resolution(
+        ThreadId("u-active".into()),
+        Resolution {
+            decision: None,
+            resolved_by: None,
+            resolved_at: chrono::Utc::now(),
+        },
+    );
+    let response = post_json_path(
+        addr,
+        "/api/threads/u-active/activity",
+        r#"{"status":"thinking"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+    assert_eq!(response_json(&response)["error"]["code"], "thread_resolved");
+    assert!(stdout_string(&stdout).is_empty());
     shutdown_tx.send(()).unwrap();
     timeout(Duration::from_secs(1), server)
         .await

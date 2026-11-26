@@ -983,6 +983,8 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
             "createThread": format!("{base_url}/api/threads"),
             "addTakeTemplate": format!("{base_url}/api/threads/{{threadId}}/takes"),
             "threadActivityTemplate": format!("{base_url}/api/threads/{{threadId}}/activity"),
+            "resolveTemplate": format!("{base_url}/api/threads/{{threadId}}/resolve"),
+            "unresolveTemplate": format!("{base_url}/api/threads/{{threadId}}/unresolve"),
             "blocksTemplate": format!("{base_url}/api/files/{{fileId}}/blocks"),
             "done": format!("{base_url}/api/done"),
         })
@@ -991,9 +993,9 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
         payload["agentInstructions"],
         serde_json::json!([
             "Use payload.endpoints; do not assume port 7777.",
-            "On thread.created/reply.added, POST thinking to threadActivityTemplate before working; renew before 120 seconds, POST replying before a take, and idle if no take follows.",
+            "On thread.created, POST thinking to threadActivityTemplate before working. On reply.added, fetch state first; if resolved, decide whether a response warrants reopening via unresolveTemplate before posting thinking. Renew before 120 seconds, POST replying before a take, and idle if no take follows on an open thread. If activity returns 409 thread_resolved, re-fetch context and decide whether to reopen; do not send idle to a still-resolved thread.",
             "If you edited the reviewed document, you may pre-annotate it: POST createThread with kind=\"agent\" to leave leading takes; use blocksTemplate to compute anchors.",
-            "Post concise takes; resolve answered threads only after required work is complete with resolvedBy=agent; stop when session.done is received."
+            "Post concise takes; resolve answered threads via resolveTemplate with resolvedBy=agent only after required work is complete; reopen resolved threads via unresolveTemplate before responding to clarifications; stop when session.done is received."
         ])
     );
 }

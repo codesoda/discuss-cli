@@ -710,15 +710,18 @@ pub(super) async fn post_api_thread_activity(
             "state lock poisoned while checking thread activity",
         );
     };
-    if !state
-        .get_threads()
-        .iter()
-        .any(|thread| thread.id == thread_id)
-    {
+    if !state.has_active_thread(&thread_id) {
         return api_error_response(
             StatusCode::NOT_FOUND,
             "not_found",
             format!("thread not found: {}", thread_id.0),
+        );
+    }
+    if state.resolution_for_thread(&thread_id).is_some() {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "thread_resolved",
+            format!("thread is resolved: {}", thread_id.0),
         );
     }
     // Activity has no durable state: each active update is a fresh 120-second lease.

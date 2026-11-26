@@ -5,6 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stats } from './stats.mjs';
+import { timingSamples } from './delayed-timing.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(dir, '../..');
@@ -24,9 +25,8 @@ const bounded = (promise, label, duration = 20000) => new Promise((resolve, reje
   promise.then(x => { clearTimeout(timer); resolve(x); }, e => { clearTimeout(timer); reject(e); });
 });
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'discuss-delayed-'));
-let browser, child, buffer = '', stderr = '';
-const waiters = new Set();
-function receipt(id) { return new Promise((resolve, reject) => waiters.add({ id, resolve, reject })); }
+let browser;
+function receipt(waiters, id) { return new Promise((resolve, reject) => waiters.add({ id, resolve, reject })); }
 async function post(url, body) {
   const response = await bounded(fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), url);
   if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`);
@@ -39,9 +39,11 @@ async function activity(base, id, status) {
   return true;
 }
 async function profile(context, name, config) {
+  const waiters = new Set();
+  let buffer = '', stderr = '';
   const started = new Promise((resolve, reject) => waiters.add({ id: 'session.started', resolve, reject }));
   const home = path.join(temp, name); fs.mkdirSync(home);
-  child = spawn(path.resolve(bin), ['--no-open', '--no-save', document], { cwd: home, env: { ...process.env, HOME: home, XDG_CONFIG_HOME: home, XDG_DATA_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(path.resolve(bin), ['--no-open', '--no-save', document], { cwd: home, env: { ...process.env, HOME: home, XDG_CONFIG_HOME: home, XDG_DATA_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', chunk => {
     buffer += chunk;
     let n;
@@ -71,7 +73,7 @@ async function profile(context, name, config) {
       await page.locator(`.thread-marker[data-thread-id="${thread.id}"]`).first().click();
       await page.locator(`.thread[data-thread-id="${thread.id}"] .followup textarea`).waitFor();
     }
-    const samples = { submissionToVisibleMs: [], observedWaitMs: [], actualTimerMs: [], intendedWaitMs: [], overheadMs: [], batchMakespanMs: [], scheduleDriftMs: [] };
+    const samples = { submissionToVisibleMs: [], observedWaitMs: [], actualTimerMs: [], intendedWaitMs: [], queueWaitMs: [], indicatorMs: [], overheadMs: [], batchMakespanMs: [], scheduleDriftMs: [] };
     const correctness = { missing: 0, duplicate: 0, misrouted: 0, indicatorFailures: 0, checked: 0, indicatorSupported: supported };
     for (let batch = 0; batch < workload.warmup + workload.iterations; batch++) {
       const start = hr();
@@ -96,24 +98,30 @@ async function profile(context, name, config) {
         }, { id, countBefore, responseText });
         await sleep(Math.max(0, event.offsetMs - elapsed(start, hr())));
         const sentAt = hr();
-        const pending = receipt(id);
+        const pending = receipt(waiters, id);
         await page.locator(`.thread[data-thread-id="${id}"] .followup textarea`).fill(workload.question);
         await page.locator(`.thread[data-thread-id="${id}"] .followup .save`).click();
         const received = await bounded(pending, 'reply.added');
         if (received.event.payload.text !== workload.question) throw new Error(`unexpected question on ${id}`);
         const handle = async () => {
+          const handleStart = hr();
+          let indicatorNs = 0n;
           if (supported) {
+            const indicatorStart = hr();
             await activity(base, id, 'thinking');
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).getByText('Agent thinking').waitFor({ timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
+            indicatorNs += hr() - indicatorStart;
           }
           const waitStart = hr();
           await sleep(event.delayMs);
           const waitEnd = hr();
           if (supported) {
+            const indicatorStart = hr();
             await activity(base, id, 'replying');
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).getByText('Agent replying').waitFor({ timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
+            indicatorNs += hr() - indicatorStart;
           }
           const postAt = hr();
           await post(`${base}/api/threads/${id}/takes`, { text: responseText });
@@ -124,7 +132,7 @@ async function profile(context, name, config) {
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).waitFor({ state: 'detached', timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
           }
-          return { id, responseText, sentAt, receivedAt: received.at, waitStart, waitEnd, postAt, visibleAt, browserInsertion: visible.at, expectedCount: countBefore + 1 };
+          return { id, responseText, sentAt, receivedAt: received.at, handleStart, waitStart, waitEnd, indicatorNs, postAt, visibleAt, browserInsertion: visible.at, expectedCount: countBefore + 1 };
         };
         if (config.handling === 'serial') {
           const queued = serial.then(handle);
@@ -135,7 +143,7 @@ async function profile(context, name, config) {
       })());
       const results = await bounded(Promise.all(tasks), `batch ${batch}`, 45000);
       const snapshot = await (await fetch(`${base}/api/state`)).json();
-      for (const result of results) {
+      for (const [index, result] of results.entries()) {
         const takes = (snapshot.takes[result.id] || []).filter(t => t.text === result.responseText);
         const elsewhere = Object.entries(snapshot.takes).flatMap(([id, items]) => id === result.id ? [] : items.filter(t => t.text === result.responseText));
         if (takes.length === 0) correctness.missing++;
@@ -149,13 +157,10 @@ async function profile(context, name, config) {
         correctness.misrouted += wrongDom;
         correctness.checked++;
         if (batch >= workload.warmup) {
-          const observed = elapsed(result.receivedAt, result.postAt);
-          samples.submissionToVisibleMs.push(elapsed(result.sentAt, result.visibleAt));
-          samples.observedWaitMs.push(observed);
-          samples.actualTimerMs.push(elapsed(result.waitStart, result.waitEnd));
-          samples.intendedWaitMs.push(config.events[results.indexOf(result)].delayMs);
-          samples.overheadMs.push(elapsed(result.sentAt, result.visibleAt) - observed);
-          samples.scheduleDriftMs.push(elapsed(start, result.sentAt) - config.events[results.indexOf(result)].offsetMs);
+          const measured = timingSamples(result);
+          for (const [metric, value] of Object.entries(measured)) samples[metric].push(value);
+          samples.intendedWaitMs.push(config.events[index].delayMs);
+          samples.scheduleDriftMs.push(elapsed(start, result.sentAt) - config.events[index].offsetMs);
         }
       }
       if (batch >= workload.warmup) samples.batchMakespanMs.push(elapsed(start, results.reduce((latest, result) => result.visibleAt > latest ? result.visibleAt : latest, start)));
@@ -164,12 +169,15 @@ async function profile(context, name, config) {
     return { schedule: config, warmup: workload.warmup, iterations: workload.iterations, correctness, samples, summary: Object.fromEntries(Object.entries(samples).map(([key, values]) => [key, stats(values)])) };
   } finally {
     await Promise.all(pages.map(page => page.close()));
-    if (child && child.exitCode === null) {
-      const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGTERM');
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise(resolve => child.once('exit', resolve));
+      child.kill('SIGTERM');
       await Promise.race([exited, sleep(2000)]);
-      if (child.exitCode === null) child.kill('SIGKILL');
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
     }
-    child = null; buffer = ''; stderr = '';
+    for (const waiter of waiters) waiter.reject(new Error(`profile ${name} ended`));
+    waiters.clear();
   }
 }
 try {
@@ -191,7 +199,7 @@ try {
   }
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const output = {
-    version: 2, fixtures: { 'small.md': sha(document), [path.basename(workloadFile)]: sha(workloadFile) },
+    version: 3, fixtures: { 'small.md': sha(document), [path.basename(workloadFile)]: sha(workloadFile) },
     options: { warmup: workload.warmup, iterations: workload.iterations, network: 'block non-loopback', flags: ['--no-open', '--no-save'], schedules: Object.fromEntries(requested.map(name => [name, workload.profiles[name]])) },
     scenarioNames: requested, scenarios, binary: { path: path.resolve(bin), sha256: sha(bin) },
     source: { head: git('rev-parse', 'HEAD'), dirty: !!git('status', '--porcelain'), diffSha256: createHash('sha256').update(git('diff', 'HEAD', '--binary') + git('status', '--porcelain')).digest('hex') },
@@ -202,7 +210,6 @@ try {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, JSON.stringify(output, null, 2) + '\n'); console.log(destination);
 } finally {
-  if (child && child.exitCode === null) child.kill('SIGKILL');
   if (browser) await browser.close();
   fs.rmSync(temp, { recursive: true, force: true });
 }

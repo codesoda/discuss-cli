@@ -61,6 +61,11 @@ impl State {
         &self.threads
     }
 
+    pub(crate) fn has_active_thread(&self, thread_id: &ThreadId) -> bool {
+        !self.deleted_at.contains_key(thread_id)
+            && self.threads.iter().any(|thread| &thread.id == thread_id)
+    }
+
     /// Mutable access to an active (non-deleted) thread, used by live source
     /// updates to rewrite anchors in place.
     pub(crate) fn thread_mut(&mut self, thread_id: &ThreadId) -> Option<&mut Thread> {

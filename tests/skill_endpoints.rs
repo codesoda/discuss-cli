@@ -129,6 +129,29 @@ fn bundled_skills_do_not_hardcode_endpoint_construction() {
 }
 
 #[test]
+fn public_docs_list_every_reported_endpoint() {
+    let endpoints = discuss::session_endpoints("http://127.0.0.1:49152");
+    for path in ["README.md", "llms.txt"] {
+        let doc = fs::read_to_string(path).unwrap();
+        let contract = doc
+            .lines()
+            .find(|line| line.contains("`session.started`") && line.contains("`addTakeTemplate`"))
+            .unwrap_or_else(|| panic!("missing session endpoint contract in {path}"));
+        for key in endpoints.as_object().unwrap().keys() {
+            assert!(contract.contains(&format!("`{key}`")), "{path} omits {key}");
+        }
+        assert!(
+            contract.contains("literal `{threadId}`"),
+            "{path} omits thread placeholder"
+        );
+        assert!(
+            contract.contains("literal `{fileId}`"),
+            "{path} omits file placeholder"
+        );
+    }
+}
+
+#[test]
 fn activity_uses_reported_template_not_a_constructed_url() {
     let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
     assert!(skill.contains(".endpoints.threadActivityTemplate"));
