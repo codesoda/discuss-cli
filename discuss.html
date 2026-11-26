@@ -931,7 +931,7 @@
   /* Draw guides per direct child, not around the entire subtree. The last
      folder's guide ends at its summary rather than trailing through descendants. */
   .file-folder-children > * { position: relative; }
-  .file-folder-children > *::before {
+  .file-folder-children > :not(.file-folder:last-child)::before {
     content: '';
     position: absolute;
     left: -8px;
@@ -942,7 +942,6 @@
     pointer-events: none;
   }
   .file-folder-children > :last-child::before { bottom: 50%; }
-  .file-folder-children > .file-folder:last-child::before { display: none; }
   .file-folder-children > .file-folder:last-child > summary { position: relative; }
   .file-folder-children > .file-folder:last-child > summary::before {
     content: '';

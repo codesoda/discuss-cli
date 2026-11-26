@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { selectionSource as source, clipboardSource, clickSource, completedSource } from './fixtures/thread-selection-source.mjs';
 import http from 'node:http';
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+import { launchBrowser } from './fixtures/launch-browser.mjs';
 
 const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', 'text/html');
@@ -15,7 +15,7 @@ const server = http.createServer((req, res) => {
     <script>let reviewComplete = false; window.inputs = []; const showAllBtn = { classList: { contains: () => false } }; function closeNewThreadEditor() {} function closeAllThreads() { document.querySelector('.thread').classList.remove('open'); } document.querySelector('textarea').addEventListener('input', e => inputs.push(e.target.value));${clipboardSource}${source}${clickSource}${completedSource} document.addEventListener('click', blockCompletedInteraction, true);</script>`);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'], headless: true });
+const browser = await launchBrowser();
 try {
   const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await context.newPage();
