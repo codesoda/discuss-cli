@@ -162,7 +162,8 @@ async fn get_api_state_returns_empty_snapshot_json() {
                 "newThread": {},
                 "followup": {}
             },
-            "sourceVersion": 0
+            "sourceVersion": 0,
+            "voiceNotesEnabled": false
         })
     );
 

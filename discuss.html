@@ -7771,6 +7771,7 @@
     recording: null,    // { recorder, chunks, anchorEl, startedAt, cancelled }
     stream: null,
     streamIdleTimer: null,
+    badgeHideTimer: null,
     suppressClick: false,
     hoverAnchorEl: null,
     keyHeld: false,
@@ -7793,6 +7794,7 @@
     return anchorEl;
   }
   function showVoiceBadge(text, { busy = false } = {}) {
+    clearTimeout(voice.badgeHideTimer);
     voiceBadge.querySelector('.label').textContent = text;
     voiceBadge.classList.toggle('busy', busy);
     voiceBadge.classList.add('shown');
@@ -7800,7 +7802,8 @@
     voiceBadge.style.top = `${voice.lastPointer.y + 14}px`;
   }
   function hideVoiceBadge(delayMs = 0) {
-    setTimeout(() => voiceBadge.classList.remove('shown'), delayMs);
+    clearTimeout(voice.badgeHideTimer);
+    voice.badgeHideTimer = setTimeout(() => voiceBadge.classList.remove('shown'), delayMs);
   }
   async function getVoiceStream() {
     clearTimeout(voice.streamIdleTimer);
@@ -7856,6 +7859,14 @@
     recorder.addEventListener('dataavailable', event => {
       if (event.data && event.data.size) recording.chunks.push(event.data);
     });
+    recorder.addEventListener('error', () => {
+      recording.cancelled = true;
+      finishVoiceUi(recording);
+      if (voice.recording === recording) voice.recording = null;
+      stream.getTracks().forEach(track => track.stop());
+      showVoiceBadge('Recording failed', { busy: true });
+      hideVoiceBadge(2500);
+    });
     recorder.addEventListener('stop', () => onVoiceRecorderStop(recording));
     recording.startedAt = performance.now();
     recorder.start();
@@ -7907,6 +7918,8 @@
 
   async function createVoiceThread(idx, blob, durationMs) {
     const fileId = activeFileId;
+    const snippet = snippetOfRange(idx, idx);
+    const sourceVersion = loadState().sourceVersion || 0;
     const uploadResponse = await fetch('/api/audio', {
       method: 'POST',
       headers: { 'Content-Type': blob.type || 'audio/webm', Accept: 'application/json' },
@@ -7916,7 +7929,6 @@
     const upload = await uploadResponse.json();
     const seconds = Math.max(1, Math.round(durationMs / 1000));
     const text = upload.transcript || `🎤 Voice note (${seconds}s)`;
-    const snippet = snippetOfRange(idx, idx);
     const created = await apiJson('/api/threads', {
       body: {
         fileId,
@@ -7925,10 +7937,10 @@
         snippet,
         text,
         audioId: upload.audioId,
-        sourceVersion: loadState().sourceVersion || 0,
+        sourceVersion,
       },
     });
-    if (!created) return;
+    if (!created) throw new Error('Review completed before the voice note could be saved');
     const serverId = String(created.id);
     const createdAt = created.createdAt || new Date().toISOString();
     const thread = {
@@ -7994,6 +8006,7 @@
   document.addEventListener('mouseup', () => {
     cancelVoicePending();
     if (voice.recording && !voice.keyHeld) stopVoiceRecording();
+    setTimeout(() => { voice.suppressClick = false; }, 0);
   }, true);
   // The hold's own mouseup produces a click; don't let it open the editor.
   document.addEventListener('click', (e) => {
@@ -8003,6 +8016,8 @@
     e.preventDefault();
   }, true);
   window.addEventListener('blur', () => {
+    voice.keyHeld = false;
+    voice.suppressClick = false;
     cancelVoicePending();
     if (voice.recording) stopVoiceRecording({ cancel: true });
   });

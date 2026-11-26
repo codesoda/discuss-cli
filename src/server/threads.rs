@@ -362,7 +362,7 @@ pub(super) async fn post_api_threads(
                 "audioId is only supported for markdown and diff files",
             );
         }
-        Some(audio_id) => match audio_path_for_id(&audio_id) {
+        Some(audio_id) => match audio_path_for_id(&app_state, &audio_id) {
             Some(path) => Some((audio_id, path.display().to_string())),
             None => {
                 return api_error_response(

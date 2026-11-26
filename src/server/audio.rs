@@ -3,7 +3,6 @@
 //! `thread.created`. An optional engine-independent command supplies transcript text.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::Json;
@@ -19,7 +18,6 @@ use super::response::api_error_response;
 /// several minutes of talking.
 pub(super) const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 
-static AUDIO_DIR: OnceLock<PathBuf> = OnceLock::new();
 static NEXT_AUDIO_NUMBER: AtomicU64 = AtomicU64::new(1);
 
 const AUDIO_TYPES: &[(&str, &str)] = &[
@@ -30,17 +28,28 @@ const AUDIO_TYPES: &[(&str, &str)] = &[
     ("audio/wav", "wav"),
 ];
 
-fn audio_dir() -> &'static PathBuf {
-    AUDIO_DIR.get_or_init(|| {
-        std::env::temp_dir()
-            .join("discuss-audio")
-            .join(std::process::id().to_string())
-    })
+fn audio_dir(state: &super::AppState) -> std::io::Result<&std::path::Path> {
+    if state.audio_dir.get().is_none() {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("discuss-audio-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let dir = builder.tempdir()?;
+        let _ = state.audio_dir.set(dir);
+    }
+    Ok(state
+        .audio_dir
+        .get()
+        .expect("audio directory initialized")
+        .path())
 }
 
 /// Maps a client-supplied `audioId` (`v-N.ext`) to the saved clip, or `None`
 /// when the id is malformed or no such clip was uploaded in this process.
-pub(super) fn audio_path_for_id(audio_id: &str) -> Option<PathBuf> {
+pub(super) fn audio_path_for_id(state: &super::AppState, audio_id: &str) -> Option<PathBuf> {
     let (stem, ext) = audio_id.split_once('.')?;
     let number = stem.strip_prefix("v-")?;
     if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -49,7 +58,7 @@ pub(super) fn audio_path_for_id(audio_id: &str) -> Option<PathBuf> {
     if !AUDIO_TYPES.iter().any(|(_, known)| *known == ext) {
         return None;
     }
-    let path = audio_dir().join(audio_id);
+    let path = state.audio_dir.get()?.path().join(audio_id);
     path.is_file().then_some(path)
 }
 
@@ -95,20 +104,32 @@ pub(super) async fn post_api_audio(
         return api_error_response(StatusCode::BAD_REQUEST, "bad_request", "empty audio body");
     }
 
-    let dir = audio_dir();
-    if let Err(error) = tokio::fs::create_dir_all(dir).await {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to create audio folder: {error}"),
-        );
-    }
+    let dir = match audio_dir(&state) {
+        Ok(dir) => dir,
+        Err(error) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("failed to create audio folder: {error}"),
+            );
+        }
+    };
     let audio_id = format!(
         "v-{}.{ext}",
         NEXT_AUDIO_NUMBER.fetch_add(1, Ordering::Relaxed)
     );
     let path = dir.join(&audio_id);
-    if let Err(error) = tokio::fs::write(&path, &body).await {
+    use tokio::io::AsyncWriteExt;
+    let saved = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await?;
+        file.write_all(&body).await
+    }
+    .await;
+    if let Err(error) = saved {
         return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -143,8 +164,12 @@ pub(super) async fn post_api_audio(
         .into_response()
 }
 
-pub(super) async fn get_api_audio(Path(audio_id): Path<String>) -> Response {
-    let Some(path) = audio_path_for_id(&audio_id) else {
+pub(super) async fn get_api_audio(
+    axum::extract::State(state): axum::extract::State<super::AppState>,
+    Path(audio_id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(path) = audio_path_for_id(&state, &audio_id) else {
         return api_error_response(StatusCode::NOT_FOUND, "not_found", "no such audio clip");
     };
     let ext = audio_id.rsplit('.').next().unwrap_or("");
@@ -152,14 +177,15 @@ pub(super) async fn get_api_audio(Path(audio_id): Path<String>) -> Response {
         .iter()
         .find(|(_, known)| *known == ext)
         .map_or("application/octet-stream", |(mime, _)| mime);
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (StatusCode::OK, [(header::CONTENT_TYPE, mime)], bytes).into_response(),
-        Err(error) => api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("failed to read audio: {error}"),
-        ),
-    }
+    let mut response = tower_http::services::ServeFile::new(path)
+        .try_call(request)
+        .await
+        .unwrap()
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, mime.parse().unwrap());
+    response
 }
 
 async fn transcribe(command: &[String], path: &std::path::Path) -> Result<String, String> {
@@ -222,6 +248,43 @@ mod tests {
         assert!(transcribe(&["true".into()], path).await.is_err());
     }
 
+    #[tokio::test]
+    async fn private_audio_is_session_scoped_streamed_and_cleaned_up() {
+        let state = super::super::AppState::for_process();
+        let dir = audio_dir(&state).unwrap().to_path_buf();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        std::fs::write(dir.join("v-1.webm"), b"abcdef").unwrap();
+        assert!(audio_path_for_id(&state, "v-1.webm").is_some());
+        assert!(audio_path_for_id(&super::super::AppState::for_process(), "v-1.webm").is_none());
+        let response = get_api_audio(
+            axum::extract::State(state.clone()),
+            Path("v-1.webm".into()),
+            axum::http::Request::builder()
+                .header("Range", "bytes=1-3")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 1-3/6");
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 10)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"bcd"
+        );
+        drop(state);
+        assert!(!dir.exists());
+    }
+
     #[test]
     fn rejects_malformed_audio_ids() {
         for id in [
@@ -233,7 +296,10 @@ mod tests {
             "v-1/../x.webm",
             "x-1.webm",
         ] {
-            assert!(audio_path_for_id(id).is_none(), "{id} should be rejected");
+            assert!(
+                audio_path_for_id(&super::super::AppState::for_process(), id).is_none(),
+                "{id} should be rejected"
+            );
         }
     }
 }

@@ -182,7 +182,11 @@ pub(super) async fn get_api_file_raw(
 
 pub(super) async fn get_api_state(AxumState(app_state): AxumState<AppState>) -> Response {
     match app_state.snapshot_with_files() {
-        Ok(snapshot) => Json(snapshot).into_response(),
+        Ok(snapshot) => {
+            let mut snapshot = serde_json::to_value(snapshot).expect("serializable snapshot");
+            snapshot["voiceNotesEnabled"] = serde_json::json!(app_state.voice_notes_enabled());
+            Json(snapshot).into_response()
+        }
         Err(message) => {
             api_error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
         }

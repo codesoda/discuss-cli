@@ -31,7 +31,13 @@ The command must return UTF-8 transcript text on stdout and exit successfully.
 Send diagnostics to stderr. Discuss waits up to 120 seconds during upload;
 on failure, timeout, empty output, or invalid UTF-8 it logs a warning and retains
 the audio-only workflow. Successful text becomes the voice thread's message;
-the original playable recording and agent audio path remain available.
+the original playable recording and agent audio path remain available during the session.
+The Saving indicator stays visible while the command runs; large models and cold
+starts can take the full timeout. Choose a faster model for interactive feedback.
+Clips live in a private, randomly named session directory removed when server
+state is dropped on normal shutdown (not guaranteed after a crash or SIGKILL).
+Deleted threads and failed thread submissions retain their clips until then.
+Done/history transcripts omit audio fields; consume audio before ending the session.
 
 ### Parakeet, Whisper, and other CLIs
 
