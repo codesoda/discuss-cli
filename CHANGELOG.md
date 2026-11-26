@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-26
+
 ### Added
 
 - **`install.sh --from-source`** — explicitly builds a release binary from the local checkout and installs it plus the `/discuss` skill links; fails clearly when not run from a checkout. `install.sh --help` documents the options and unknown options are rejected.
