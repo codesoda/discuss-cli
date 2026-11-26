@@ -5,30 +5,15 @@ import { readFileSync } from 'node:fs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const html = readFileSync(new URL('../../discuss.html', import.meta.url), 'utf8');
-const cssStart = html.indexOf('.file-tree { display: grid; gap: 1px; }');
-const cssEndMarker = 'body.files-collapsed .file-folder-children > *::before { display: none; }';
-const cssEnd = html.indexOf(cssEndMarker, cssStart);
-assert.ok(cssStart >= 0 && cssEnd > cssStart, 'file-tree CSS is present');
-const treeCss = html.slice(cssStart, cssEnd + cssEndMarker.length);
-function cssRule(selector) {
-  const start = html.indexOf(selector);
-  assert.ok(start >= 0, `production CSS rule is present: ${selector}`);
-  if (selector.includes('}')) return selector;
-  const end = html.indexOf('\n  }', start);
-  assert.ok(end > start, `production CSS rule closes: ${selector}`);
-  return html.slice(start, end + 4);
-}
-const diffCss = [
-  cssRule('#doc-content .pre-wrap {'),
-  cssRule('body.diff-file #doc-content .pre-wrap {'),
-  cssRule('body.diff-file #doc-content .pre-wrap pre { border-radius: 5px; }'),
-  cssRule('.thread-marker {'),
-].join('\n');
+// Load the whole stylesheet so selector suffixes cannot select the wrong rule,
+// and the assertions exercise the production cascade rather than isolated rules.
+const styles = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].map(match => match[1]).join('\n');
+assert.ok(styles.length > 0, 'production stylesheet is present');
 
 const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'], headless: true });
 try {
   const page = await browser.newPage();
-  await page.setContent(`<style>:root { --line: #000; --left-gutter: 44px; } body { margin: 0; } ${treeCss}${diffCss}</style>
+  await page.setContent(`<style>:root { --line: #000; --left-gutter: 44px; } body { margin: 0; } ${styles}</style>
     <body class="diff-file">
     <div class="file-folder-children">
       <details class="file-folder"><summary>First folder</summary></details>
@@ -79,6 +64,13 @@ try {
   assert.equal(markerVisibleOutsideWrapper.overflow, 'visible');
   assert.ok(markerVisibleOutsideWrapper.extendsOutside, 'gutter marker extends beyond the diff wrapper');
   assert.ok(markerVisibleOutsideWrapper.hitTested, `gutter marker is not clipped: ${JSON.stringify(markerVisibleOutsideWrapper)}`);
+  await page.evaluate(() => document.body.classList.add('files-collapsed'));
+  const collapsedGuides = await page.locator('.file-folder-children > *').evaluateAll(children =>
+    children.every(child => getComputedStyle(child, '::before').display === 'none')
+  );
+  assert.ok(collapsedGuides, 'collapsed sidebar hides direct-child guides');
+  assert.equal(await page.locator('#last-summary').evaluate(summary =>
+    getComputedStyle(summary).display), 'none', 'collapsed sidebar hides summaries and their guides');
   console.log(`PASS: folder guide tracks summary midpoint (${initial.rowHeight}px -> ${scaled.rowHeight}px); diff gutter marker remains visible outside its wrapper`);
 } finally {
   await browser.close();

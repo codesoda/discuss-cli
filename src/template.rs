@@ -548,17 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn bundled_template_hides_tree_guides_when_sidebar_is_collapsed() {
-        let page = render_page("<p>Doc</p>", "{}", "[]", None);
-
-        assert!(
-            page.contains(
-                "body.files-collapsed .file-folder-children > *::before { display: none; }"
-            )
-        );
-    }
-
-    #[test]
     fn bundled_template_tracks_viewed_pr_files_and_advances() {
         let page = render_page("<p>Doc</p>", "{}", "[]", None);
 
