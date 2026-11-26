@@ -33,6 +33,8 @@ pub struct Hunk {
     pub id: usize,
     /// Old anchor range the hunk replaces; `None` for a pure insertion.
     pub old_anchors: Option<(usize, usize)>,
+    /// Exact renderer indices; footnote/source order can make these noncontiguous.
+    pub old_anchor_indices: Vec<usize>,
     /// For a pure insertion, the old anchor it lands after (0 = top of doc).
     pub insert_after: usize,
     pub old_markdown: String,
@@ -83,7 +85,16 @@ impl Composed {
 }
 
 fn units(markdown: &str) -> Vec<Unit> {
-    let map = anchor_blocks(markdown);
+    let mut map = anchor_blocks(markdown);
+    // Rendered anchors put footnotes last, in reference order. Partition source
+    // in source order instead, keeping outer blocks before their nested rows.
+    map.blocks.sort_by_key(|block| {
+        (
+            block.line_start,
+            std::cmp::Reverse(block.line_end),
+            block.anchor_idx,
+        )
+    });
     // Top-level blocks: skip anchors nested inside the previous top block.
     let mut tops: Vec<(usize, usize, usize)> = Vec::new(); // (anchor, line_start, count)
     let mut top_end = 0usize;
@@ -191,16 +202,19 @@ impl BlockDiff {
                 let old_slice = &old[i..pi];
                 let anchored: Vec<&Unit> =
                     old_slice.iter().filter(|u| u.anchor_count > 0).collect();
-                let old_anchors = match (anchored.first(), anchored.last()) {
-                    (Some(first), Some(last)) => Some((
-                        first.first_anchor,
-                        last.first_anchor + last.anchor_count - 1,
-                    )),
-                    _ => None,
-                };
+                let old_anchors = anchored
+                    .iter()
+                    .map(|unit| (unit.first_anchor, unit.first_anchor + unit.anchor_count - 1))
+                    .reduce(|(start, end), (next_start, next_end)| {
+                        (start.min(next_start), end.max(next_end))
+                    });
                 hunks.push(Hunk {
                     id,
                     old_anchors,
+                    old_anchor_indices: anchored
+                        .iter()
+                        .flat_map(|unit| unit.first_anchor..unit.first_anchor + unit.anchor_count)
+                        .collect(),
                     insert_after: last_old_anchor,
                     old_markdown: join(old_slice),
                     new_markdown: join(&new[j..pj]),
@@ -210,8 +224,8 @@ impl BlockDiff {
                     old: (i, pi),
                     new: (j, pj),
                 });
-                if let Some((_, end)) = old_anchors {
-                    last_old_anchor = end;
+                if let Some(last) = anchored.last() {
+                    last_old_anchor = last.first_anchor + last.anchor_count - 1;
                 }
             }
             if pi < old.len() {
@@ -236,8 +250,10 @@ impl BlockDiff {
     pub fn compose(&self, accepted: impl Fn(usize) -> bool) -> Composed {
         let old_total = self
             .old
-            .last()
-            .map_or(0, |u| u.first_anchor + u.anchor_count.saturating_sub(1));
+            .iter()
+            .map(|u| u.first_anchor + u.anchor_count.saturating_sub(1))
+            .max()
+            .unwrap_or(0);
         let mut anchor_map = vec![None; old_total];
         let mut markdown = String::new();
         let mut next_anchor = 1usize;
@@ -309,6 +325,20 @@ impl BlockDiff {
                 }
             }
         }
+        // The arithmetic above counts anchors in source order. Translate the
+        // destinations back to the renderer's indices (footnotes render last).
+        let mut rendered = anchor_blocks(&markdown).blocks;
+        rendered.sort_by_key(|block| {
+            (
+                block.line_start,
+                std::cmp::Reverse(block.line_end),
+                block.anchor_idx,
+            )
+        });
+        for destination in &mut anchor_map {
+            *destination =
+                destination.and_then(|index| rendered.get(index - 1).map(|block| block.anchor_idx));
+        }
         Composed {
             markdown,
             anchor_map,
@@ -321,6 +351,39 @@ mod tests {
     use super::*;
 
     const OLD: &str = "# Title\n\nFirst para.\n\nSecond para.\n\n- one\n- two\n\nLast para.\n";
+
+    #[test]
+    fn mid_document_footnotes_keep_their_own_anchor() {
+        let old = "P1[^n]\n\n[^n]: Note.\n\nP2.\n\nP3.\n";
+        let new = old.replace("P3.", "Rewritten P3.");
+        let diff = BlockDiff::new(old, &new);
+        assert_eq!(diff.hunks.len(), 1);
+        assert_eq!(diff.hunks[0].old_anchors, Some((3, 3)));
+        let composed = diff.compose(|_| true);
+        assert_eq!(composed.markdown, new);
+        assert_eq!(
+            composed.carry(4, 4),
+            Some((4, 4)),
+            "footnote stays on footnote"
+        );
+        assert_eq!(composed.carry(3, 3), Some((3, 3)));
+        assert_eq!(diff.compose(|_| false).markdown, old);
+
+        let adjacent = old
+            .replace("Note.", "Changed note.")
+            .replace("P2.", "Changed P2.");
+        let adjacent_diff = BlockDiff::new(old, &adjacent);
+        assert_eq!(adjacent_diff.hunks[0].old_anchor_indices, vec![4, 2]);
+        assert_eq!(adjacent_diff.compose(|_| true).markdown, adjacent);
+
+        let deleted = old.replace("[^n]: Note.\n\n", "");
+        let diff = BlockDiff::new(old, &deleted);
+        let composed = diff.compose(|_| true);
+        assert_eq!(composed.markdown, deleted);
+        assert_eq!(composed.carry(4, 4), None);
+        assert_eq!(composed.carry(2, 2), Some((2, 2)));
+        assert_eq!(composed.carry(3, 3), Some((3, 3)));
+    }
 
     #[test]
     fn indentation_changes_require_explicit_acceptance() {

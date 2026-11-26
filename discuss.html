@@ -7579,11 +7579,9 @@
     p.hunks.forEach(h => {
       const apply = hunkChoice.get(h.id) !== false;
       const olds = [];
-      if (h.oldAnchorStart != null) {
-        for (let i = h.oldAnchorStart; i <= h.oldAnchorEnd; i++) {
-          const el = doc.querySelector(`[data-anchor-idx="${i}"]`);
-          if (el) olds.push(el);
-        }
+      for (const i of h.oldAnchorIndices || []) {
+        const el = doc.querySelector(`[data-anchor-idx="${i}"]`);
+        if (el) olds.push(el);
       }
       olds.forEach(el => {
         el.classList.add('proposal-old');

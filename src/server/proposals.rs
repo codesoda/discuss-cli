@@ -63,6 +63,7 @@ impl Proposal {
             .map(|hunk| {
                 json!({
                     "id": hunk.id,
+                    "oldAnchorIndices": hunk.old_anchor_indices,
                     "oldAnchorStart": hunk.old_anchors.map(|(start, _)| start),
                     "oldAnchorEnd": hunk.old_anchors.map(|(_, end)| end),
                     "insertAfter": hunk.insert_after,
