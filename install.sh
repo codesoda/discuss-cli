@@ -331,9 +331,44 @@ verify_install() {
   fi
 }
 
+usage() {
+  cat <<EOF
+Usage: install.sh [--from-source]
+
+Installs ${BINARY_NAME} to ${INSTALLED_BINARY}, links ${LINK_BINARY}, and installs
+the /discuss skill into ~/.claude/skills, ~/.codex/skills, and ~/.agents/skills.
+
+Options:
+  --from-source  Build a release binary from this local checkout (requires cargo)
+                 instead of downloading the latest GitHub release.
+  -h, --help     Show this help.
+
+Without options, a local checkout builds from source and anything else
+downloads the latest release.
+EOF
+}
+
+FROM_SOURCE=0
+for ARG in "$@"; do
+  case "${ARG}" in
+    --from-source) FROM_SOURCE=1 ;;
+    -h | --help) usage; exit 0 ;;
+    *) usage >&2; die "unknown option: ${ARG}" ;;
+  esac
+done
+
 SCRIPT_DIR="$(script_dir)" || die "failed to determine script directory"
 
+IS_CHECKOUT=0
 if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -f "${SCRIPT_DIR}/Cargo.toml" ]; then
+  IS_CHECKOUT=1
+fi
+
+if [ "${FROM_SOURCE}" = "1" ] && [ "${IS_CHECKOUT}" != "1" ]; then
+  die "--from-source must be run from a local checkout (expected install.sh and Cargo.toml in ${SCRIPT_DIR})"
+fi
+
+if [ "${IS_CHECKOUT}" = "1" ]; then
   run_source_install "${SCRIPT_DIR}"
   install_skill_symlinks "${SCRIPT_DIR}/skills/discuss"
 else
