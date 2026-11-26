@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "warmup": 2,
+  "iterations": 20,
+  "scenarios": {
+    "small": { "document": "small.md", "seedThreads": 6 },
+    "large": { "document": "large.md", "seedThreads": 160 }
+  },
+  "question": "Could you clarify the fixed review baseline decision?",
+  "response": "The fixed review baseline decision is to retain the documented behavior."
+}

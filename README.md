@@ -279,13 +279,13 @@ One newline-delimited JSON object per line. The `/discuss` skill consumes them v
 
 | Kind | When | Payload notes |
 |------|------|---------------|
-| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate` (literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret for summary callbacks, and compatibility import/publication-result endpoints. |
+| `session.started` | Server bound and listening | `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?, unified?}`. `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate`, `threadActivityTemplate`, `resolveTemplate`, `unresolveTemplate` (each with literal `{threadId}`), `blocksTemplate` (literal `{fileId}`), and `done`. Live sessions include `proxyUrl`/`upstreamUrl`. PR sessions include `prUrl`, `prImportMode: "automatic"`, a one-session bearer secret for summary callbacks, and compatibility import/publication-result endpoints. |
 | `thread.created` | A thread was created | `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`. Live `elementAnchor` values include `route` and `accessibleName`. User threads have `u-N` ids. Agent pre-annotations echo here too, with `kind: "agent"` and `a-N` ids; agents should ignore their own echoes. |
 | `reply.added` | Human posted a reply | `{id, threadId, text, createdAt}` |
-| `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt}` |
+| `thread.resolved` / `thread.unresolved` | Resolution toggled | Resolve includes `resolution: {decision, resolvedAt, resolvedBy?}`. Attribution is caller-declared, not authenticated; omitted `resolvedBy` means unspecified (including legacy callers), not user-resolved. |
 | `thread.deleted` | Soft-delete | `{threadId}` |
 | `source.updated` | A live source update was applied | `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` |
-| `prompt.suggest_done` | Idle timeout fired (`idle_timeout_secs`, default 600) | Includes `idle_for_secs` |
+| `prompt.suggest_done` | Idle timeout elapsed (`idle_timeout_secs`, default 600) with no review page event stream open; suppressed while one is open and emitted once per quiet stretch | Includes `idle_for_secs` |
 | `pr.imported` | Discuss's automatic `gh` import is installed | Concrete overview/changed-file IDs, seeded imported-thread IDs, warnings, and anchoring/publication reminders |
 | `pr.summary.requested` | PR reviewer opens Finish review | Agent generates the editable summary and calls the supplied protected callback |
 | `pr.publish.requested` | Compatibility/test publication mode only | Exact grouped-review and existing-thread reply operations; normal CLI PR sessions publish directly through `gh` after OK |

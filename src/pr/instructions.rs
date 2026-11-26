@@ -52,7 +52,9 @@ Security and privacy
 - Never request, print, persist, or POST a GitHub token to Discuss.
 
 Prepare and summary
-- On `thread.created` and `reply.added`, add local takes through the reported endpoint map.
+- On `thread.created`, POST `{ "status": "thinking" }` to the substituted `endpoints.threadActivityTemplate` before working. On `reply.added`, fetch `endpoints.state` first; if resolved, decide whether a response warrants reopening via `endpoints.unresolveTemplate` before posting thinking. Renew before the 120-second lease expires; POST `{ "status": "replying" }` just before a take and `{ "status": "idle" }` if no take follows on an open thread. If activity returns 409 `thread_resolved`, re-fetch context and decide whether to reopen; skip idle while still resolved. Activity is ephemeral and never published.
+- Add local takes through the substituted `endpoints.addTakeTemplate`: one or two sentences for settled answers, longer only for substantive questions or disagreement. Do not repeat the take in main-agent chat; normal work tool calls are fine, and keep blockers/final handoff brief.
+- Resolve an answered thread only when any required work is complete: POST `{ "decision": "...", "resolvedBy": "agent" }` to the substituted `endpoints.resolveTemplate`. Do not resolve promised unfinished work. A new reply on a resolved thread is a clarification: POST to the substituted `endpoints.unresolveTemplate` before responding. The reviewer can still reopen agent-resolved threads.
 - When `pr.summary.requested` arrives, generate only the requested editable review summary from the supplied local conversations.
 - POST `{ "requestId": "...", "summary": "..." }` as JSON stdin to the event's `summaryUrl`, using `Authorization: Bearer <SESSION_SECRET>`.
 - Do not choose inclusion or publication destinations. The reviewer owns action, summary edits, include/exclude choices, comment edits, confirmation, and cancellation. Include controls default off.
@@ -93,5 +95,14 @@ mod tests {
         assert!(instructions.contains("<SESSION_SECRET>"));
         assert!(instructions.contains("publication requires no agent action"));
         assert!(instructions.contains("pr.summary.requested"));
+        assert!(instructions.contains("endpoints.threadActivityTemplate"));
+        assert!(instructions.contains("120-second lease"));
+        assert!(instructions.contains("fetch `endpoints.state` first"));
+        assert!(instructions.contains("409 `thread_resolved`"));
+        assert!(instructions.contains("skip idle while still resolved"));
+        assert!(instructions.contains("resolvedBy\": \"agent"));
+        assert!(instructions.contains("endpoints.resolveTemplate"));
+        assert!(instructions.contains("endpoints.unresolveTemplate"));
+        assert!(instructions.contains("Do not repeat the take in main-agent chat"));
     }
 }

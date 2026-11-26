@@ -98,6 +98,13 @@ pub(super) struct AddTakeRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ResolveThreadRequest {
     decision: Option<String>,
+    #[serde(rename = "resolvedBy")]
+    resolved_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ThreadActivityRequest {
+    status: String,
 }
 
 pub(super) async fn post_api_threads(
@@ -703,6 +710,68 @@ pub(super) async fn post_api_thread_takes(
     Json(take).into_response()
 }
 
+pub(super) async fn post_api_thread_activity(
+    AxumState(app_state): AxumState<AppState>,
+    Path(thread_id): Path<String>,
+    payload: std::result::Result<Json<ThreadActivityRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return api_error_response(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                rejection.body_text(),
+            );
+        }
+    };
+    if !matches!(request.status.as_str(), "thinking" | "replying" | "idle") {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "status must be thinking, replying, or idle",
+        );
+    }
+    let thread_id = ThreadId(thread_id);
+    let Ok(state) = app_state.state.read() else {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "state lock poisoned while checking thread activity",
+        );
+    };
+    if !state.has_active_thread(&thread_id) {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            format!("thread not found: {}", thread_id.0),
+        );
+    }
+    if state.resolution_for_thread(&thread_id).is_some() {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "thread_resolved",
+            format!("thread is resolved: {}", thread_id.0),
+        );
+    }
+    // Activity has no durable state: each active update is a fresh 120-second lease.
+    let expires_at =
+        (request.status != "idle").then(|| Utc::now() + chrono::Duration::seconds(120));
+    let payload = serde_json::json!({
+        "threadId": thread_id,
+        "status": request.status,
+        "expiresAt": expires_at,
+    });
+    // Publish under the read guard so a concurrent resolve cannot publish first.
+    // The lease is valid at this point; a later resolution can still end it.
+    app_state.bus.publish(BroadcastEvent {
+        kind: "thread.activity".to_string(),
+        payload: payload.clone(),
+    });
+    drop(state);
+    Json(payload).into_response()
+}
+
 pub(super) async fn post_api_thread_resolve(
     AxumState(app_state): AxumState<AppState>,
     Path(thread_id): Path<String>,
@@ -719,6 +788,17 @@ pub(super) async fn post_api_thread_resolve(
         }
     };
 
+    if request
+        .resolved_by
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "user" | "agent"))
+    {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "resolvedBy must be user or agent",
+        );
+    }
     let thread_id = ThreadId(thread_id);
     let resolution = {
         let Ok(mut state) = app_state.state.write() else {
@@ -746,6 +826,7 @@ pub(super) async fn post_api_thread_resolve(
             Resolution {
                 decision: request.decision,
                 resolved_at: Utc::now(),
+                resolved_by: request.resolved_by,
             },
         )
     };

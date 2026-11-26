@@ -716,7 +716,7 @@ mod tests {
     fn bundled_template_subscribes_to_sse_and_applies_incremental_events() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
-        assert!(page.contains("new EventSource('/api/events')"));
+        assert!(page.contains("new EventSource('/api/events?client=page')"));
         assert!(page.contains("'thread.created'"));
         assert!(page.contains("'thread.deleted'"));
         assert!(page.contains("'thread.resolved'"));
@@ -729,6 +729,23 @@ mod tests {
         assert!(page.contains("function scheduleEventReconnect()"));
         assert!(page.contains("refreshAllThreadsFromState()"));
         assert!(page.contains("refreshThreadFromState(reply.threadId)"));
+    }
+
+    #[test]
+    fn bundled_template_wires_ephemeral_thread_activity_and_attributed_resolution() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
+
+        assert!(page.contains("'thread.activity'"));
+        assert!(page.contains("function applyThreadActivityEvent(payload)"));
+        assert!(page.contains("function clearAllThreadActivity()"));
+        assert!(page.contains("clearThreadActivity(take.threadId)"));
+        assert!(!page.contains("clearThreadActivity(reply.threadId)"));
+        assert!(page.contains("clearThreadActivity(threadId)"));
+        assert!(page.contains("clearAllThreadActivity();"));
+        assert!(page.contains("prefers-reduced-motion: reduce"));
+        assert!(page.contains("role', 'status'"));
+        assert!(page.contains("r.resolvedBy === 'agent'"));
+        assert!(page.contains("body: { decision: decision || null, resolvedBy: 'user' }"));
     }
 
     #[test]

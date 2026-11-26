@@ -34,6 +34,36 @@ fn bundled_integration_paths() -> Vec<PathBuf> {
         .collect()
 }
 
+#[test]
+fn bounded_monitor_route_initializes_session_before_use_and_preserves_terminal_wake() {
+    let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
+    let a2 = skill
+        .split("### Option A2")
+        .nth(1)
+        .unwrap()
+        .split("### Option B")
+        .next()
+        .unwrap();
+    let setup = a2
+        .find("SESSION_DIR=$(mktemp -d /tmp/discuss-session.XXXXXX)")
+        .unwrap();
+    let launch = a2
+        .find("discuss \"$ARGUMENTS\" > \"$SESSION_DIR/events.jsonl\"")
+        .unwrap();
+    assert!(
+        setup < launch,
+        "A2 must initialize its unique directory before launch"
+    );
+    assert!(a2.contains("wait-event.sh \"$SESSION_DIR/events.jsonl\" 1 \"$STATE_URL\""));
+    assert!(
+        a2.contains("unless the state endpoint stops answering")
+            && a2.contains("prints only `{\"event\": \"session.done\"}`")
+    );
+    assert!(a2.contains("including lifecycle, PR import/summary, and source events"));
+    let b = skill.split("### Option B").nth(1).unwrap();
+    assert!(b.contains("use Option A2 when it has only a bounded deadline"));
+}
+
 fn allows_compatibility_port(line: &str) -> bool {
     line.contains("--port 7777") && (line.contains("explicit") || line.contains("Explicit"))
 }
@@ -102,6 +132,9 @@ fn bundled_integrations_consume_reported_endpoint_map() {
         "endpoints.events",
         "endpoints.createThread",
         "endpoints.addTakeTemplate",
+        "endpoints.threadActivityTemplate",
+        "endpoints.resolveTemplate",
+        "endpoints.unresolveTemplate",
         "endpoints.blocksTemplate",
         "endpoints.done",
         "apiBaseUrl",
@@ -122,6 +155,22 @@ fn bundled_integrations_consume_reported_endpoint_map() {
             && combined.contains("never use `$proxyUrl` for Discuss REST mutations")
             && combined.contains("not an arbitrary network proxy"),
         "bundled skill must route sole HTTP/S URLs unchanged and keep API writes off the proxy origin"
+    );
+    assert!(
+        combined.contains("ACTIVITY_URL=${ACTIVITY_TEMPLATE/'{threadId}'/")
+            && combined.contains("-d '{\"status\":\"thinking\"}'")
+            && combined.contains("120-second lease")
+            && combined.contains("\"replying\"")
+            && combined.contains("\"idle\"")
+            && combined.contains("\"resolvedBy\":\"agent\"")
+            && combined.contains("reopen it via the substituted `endpoints.unresolveTemplate`")
+            && combined.contains("substituted `endpoints.resolveTemplate`")
+            && combined.contains("Fetch full state first")
+            && combined.contains("**before** posting `{\"status\":\"thinking\"}`")
+            && combined
+                .contains("On 409 `thread_resolved` from any activity request, re-fetch context")
+            && combined.contains("skip idle while still resolved"),
+        "bundled skill must guide activity, attribution and clarification reopening"
     );
     assert!(
         combined.contains("poller.sh \"$STATE_URL\""),

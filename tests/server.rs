@@ -263,16 +263,32 @@ async fn post_api_heartbeat_updates_timestamp_silently() {
         .expect("server shutdown should succeed");
 }
 
+fn idle_test_app_state(bus: Arc<EventBus>, stdout: Arc<Mutex<Vec<u8>>>) -> AppState {
+    AppState::new(
+        State::new_shared(),
+        bus,
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout))),
+    )
+    .with_idle_timeout_secs(1)
+}
+
+async fn stop_server(
+    shutdown_tx: oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<discuss::Result<()>>,
+) {
+    shutdown_tx.send(()).expect("send shutdown signal");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits within timeout")
+        .expect("server task should not panic")
+        .expect("server shutdown should succeed");
+}
+
 #[tokio::test]
-async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
+async fn idle_timer_emits_prompt_suggest_done_once_per_quiet_stretch() {
     let addr = free_loopback_addr();
     let stdout = Arc::new(Mutex::new(Vec::new()));
-    let app_state = AppState::new(
-        State::new_shared(),
-        Arc::new(EventBus::new(16)),
-        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
-    )
-    .with_idle_timeout_secs(1);
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server = tokio::spawn(serve(addr, app_state, async move {
         let _ = shutdown_rx.await;
@@ -290,20 +306,118 @@ async fn idle_timer_emits_prompt_suggest_done_once_per_idle_window() {
             >= 1
     );
 
+    sleep(Duration::from_millis(2500)).await;
+    assert_eq!(stdout_events(&stdout).len(), 1);
+
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn idle_prompt_fires_again_after_new_activity() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+    wait_for_stdout_events(&stdout, 1, Duration::from_secs(3)).await;
+
+    let response = post_json_path(addr, "/api/heartbeat", "").await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+
     let events = wait_for_stdout_events(&stdout, 2, Duration::from_secs(3)).await;
     assert_eq!(events.len(), 2);
-    assert!(
-        events
-            .iter()
-            .all(|event| event["kind"] == EventKind::PromptSuggestDone.to_string())
-    );
 
-    shutdown_tx.send(()).expect("send shutdown signal");
-    timeout(Duration::from_secs(1), server)
-        .await
-        .expect("server exits within timeout")
-        .expect("server task should not panic")
-        .expect("server shutdown should succeed");
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn open_page_event_stream_prevents_idle_prompt() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut page = open_get_path(addr, "/api/events?client=page").await;
+    let headers = read_until(&mut page, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+
+    sleep(Duration::from_secs(3)).await;
+    assert!(stdout_string(&stdout).is_empty());
+
+    drop(page);
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn closed_page_event_stream_emits_one_idle_prompt() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let bus = Arc::new(EventBus::new(16));
+    let app_state = idle_test_app_state(bus.clone(), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut page = open_get_path(addr, "/api/events?client=page").await;
+    let headers = read_until(&mut page, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+    sleep(Duration::from_millis(1500)).await;
+    assert!(stdout_string(&stdout).is_empty());
+
+    drop(page);
+    // The server sees the closed socket on its next write.
+    for _ in 0..3 {
+        bus.publish(BroadcastEvent {
+            kind: "thread.created".to_string(),
+            payload: json!({ "threadId": "u-1" }),
+        });
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(4)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], EventKind::PromptSuggestDone.to_string());
+
+    sleep(Duration::from_millis(2500)).await;
+    assert_eq!(stdout_events(&stdout).len(), 1);
+
+    stop_server(shutdown_tx, server).await;
+}
+
+#[tokio::test]
+async fn agent_event_stream_does_not_count_as_open_page() {
+    let addr = free_loopback_addr();
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = idle_test_app_state(Arc::new(EventBus::new(16)), stdout.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+
+    wait_for_server(addr).await;
+
+    let mut agent = open_get_path(addr, "/api/events").await;
+    let headers = read_until(&mut agent, "\r\n\r\n").await;
+    assert!(headers.starts_with("HTTP/1.1 200"));
+
+    let events = wait_for_stdout_events(&stdout, 1, Duration::from_secs(3)).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], EventKind::PromptSuggestDone.to_string());
+
+    drop(agent);
+    stop_server(shutdown_tx, server).await;
 }
 
 #[tokio::test]
@@ -1180,6 +1294,96 @@ async fn post_api_thread_takes_returns_structured_400_for_empty_text() {
 }
 
 #[tokio::test]
+async fn thread_activity_is_ephemeral_validated_and_sse_only() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    state.write().unwrap().add_thread(thread("u-active", 2));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state.clone(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    );
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let mut sse = open_get_path(addr, "/api/events").await;
+    assert_sse_headers(&read_until(&mut sse, "\r\n\r\n").await);
+
+    for (path, body, expected) in [
+        (
+            "/api/threads/missing/activity",
+            r#"{"status":"thinking"}"#,
+            "404",
+        ),
+        (
+            "/api/threads/u-active/activity",
+            r#"{"status":"busy"}"#,
+            "400",
+        ),
+        ("/api/threads/u-active/activity", r#"{}"#, "400"),
+    ] {
+        let response = post_json_path(addr, path, body).await;
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}")),
+            "{response}"
+        );
+    }
+    for status in ["thinking", "replying", "idle"] {
+        let response = post_json_path(
+            addr,
+            "/api/threads/u-active/activity",
+            &format!(r#"{{"status":"{status}"}}"#),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let body = response_json(&response);
+        assert_eq!(body["threadId"], "u-active");
+        assert_eq!(body["status"], status);
+        if status == "idle" {
+            assert!(body["expiresAt"].is_null());
+        } else {
+            let expiry =
+                chrono::DateTime::parse_from_rfc3339(body["expiresAt"].as_str().unwrap()).unwrap();
+            let remaining = expiry
+                .signed_duration_since(chrono::Utc::now())
+                .num_seconds();
+            assert!((118..=120).contains(&remaining), "{remaining}");
+        }
+        let event = read_until(&mut sse, "\n\n").await;
+        assert!(event.contains("event: thread.activity"));
+        assert!(event.contains(&format!("\"status\":\"{status}\"")));
+    }
+    assert!(stdout_string(&stdout).is_empty());
+    assert!(state.read().unwrap().snapshot().resolutions.is_empty());
+    state.write().unwrap().set_resolution(
+        ThreadId("u-active".into()),
+        Resolution {
+            decision: None,
+            resolved_by: None,
+            resolved_at: chrono::Utc::now(),
+        },
+    );
+    let response = post_json_path(
+        addr,
+        "/api/threads/u-active/activity",
+        r#"{"status":"thinking"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+    assert_eq!(response_json(&response)["error"]["code"], "thread_resolved");
+    assert!(stdout_string(&stdout).is_empty());
+    shutdown_tx.send(()).unwrap();
+    timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events() {
     let addr = free_loopback_addr();
     let state = State::new_shared();
@@ -1241,16 +1445,26 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
         body["resolvedAt"]
     );
 
+    let invalid = post_json_path(
+        addr,
+        "/api/threads/u-resolve/resolve",
+        r#"{"resolvedBy":"other"}"#,
+    )
+    .await;
+    assert!(invalid.starts_with("HTTP/1.1 400"));
+    assert_eq!(stdout_string(&stdout).lines().count(), 1);
+
     let response = post_json_path(
         addr,
         "/api/threads/u-resolve/resolve",
-        r#"{"decision":"revised"}"#,
+        r#"{"decision":"revised","resolvedBy":"agent"}"#,
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["decision"], "revised");
+    assert_eq!(body["resolvedBy"], "agent");
 
     let snapshot = state
         .read()
@@ -1265,6 +1479,7 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
     assert!(sse_event.contains("event: thread.resolved"));
     assert!(sse_event.contains("\"threadId\":\"u-resolve\""));
     assert!(sse_event.contains("\"decision\":\"revised\""));
+    assert!(sse_event.contains("\"resolvedBy\":\"agent\""));
 
     let stdout_after_second = stdout_string(&stdout);
     assert_eq!(stdout_after_second.lines().count(), 2);
@@ -1278,6 +1493,7 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
     assert_eq!(emitted["kind"], EventKind::ThreadResolved.to_string());
     assert_eq!(emitted["payload"]["threadId"], "u-resolve");
     assert_eq!(emitted["payload"]["resolution"]["decision"], "revised");
+    assert_eq!(emitted["payload"]["resolution"]["resolvedBy"], "agent");
     assert_eq!(
         emitted["payload"]["resolution"]["resolvedAt"],
         body["resolvedAt"]
@@ -1302,6 +1518,7 @@ async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_even
         state_guard.set_resolution(
             thread_id.clone(),
             Resolution {
+                resolved_by: None,
                 decision: Some("accepted".to_string()),
                 resolved_at: timestamp(1),
             },
@@ -5878,6 +6095,13 @@ fn stdout_string(stdout: &Arc<Mutex<Vec<u8>>>) -> String {
     String::from_utf8(bytes).expect("stdout capture should be utf-8")
 }
 
+fn stdout_events(stdout: &Arc<Mutex<Vec<u8>>>) -> Vec<Value> {
+    stdout_string(stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("stdout event should be JSON"))
+        .collect()
+}
+
 async fn wait_for_stdout_events(
     stdout: &Arc<Mutex<Vec<u8>>>,
     expected_count: usize,
@@ -5886,11 +6110,7 @@ async fn wait_for_stdout_events(
     let deadline = tokio::time::Instant::now() + max_wait;
 
     loop {
-        let output = stdout_string(stdout);
-        let events = output
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("stdout event should be JSON"))
-            .collect::<Vec<Value>>();
+        let events = stdout_events(stdout);
 
         if events.len() >= expected_count {
             return events;
@@ -5898,8 +6118,9 @@ async fn wait_for_stdout_events(
 
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {expected_count} stdout events; saw {}: {output}",
-            events.len()
+            "timed out waiting for {expected_count} stdout events; saw {}: {}",
+            events.len(),
+            stdout_string(stdout)
         );
         sleep(Duration::from_millis(25)).await;
     }

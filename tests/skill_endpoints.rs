@@ -129,6 +129,64 @@ fn bundled_skills_do_not_hardcode_endpoint_construction() {
 }
 
 #[test]
+fn public_docs_list_every_reported_endpoint() {
+    let endpoints = discuss::session_endpoints("http://127.0.0.1:49152");
+    for path in ["README.md", "llms.txt"] {
+        let doc = fs::read_to_string(path).unwrap();
+        let contract = doc
+            .lines()
+            .find(|line| line.contains("`session.started`") && line.contains("`addTakeTemplate`"))
+            .unwrap_or_else(|| panic!("missing session endpoint contract in {path}"));
+        for key in endpoints.as_object().unwrap().keys() {
+            assert!(contract.contains(&format!("`{key}`")), "{path} omits {key}");
+        }
+        assert!(
+            contract.contains("literal `{threadId}`"),
+            "{path} omits thread placeholder"
+        );
+        assert!(
+            contract.contains("literal `{fileId}`"),
+            "{path} omits file placeholder"
+        );
+    }
+}
+
+#[test]
+fn public_docs_explain_idle_suppression_and_optional_caller_attribution() {
+    let readme = fs::read_to_string("README.md").unwrap();
+    let llms = fs::read_to_string("llms.txt").unwrap();
+    let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
+    for (path, doc) in [
+        ("README.md", readme.as_str()),
+        ("llms.txt", llms.as_str()),
+        ("skills/discuss/SKILL.md", skill.as_str()),
+    ] {
+        assert!(
+            doc.contains("suppressed while") && doc.contains("once per quiet stretch"),
+            "{path} must describe idle prompt suppression and cadence"
+        );
+    }
+    assert!(
+        readme.contains("resolvedBy?")
+            && readme.contains("caller-declared, not authenticated")
+            && readme.contains("omitted `resolvedBy` means unspecified")
+    );
+    assert!(
+        skill.contains("Attribution is caller-declared, not authenticated")
+            && skill.contains("legacy requests means unspecified")
+    );
+}
+
+#[test]
+fn activity_uses_reported_template_not_a_constructed_url() {
+    let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
+    assert!(skill.contains(".endpoints.threadActivityTemplate"));
+    assert!(skill.contains("ACTIVITY_URL=${ACTIVITY_TEMPLATE/'{threadId}'/"));
+    assert!(!skill.contains("$API_BASE/api/threads/"));
+    assert!(!skill.contains("$proxyUrl/api/threads/"));
+}
+
+#[test]
 fn guard_detects_hardcoded_port_pattern_and_allows_explicit_port() {
     // NEGATIVE CONTROL: this test proves the guard works both ways.
 
