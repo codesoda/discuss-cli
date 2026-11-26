@@ -27,7 +27,7 @@ test('edit clicks prevent link navigation, while read-only panes keep normal cli
       openBlockEditor: () => { opened = true; },
     });
     handler({
-      target: { closest: selector => selector.startsWith('.block-editor') ? null : anchor },
+      target: { closest: selector => ['#pane-left', '#doc-content [data-anchor-idx]'].includes(selector) ? anchor : null },
       preventDefault: () => { prevented = true; },
       stopImmediatePropagation: () => { stopped = true; },
     });
@@ -217,10 +217,10 @@ test('out-of-order source events update each file without lowering the session v
   const html = new Map();
   const context = vm.createContext({
     document: { getElementById: () => ({}) },
-    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html,
+    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html, proposalsByFile: new Map(),
     loadState: () => state,
     cloneState: value => structuredClone(value),
-    setCurrentState: value => { state = value; }, renderMetaStatus() {},
+    setCurrentState: value => { state = value; }, renderMetaStatus() {}, renderProposalUi() {},
   });
   vm.runInContext(source, context);
   for (const [fileId, version, anchor] of [['b', 2, 4], ['a', 1, 3], ['b', 2, 99], ['b', 1, 99]]) {

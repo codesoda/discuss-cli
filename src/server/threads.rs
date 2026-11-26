@@ -669,6 +669,7 @@ pub(super) async fn post_api_thread_takes(
         kind: "take.added".to_string(),
         payload: payload.clone(),
     });
+    super::agent_status::clear_thread_status(&app_state, &thread_id.0);
 
     Json(take).into_response()
 }

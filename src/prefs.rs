@@ -46,6 +46,12 @@ pub struct UiPrefs {
     /// than review mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_mode: Option<bool>,
+    /// Width in px of the comment pane, set by dragging the divider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_pane_width: Option<u32>,
+    /// Whether headings fold their sections behind a disclosure toggle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold_sections: Option<bool>,
 }
 
 impl UiPrefs {
@@ -60,6 +66,8 @@ impl UiPrefs {
             cmd_enter_to_send: patch.cmd_enter_to_send.or(self.cmd_enter_to_send),
             files_collapsed: patch.files_collapsed.or(self.files_collapsed),
             edit_mode: patch.edit_mode.or(self.edit_mode),
+            thread_pane_width: patch.thread_pane_width.or(self.thread_pane_width),
+            fold_sections: patch.fold_sections.or(self.fold_sections),
         }
     }
 }
