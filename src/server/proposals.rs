@@ -172,6 +172,60 @@ async fn unrelated_file_edits_do_not_stale_creation_or_acceptance() {
     assert_eq!(file_revision(&app, &file_id), 3);
 }
 
+#[cfg(test)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_and_discard_have_exactly_one_winner() {
+    for _ in 0..20 {
+        let app = AppState::for_process().with_markdown_source("Original.\n");
+        let file_id = resolve_file_id(&app, None).unwrap();
+        create_proposal(&app, file_id, "New.\n", String::new(), 0, "proposal").unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let jobs: Vec<_> = [true, false]
+            .into_iter()
+            .map(|accept| {
+                let app = app.clone();
+                let barrier = barrier.clone();
+                tokio::task::spawn_blocking(move || {
+                    barrier.wait();
+                    tokio::runtime::Handle::current().block_on(async {
+                        if accept {
+                            post_api_proposal_accept(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        } else {
+                            post_api_proposal_discard(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        }
+                    })
+                })
+            })
+            .collect();
+        let mut statuses = Vec::new();
+        for job in jobs {
+            statuses.push(job.await.unwrap());
+        }
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 1);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::NOT_FOUND)
+                .count(),
+            1
+        );
+    }
+}
+
 fn optional_json<T: DeserializeOwned + Default>(
     headers: &HeaderMap,
     body: &[u8],
@@ -365,12 +419,9 @@ pub(super) fn create_proposal(
 }
 
 fn take_proposal(
-    app_state: &AppState,
+    store: &ProposalStore,
     proposal_id: &str,
 ) -> std::result::Result<Proposal, Box<Response>> {
-    let Ok(store) = app_state.proposals.lock() else {
-        return Err(Box::new(lock_error("proposal")));
-    };
     store
         .by_file
         .values()
@@ -385,15 +436,8 @@ fn take_proposal(
         })
 }
 
-fn remove_proposal(app_state: &AppState, proposal: &Proposal) {
-    if let Ok(mut store) = app_state.proposals.lock()
-        && store
-            .by_file
-            .get(&proposal.file_id)
-            .is_some_and(|p| p.id == proposal.id)
-    {
-        store.by_file.remove(&proposal.file_id);
-    }
+fn remove_proposal(store: &mut ProposalStore, proposal: &Proposal) {
+    store.by_file.remove(&proposal.file_id);
 }
 
 pub(super) async fn post_api_proposal_accept(
@@ -406,7 +450,10 @@ pub(super) async fn post_api_proposal_accept(
         Ok(request) => request,
         Err(response) => return *response,
     };
-    let proposal = match take_proposal(&app_state, &proposal_id) {
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
     };
@@ -449,6 +496,16 @@ pub(super) async fn post_api_proposal_accept(
             );
         }
         let composed = proposal.diff.compose(|id| accepted.contains(&id));
+        let Ok(mut source) = app_state.source.write() else {
+            return lock_error("source");
+        };
+        let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "unknown_file",
+                format!("unknown fileId: {}", file_id.0),
+            );
+        };
 
         for existing in state.get_threads() {
             if existing.orphaned || existing.file_id != file_id {
@@ -469,20 +526,8 @@ pub(super) async fn post_api_proposal_accept(
             }
         }
 
-        let updated_file = match app_state.source.write() {
-            Ok(mut source) => {
-                let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
-                    return api_error_response(
-                        StatusCode::NOT_FOUND,
-                        "unknown_file",
-                        format!("unknown fileId: {}", file_id.0),
-                    );
-                };
-                file.content = composed.markdown.clone();
-                file.clone()
-            }
-            Err(_) => return lock_error("source"),
-        };
+        file.content = composed.markdown.clone();
+        let updated_file = file.clone();
         let source_version = state.bump_file_source_version(&file_id);
         (
             updated_file,
@@ -491,7 +536,7 @@ pub(super) async fn post_api_proposal_accept(
             source_version,
         )
     };
-    remove_proposal(&app_state, &proposal);
+    remove_proposal(&mut store, &proposal);
     app_state.record_mutation();
     // The reviewer approved it in discuss, so discuss writes it to disk.
     app_state.schedule_source_write(&updated_file);
@@ -539,11 +584,14 @@ pub(super) async fn post_api_proposal_discard(
         Ok(request) => request,
         Err(response) => return *response,
     };
-    let proposal = match take_proposal(&app_state, &proposal_id) {
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
     };
-    remove_proposal(&app_state, &proposal);
+    remove_proposal(&mut store, &proposal);
     app_state.record_mutation();
     let payload = json!({
         "proposalId": proposal.id,
