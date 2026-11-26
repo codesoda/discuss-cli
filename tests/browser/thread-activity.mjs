@@ -34,13 +34,19 @@ function harness() {
   };
   function createThread(t) {
     const children = [];
-    const list = { appendChild(node) { children.push(node); }, set innerHTML(_) { children.length = 0; } };
+    const list = {
+      pending: null,
+      appendChild(node) { children.push(node); },
+      insertAdjacentHTML(_position, html) { this.pending = html; },
+      set innerHTML(_) { children.length = 0; this.pending = null; },
+    };
     const thread = {
       children,
       getAttribute(name) { return name === 'data-thread-id' ? String(t.id) : null; },
       querySelector(selector) {
         if (selector === '.user-comment-list') return list;
         if (selector === '.thread-activity') return children.at(-1) ?? null;
+        if (selector === '.agent-pending') return list.pending && { remove() { list.pending = null; } };
         return null;
       },
     };
@@ -72,6 +78,9 @@ function harness() {
     createPrepopulatedThread: createThread, createUserThread: createThread,
     threadFileId: thread => thread.fileId,
     commentsForThread: () => [],
+    awaitingAgentSince: () => sandbox.pendingSince ?? null,
+    agentPendingHtml: () => '<div class="agent-pending">Claude is on it</div>',
+    renderAgentActivity() {},
     normalizeEventComment: payload => payload.reply,
     upsertRawComment: (items, reply) => [...(items || []), reply],
     upsertDisplayComment: (items, reply) => [...(items || []), reply],
@@ -90,6 +99,24 @@ function harness() {
 
 const active = (threadId, status = 'thinking', expiry = 3000) =>
   ({ threadId, status, expiresAt: new Date(expiry).toISOString() });
+
+test('active lease replaces generic pending indicator; expiry restores it without duplication', () => {
+  const h = harness();
+  h.sandbox.pendingSince = 500;
+  h.render('a');
+  const thread = h.mounted[0];
+  assert.match(thread.querySelector('.user-comment-list').pending, /Claude is on it/);
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  assert.equal(thread.querySelector('.user-comment-list').pending, null);
+  assert.equal(thread.children.length, 1);
+  h.render('a');
+  assert.equal(h.mounted[0].querySelector('.user-comment-list').pending, null);
+  const timer = [...h.timers.values()][0];
+  h.setNow(3000);
+  timer.fn();
+  assert.match(h.mounted[0].querySelector('.user-comment-list').pending, /Claude is on it/);
+  assert.equal(h.mounted[0].children.length, 0);
+});
 
 test('unknown and expired events do not create phantom threads; renewal replaces timer', () => {
   const h = harness();

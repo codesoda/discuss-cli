@@ -26,6 +26,7 @@ pub mod launch;
 pub mod logging;
 pub mod pr;
 pub mod prefs;
+pub mod proposal_diff;
 pub mod proxy;
 pub mod render;
 pub mod server;
@@ -187,6 +188,7 @@ where
         .with_source(source)
         .with_pr_session(identity.clone(), secret.clone())
         .with_direct_pr_publication()
+        .with_transcription_command(config.transcription_command.clone())
         .with_no_save(config.no_save)
         .with_idle_timeout_secs(config.idle_timeout_secs);
     if let Some(history_dir) = config.history_dir.clone() {
@@ -658,6 +660,8 @@ where
         .with_source(source)
         .with_file_bytes(file_bytes)
         .with_verdict_config(verdict_config)
+        .with_hold_agent_edits(true)
+        .with_transcription_command(config.transcription_command.clone())
         .with_no_save(config.no_save)
         .with_idle_timeout_secs(config.idle_timeout_secs);
     if let Some(source_path) = primary_source_path {

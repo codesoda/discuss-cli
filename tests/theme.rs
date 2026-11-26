@@ -53,9 +53,8 @@ const NAMED_COLOURS: &[&str] = &["white", "black"];
 /// accent and marker colours are *lightened* by the dark palette so they read
 /// against a dark page, which pushes white text on them the wrong way — white on
 /// `--accent` measures 5.1:1 light but 2.8:1 dark. Those controls use
-/// `--accent-ink` instead. The `.thread-marker` entries below are a known gap
-/// rather than a justification: white on the marker fills is under 4.5:1 in
-/// *both* themes, so it is a pre-existing issue for upstream, not a theme bug.
+/// `--accent-ink` instead. Thread markers also use theme tokens rather than
+/// hardcoded foreground colours and do not need allowlist entries.
 const ALLOWED: &[&str] = &[
     "#doc-content [data-anchor-idx].has-thread | background:rgba(231, 178, 122, 0.07)",
     "#finish-review.ok | background:#2e7d32",
@@ -72,16 +71,8 @@ const ALLOWED: &[&str] = &[
     ".file-sidebar .file-sidebar-title | color:var(--muted, #888)",
     ".heading-minimap::before | background:rgba(255, 255, 255, 0.32)",
     ".hm-bar | background:rgba(0,0,0,0.22)",
-    ".thread-marker | border:2px solid white",
-    ".thread-marker | color:white",
     ".thread-marker.has-draft::before | background:#0d9488",
     ".thread-marker.has-draft::before | border:1.5px solid white",
-    ".thread-marker.is-resolved | background:#2e7d32 !important",
-    ".thread-marker.is-resolved | color:white !important",
-    ".thread-marker.kind-draft | background:#0d9488",
-    ".thread-marker.kind-draft | border-color:white",
-    ".thread-marker.kind-draft | color:white",
-    ".thread-marker.kind-pending | color:#5a4500",
     ".verdict-modal | background:rgba(255, 255, 255, 0.32)",
     ".verdict-option-button.negative, .verdict-submit.negative | background:#c62828",
     ".verdict-option-button.negative, .verdict-submit.negative | border-color:#c62828",

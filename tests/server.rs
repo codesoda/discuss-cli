@@ -162,7 +162,8 @@ async fn get_api_state_returns_empty_snapshot_json() {
                 "newThread": {},
                 "followup": {}
             },
-            "sourceVersion": 0
+            "sourceVersion": 0,
+            "voiceNotesEnabled": false
         })
     );
 
@@ -4319,7 +4320,7 @@ async fn patch_api_block_persists_to_disk_atomically() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o600))
+        fs::set_permissions(&doc_path, fs::Permissions::from_mode(0o640))
             .expect("restrict source permissions");
     }
 
@@ -4351,8 +4352,8 @@ async fn patch_api_block_persists_to_disk_atomically() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             fs::metadata(&doc_path).unwrap().permissions().mode() & 0o777,
-            0o600,
-            "atomic saves must preserve restrictive source permissions"
+            0o640,
+            "atomic saves must preserve the source mode, including group-read permission"
         );
     }
     let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
@@ -6207,6 +6208,8 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         line_range: None,
         orphaned: false,
         element_anchor: None,
+        audio_id: None,
+        audio_path: None,
     }
 }
 
@@ -6326,4 +6329,309 @@ fn initial_state_script(body: &str) -> &str {
     let end = body[start..].find(close).expect("initial-state script end") + start;
 
     &body[start..end]
+}
+
+// ---------- Held-back rewrites ----------
+
+async fn proposal_server(
+    app_state: AppState,
+) -> (
+    SocketAddr,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<discuss::Result<()>>,
+) {
+    let addr = free_loopback_addr();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    (addr, shutdown_tx, server)
+}
+
+#[tokio::test]
+async fn proposal_waits_until_accepted_then_applies_only_chosen_hunks() {
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let doc_path = temp_dir.path().join("doc.md");
+    fs::write(&doc_path, BLOCK_DOC).expect("write fixture");
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_source(file_backed_source(&doc_path, BLOCK_DOC));
+    {
+        let mut state = app_state.state.write().expect("state lock");
+        let mut first = thread("u-first", 2);
+        first.line_range = Some(discuss::state::LineRange { start: 1, end: 1 });
+        state.add_thread(first);
+        state.add_thread(thread("u-last", 5)); // Last paragraph
+    }
+    let (addr, shutdown_tx, server) = proposal_server(app_state).await;
+
+    // Rewrite the title (hunk 1) and drop the last paragraph (hunk 2).
+    let rewrite = "# New title\n\nFirst paragraph.\n\n- item one\n- item two\n";
+    let body = json!({ "markdown": rewrite, "summary": "Tighter", "baseVersion": 0 });
+    let response = post_json_path(addr, "/api/proposals", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 201"), "response: {response}");
+    let proposal = response_json(&response);
+    let id = proposal["proposalId"].as_str().expect("id").to_string();
+    let hunks = proposal["hunks"].as_array().expect("hunks");
+    assert_eq!(hunks.len(), 2);
+    assert_eq!(hunks[0]["oldAnchorStart"], 1);
+    assert!(hunks[0]["newHtml"].as_str().unwrap().contains("New title"));
+
+    // Nothing changed yet: state, source and file are untouched.
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 0);
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), BLOCK_DOC);
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(listing["proposals"][0]["proposalId"], id);
+    assert_eq!(listing["proposals"][0]["stale"], false);
+
+    // A nonempty body without Content-Type must not silently accept all hunks.
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let untyped_body = r#"{"hunkIds":[1]}"#;
+    stream.write_all(format!(
+        "POST /api/proposals/{id}/accept HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{untyped_body}",
+        untyped_body.len()
+    ).as_bytes()).await.expect("write untyped request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    assert!(response.starts_with("HTTP/1.1 415"), "response: {response}");
+    let malformed = post_json_path(addr, &format!("/api/proposals/{id}/accept"), "{").await;
+    assert!(
+        malformed.starts_with("HTTP/1.1 400"),
+        "response: {malformed}"
+    );
+    assert_eq!(
+        response_json(&get_path(addr, "/api/state").await)["sourceVersion"],
+        0
+    );
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), BLOCK_DOC);
+
+    // Unknown hunk ids are rejected.
+    let response = post_json_path(
+        addr,
+        &format!("/api/proposals/{id}/accept"),
+        &json!({ "hunkIds": [9] }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+
+    // An empty selection is rejected without consuming the proposal or mutating state.
+    let response = post_json_path(
+        addr,
+        &format!("/api/proposals/{id}/accept"),
+        &json!({ "hunkIds": [] }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    let unchanged = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(unchanged["sourceVersion"], 0);
+    assert_eq!(fs::read_to_string(&doc_path).unwrap(), BLOCK_DOC);
+    assert!(!stdout_string(&stdout).contains("proposal.accepted"));
+
+    // Accept only the title change.
+    let response = post_json_path(
+        addr,
+        &format!("/api/proposals/{id}/accept"),
+        &json!({ "hunkIds": [1] }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let accepted = response_json(&response);
+    assert_eq!(accepted["acceptedHunkIds"], json!([1]));
+    assert_eq!(accepted["rejectedHunks"][0]["id"], 2);
+
+    let expected = "# New title\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph.\n";
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 1);
+    let threads = state["threads"].as_array().expect("threads");
+    let first = threads.iter().find(|t| t["id"] == "u-first").unwrap();
+    assert_eq!(first["lineRange"], json!({"start": 1, "end": 1}));
+    let last = threads.iter().find(|t| t["id"] == "u-last").unwrap();
+    assert!(last.get("lineRange").is_none_or(Value::is_null));
+    assert_eq!(last["anchorStart"], 5);
+    assert_ne!(last["orphaned"], true);
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(listing["proposals"], json!([]));
+
+    let out = stdout_string(&stdout);
+    assert!(out.contains("\"proposal.accepted\""), "stdout: {out}");
+    assert!(!out.contains("\"proposal.created\""), "stdout: {out}");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while fs::read_to_string(&doc_path).unwrap() != expected {
+        assert!(tokio::time::Instant::now() < deadline, "file not written");
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    shutdown_tx.send(()).expect("shutdown");
+    timeout(Duration::from_secs(1), server)
+        .await
+        .expect("server exits")
+        .expect("no panic")
+        .expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn proposal_accept_all_orphans_threads_on_deleted_blocks() {
+    let app_state = AppState::for_process().with_markdown_source(BLOCK_DOC);
+    {
+        let mut state = app_state.state.write().expect("state lock");
+        state.add_thread(thread("u-last", 5));
+    }
+    let (addr, shutdown_tx, server) = proposal_server(app_state).await;
+    let rewrite = "# Title\n\nFirst paragraph.\n\n- item one\n- item two\n";
+    let body = json!({ "markdown": rewrite, "baseVersion": 0 });
+    let proposal = response_json(&post_json_path(addr, "/api/proposals", &body.to_string()).await);
+    let id = proposal["proposalId"].as_str().unwrap();
+    let response = post_path_no_body(addr, &format!("/api/proposals/{id}/accept")).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let state = response_json(&get_path(addr, "/api/state").await);
+    let last = state["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "u-last")
+        .unwrap()
+        .clone();
+    assert_eq!(last["orphaned"], true);
+
+    shutdown_tx.send(()).expect("shutdown");
+    let _ = timeout(Duration::from_secs(1), server).await;
+}
+
+#[tokio::test]
+async fn proposals_reject_stale_base_no_changes_and_stale_accept() {
+    let app_state = AppState::for_process().with_markdown_source(BLOCK_DOC);
+    let (addr, shutdown_tx, server) = proposal_server(app_state).await;
+
+    let body = json!({ "markdown": BLOCK_DOC, "baseVersion": 0 });
+    let response = post_json_path(addr, "/api/proposals", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+
+    let body = json!({ "markdown": "# Other\n", "baseVersion": 3 });
+    let response = post_json_path(addr, "/api/proposals", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+
+    let body = json!({ "markdown": "# Other\n", "baseVersion": 0 });
+    let proposal = response_json(&post_json_path(addr, "/api/proposals", &body.to_string()).await);
+    let id = proposal["proposalId"].as_str().unwrap().to_string();
+
+    // The reviewer edits a block while the proposal waits: it goes stale.
+    let edit = json!({ "markdown": "Edited.", "sourceVersion": 0 });
+    let response = patch_json_path(addr, "/api/blocks/2", &edit.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(listing["proposals"][0]["stale"], true);
+    let response = post_path_no_body(addr, &format!("/api/proposals/{id}/accept")).await;
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+
+    // Discard with redo tells the agent.
+    let response = post_json_path(
+        addr,
+        &format!("/api/proposals/{id}/discard"),
+        &json!({ "redo": true }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    assert_eq!(response_json(&response)["redoRequested"], true);
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(listing["proposals"], json!([]));
+
+    shutdown_tx.send(()).expect("shutdown");
+    let _ = timeout(Duration::from_secs(1), server).await;
+}
+
+#[tokio::test]
+async fn hold_switch_turns_agent_source_pushes_into_proposals() {
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        State::new_shared(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    )
+    .with_markdown_source(BLOCK_DOC)
+    .with_hold_agent_edits(true);
+    app_state
+        .state
+        .write()
+        .unwrap()
+        .add_thread(thread("u-anchor", 2));
+    let (addr, shutdown_tx, server) = proposal_server(app_state).await;
+
+    let body = json!({ "markdown": "# Pushed\n", "threadAnchors": [{"threadId": "u-anchor", "orphaned": true}], "summary": "Shorter" });
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 202"), "response: {response}");
+    let held = response_json(&response);
+    assert_eq!(held["held"], true);
+    assert_eq!(held["proposal"]["origin"], "source");
+    assert_eq!(held["proposal"]["summary"], "Shorter");
+    assert_eq!(held["threadAnchorPolicy"], "mechanical_on_accept");
+    let anchor_only = json!({
+        "markdown": BLOCK_DOC,
+        "threadAnchors": [{"threadId": "u-anchor", "orphaned": true}],
+    });
+    let response = post_json_path(addr, "/api/source", &anchor_only.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert!(response.contains("held_anchor_update"));
+    assert!(response.contains("disable Hold edits"));
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(
+        listing["proposals"][0]["proposalId"],
+        held["proposal"]["proposalId"]
+    );
+    let state = response_json(&get_path(addr, "/api/state").await);
+    assert_eq!(state["sourceVersion"], 0);
+    assert_ne!(state["threads"][0]["orphaned"], true);
+
+    // Switch it off: pushes apply straight away again.
+    let response = put_json_path(
+        addr,
+        "/api/proposals/hold",
+        &json!({ "hold": false }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+    let response = post_json_path(addr, "/api/source", &body.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
+
+    // The Rewrite button reaches the agent on stdout.
+    let response = post_json_path(
+        addr,
+        "/api/rewrite",
+        &json!({ "instruction": "half as long" }).to_string(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 202"), "response: {response}");
+    let out = stdout_string(&stdout);
+    assert!(out.contains("\"rewrite.requested\""), "stdout: {out}");
+    assert!(out.contains("half as long"), "stdout: {out}");
+
+    shutdown_tx.send(()).expect("shutdown");
+    let _ = timeout(Duration::from_secs(1), server).await;
+}
+
+async fn put_json_path(addr: SocketAddr, path: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(addr).await.expect("connect to server");
+    let request = format!(
+        "PUT {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("write request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+    response
 }

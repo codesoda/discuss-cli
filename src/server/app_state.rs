@@ -77,6 +77,9 @@ pub struct AppState {
     pub emitter: Arc<EventEmitter<Box<dyn Write + Send>>>,
     pub(super) source: Arc<std::sync::RwLock<Source>>,
     source_sync: Arc<Mutex<SourceSyncState>>,
+    pub(super) proposals: Arc<Mutex<super::proposals::ProposalStore>>,
+    pub(super) agent_status: Arc<Mutex<super::agent_status::AgentStatusStore>>,
+    hold_agent_edits: Arc<AtomicBool>,
     source_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
     file_versions: Arc<HashMap<FileId, String>>,
@@ -84,6 +87,8 @@ pub struct AppState {
     pub(super) history_dir: Arc<PathBuf>,
     pub(super) prefs_path: Arc<PathBuf>,
     no_save: Arc<AtomicBool>,
+    pub(super) transcription_command: Option<Vec<String>>,
+    pub(super) audio_dir: Arc<std::sync::OnceLock<tempfile::TempDir>>,
     done_started: Arc<AtomicBool>,
     finalization: Arc<Mutex<Option<FinalizationClaim>>>,
     completion_scope: Arc<String>,
@@ -114,6 +119,9 @@ impl AppState {
             emitter,
             source: Arc::new(std::sync::RwLock::new(Source::default())),
             source_sync: Arc::new(Mutex::new(SourceSyncState::default())),
+            proposals: Arc::new(Mutex::new(Default::default())),
+            agent_status: Arc::new(Mutex::new(Default::default())),
+            hold_agent_edits: Arc::new(AtomicBool::new(false)),
             source_write_lock: Arc::new(tokio::sync::Mutex::new(())),
             file_bytes: Arc::new(HashMap::new()),
             file_versions: Arc::new(HashMap::new()),
@@ -121,6 +129,8 @@ impl AppState {
             history_dir: Arc::new(history::default_history_dir()),
             prefs_path: Arc::new(prefs::default_prefs_path()),
             no_save: Arc::new(AtomicBool::new(false)),
+            transcription_command: None,
+            audio_dir: Arc::new(std::sync::OnceLock::new()),
             done_started: Arc::new(AtomicBool::new(false)),
             finalization: Arc::new(Mutex::new(None)),
             completion_scope: Arc::new("session".to_string()),
@@ -533,6 +543,34 @@ impl AppState {
 
     pub fn with_prefs_path(mut self, prefs_path: impl Into<PathBuf>) -> Self {
         self.prefs_path = Arc::new(prefs_path.into());
+        self
+    }
+
+    /// When on, agent `POST /api/source` pushes become proposals that wait
+    /// for the reviewer instead of changing the document straight away.
+    pub fn with_hold_agent_edits(self, hold: bool) -> Self {
+        self.hold_agent_edits.store(hold, Ordering::Relaxed);
+        self
+    }
+
+    pub(super) fn hold_agent_edits(&self) -> bool {
+        self.hold_agent_edits.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_hold_agent_edits(&self, hold: bool) {
+        self.hold_agent_edits.store(hold, Ordering::Relaxed);
+    }
+
+    pub(super) fn voice_notes_enabled(&self) -> bool {
+        self.transcription_command.as_ref().is_some_and(|command| {
+            command
+                .first()
+                .is_some_and(|program| !program.trim().is_empty())
+        })
+    }
+
+    pub fn with_transcription_command(mut self, command: Option<Vec<String>>) -> Self {
+        self.transcription_command = command;
         self
     }
 

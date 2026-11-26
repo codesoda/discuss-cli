@@ -352,7 +352,8 @@ curl -s -X POST "$ACTIVITY_URL" -H 'Content-Type: application/json' -d '{"status
 1. Read `anchorStart`, `anchorEnd`, `snippet`, `text`, and optional `imageAnchor` / `elementAnchor` from the payload.
 2. For markdown/diff threads, locate the anchored region using `snippet`. For image threads, resolve `fileId` through the `files` field fetched from `endpoints.state` and inspect `imageAnchor`'s percentage coordinates. For static HTML threads, use `breadcrumb`, `elementAnchor.selector`, and `elementAnchor.outerHtml`. For live threads, also use `elementAnchor.route` and `elementAnchor.accessibleName`; selectors are route-scoped and must not be interpreted against a different SPA route.
 3. Read the user's comment in `text`.
-4. Form a take specific to the anchored content. For a settled answer, use one or two sentences; expand only for a substantive question or disagreement. Do not duplicate the take in main-agent chat.
+   - **Voice notes:** when the payload has `audioPath`, the user held on the block and talked; `text` contains the configured local command's transcript, or a "🎤 Voice note (Ns)" placeholder if transcription failed. Use the existing transcript; only transcribe the file locally when the placeholder remains (with an installed local tool such as mlx-whisper or whisper.cpp; never upload the audio). Start the take with `Heard: "…"` so the user can catch a bad transcription, then answer it like a typed comment. Read for intent and ignore ums and false starts. If no local transcriber is available, say so in the take.
+4. Form a take specific to the anchored content: answer, critique, or add the missing piece. For a settled answer, use one or two sentences; expand only for a substantive question or disagreement. Do not duplicate the take in main-agent chat.
 5. Post it as a **take**, not a reply. Replace `{threadId}` in the retained `endpoints.addTakeTemplate` value:
 
 ```bash
@@ -412,13 +413,17 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | POST | `/api/anchors/resolve` | `{fileId?, detachedThreadIds}` | Browser reports detached HTML anchors |
 | GET | `/api/files/{fileId}/blocks` | — | Server's commentable-block segmentation `{fileId, sourceVersion, blocks: [{index, snippet, breadcrumb}]}` for computing anchors (markdown/diff only) |
 | POST | `/api/threads` | Text: `{fileId?, anchorStart, anchorEnd, snippet, text}`; image adds `{imageAnchor}`; HTML adds `{breadcrumb, elementAnchor}` and uses zero numeric anchors; optional `kind: "agent"` stores `text` as the opening take and returns `takeId` | Create a thread. User threads are rare via API; `kind: "agent"` is how you pre-annotate. `fileId` required with multiple files. |
+| POST | `/api/audio` | raw audio body (`audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav`) | Browser voice-note upload; returns `{audioId, audioPath, transcript}` (`transcript` is a string or null). The request waits for transcription, up to 120 seconds. Pass `audioId` to `POST /api/threads` (markdown/diff only) |
+| GET | `/api/audio/{audioId}` | — | Play back a saved voice note |
 | DELETE | `/api/threads/{id}` | — | Soft delete (`kind = "user"` or `"agent"`; prepopulated returns 403) |
 | POST | `/api/threads/{id}/replies` | `{text}` | **Human** reply. Do NOT use as the agent. |
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/activity` | `{status: "thinking" \| "replying" \| "idle"}` | Use substituted `endpoints.threadActivityTemplate`; active lease expires in 120 seconds; renew while working, idle if no take. SSE-only. |
 | POST | `/api/threads/{id}/resolve` | `{decision?, resolvedBy: "agent"}` | Use substituted `endpoints.resolveTemplate` after answering and completing required work; browser uses `resolvedBy: "user"`. |
 | POST | `/api/threads/{id}/unresolve` | — | Use substituted `endpoints.unresolveTemplate` to reopen. |
-| POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
+| POST | `/api/source` | `{markdown, fileId?, threadAnchors, summary?}` | Live source update with re-anchoring (see below). With the hold switch on, a Markdown push returns `202 {held: true, proposal}` and nothing changes yet |
+| GET | `/api/proposals` | — | `{holdAgentEdits, sourceVersion, proposals}`: the proposal waiting on each file, if any |
+| POST | `/api/proposals` | `{markdown, summary, baseVersion, fileId?}` | Propose a full rewrite. Nothing changes until the user accepts (see below) |
 | GET | `/api/blocks/{idx}` | — (`?fileId=` with multiple files) | One block's markdown source, line range and `sourceVersion` (used by the browser's edit mode) |
 | PATCH | `/api/blocks/{idx}` | `{markdown, sourceVersion, fileId?}` | Replace one block; the server re-anchors that file's threads itself (see below) |
 | POST | `/api/done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
@@ -447,20 +452,53 @@ The browser has an edit mode: the user clicks a block, edits its markdown, and t
 - **The file on disk follows the session.** Each applied edit is written back to the edited file atomically (debounced ~500 ms). If a file changes *outside* discuss, writes to it stop rather than clobber it and `source.save_failed {reason: "external_change"}` is emitted — from then on the in-session document (from `source.updated` and the PATCH responses) is the truth, not the file. Your own `POST /api/source` pushes count as in-session, so a user edit after your push still persists. With `--no-save` or stdin input, edits stay in memory and the user sees a "not saved to file" hint.
 - You normally have no reason to call `PATCH /api/blocks/{idx}` yourself — `POST /api/source` with explicit re-anchors is your protocol; the block endpoint exists so the browser doesn't have to re-anchor.
 
+### Rewrites wait for the user's OK (proposals)
+
+When the user asks you to rewrite a document, or a large part of it, **propose** it. Never `POST /api/source` a rewrite and never write the file yourself.
+
+1. Read the current markdown and `sourceVersion` from the latest `source.updated` payload or `/api/state`.
+2. `POST /api/proposals` with `{markdown: "...entire new document...", summary: "one short line for the ribbon", baseVersion: <that sourceVersion>, fileId?}`. You don't send thread anchors: the server diffs old and new block by block and re-anchors threads itself when the user accepts.
+3. The browser shows a ribbon above the doc. The user can accept all, review and pick blocks, or discard. The doc and the file stay as they were until then. Keep handling threads while you wait.
+
+Rules:
+
+- **One proposal per file.** A new one replaces the waiting one.
+- `409 stale_source_version` means the doc changed while you wrote. Re-read and propose again. `422 no_changes` means your markdown matches the doc.
+- **The hold switch** ("Hold edits" in the header) is on by default for file sessions. While it is on, your ordinary `POST /api/source` pushes on Markdown files come back `202 {held: true, proposal}` and also wait in the ribbon. Add `summary` to those pushes so the ribbon says what changed. Held responses include `threadAnchorPolicy: "mechanical_on_accept"`: supplied `threadAnchors` are not applied because they describe the full rewrite, while the reviewer may accept only some hunks. Acceptance carries anchors mechanically and preserves row selections. An unchanged-markdown push with anchor updates returns `422 held_anchor_update`; disable Hold edits and resend if explicit anchor/snippet/orphan changes are intended.
+
+### Show the user you're working (`POST /api/agent/status`)
+
+Threads show "Claude is on it…" while waiting; the required per-thread activity lease replaces that generic indicator while you work. Before a longer job (a search, a data query, a rewrite), also set a status so the header shows a spinner pill:
+
+```bash
+curl -s -X POST "$API_BASE/api/agent/status" -H 'Content-Type: application/json' \
+  -d '{"id":"quotes","label":"Finding customer quotes","threadId":"u-3"}'
+```
+
+- `label` is a few plain words. `id` defaults to `"main"`; give jobs their own ids to show several at once.
+- `threadId` ties the status to a thread: the thread shows your label, and your next take on it clears the status.
+- Clear it with `{"id":"quotes","done":true}` when the job doesn't end in a take. Statuses expire after 10 minutes anyway.
+- `GET /api/agent/status` lists the current ones. Statuses go to the browser only, never to stdout.
+
 ## Stdout event kinds
 
 - `session.started` → `{url, apiBaseUrl, proxyUrl?, upstreamUrl?, endpoints, agentInstructions, mode, source_file, files_count, started_at, git_args?}` — `endpoints` contains `state`, `events`, `createThread`, `addTakeTemplate`, `threadActivityTemplate`, `resolveTemplate`, and `unresolveTemplate` (all with literal `{threadId}`), `blocksTemplate` (with literal `{fileId}`), and `done`; `mode: "live"` includes `proxyUrl` and `upstreamUrl`, while ordinary sessions omit both
 - `session.done` → final transcript payload with optional `verdict: {optionId, label, feedback?, decidedAt}`
-- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
-- `thread.resolved` → `{threadId, resolution: {decision, resolvedAt}}`
+Voice audio paths are session-local: `session.done` and saved transcript archives omit `audioId` and `audioPath`. Process shutdown removes the audio; consume it during the session.
+
+- `thread.created` → `{id, fileId, kind, anchorStart, anchorEnd, imageAnchor?, elementAnchor?, audioId?, audioPath?, snippet, text, breadcrumb, createdAt}`; image breadcrumbs identify pin coordinates, static HTML anchors include selector fallbacks and `outerHtml`, and live anchors additionally include `route` and `accessibleName`. `kind: "agent"` with an `a-N` id is the echo of your own pre-annotation — ignore it
+- `thread.resolved` → `{threadId, resolution: {decision, resolvedAt, resolvedBy?}}`
 - `thread.unresolved` → `{threadId}`
 - `thread.deleted` → `{threadId}`
 - `reply.added` → `{id, threadId, text, createdAt}` — human reply
 - `source.updated` → `{markdown, fileId, renderedHtml, threadAnchors, orphanedThreadIds, sourceVersion}` — a live source update was applied (echo of your own `POST /api/source`, another agent's, or a user block edit in the browser)
 - `source.save_failed` → `{reason, message, path}` — a user edit could not be written back to its source file (`reason`: `"external_change"` or `"io_error"`); the in-session document remains the truth
+- `rewrite.requested` → `{fileId, instruction, sourceVersion}` — the user pressed **Rewrite** in the browser. `instruction` may be empty; then rewrite for clarity and brevity. Answer with `POST /api/proposals`, never `/api/source`
+- `proposal.accepted` → `{proposalId, fileId, acceptedHunkIds, rejectedHunks: [{id, oldMarkdown, newMarkdown}], sourceVersion}` — the accepted blocks are now in the doc and on disk (a `source.updated` arrives too). The user turned down `rejectedHunks`: don't push those changes again unless asked
+- `proposal.discarded` → `{proposalId, fileId, reason: "user", redoRequested, summary}` — the user threw the proposal away. With `redoRequested: true` the doc moved on under it: re-read the latest doc and propose again with the same intent
 - `prompt.suggest_done` → `{idle_for_secs}`; lifecycle, informational. Fires once when no review page is open for `idle_timeout_secs`
 
-**Not on stdout:** `take.added`, `draft.updated`, `draft.cleared` — these are SSE-only (browser UI), so they never surface here.
+**Not on stdout:** `take.added`, `draft.updated`, `draft.cleared`, `proposal.created`, `proposal.hold_changed` — these are SSE-only (browser UI), so they never surface here.
 
 ## Authoring markdown for syntax highlighting
 

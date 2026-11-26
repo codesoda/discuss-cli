@@ -398,6 +398,8 @@ pub(super) async fn post_api_pr_import(
             }),
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         });
         imported_threads.insert(
             id,

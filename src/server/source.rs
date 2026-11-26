@@ -16,6 +16,7 @@ use crate::state::{File, FileId, FileKind, LineRange, Thread, ThreadId};
 
 use super::app_state::AppState;
 use super::pages::render_file_html;
+use super::proposals::create_proposal;
 use super::resolve_file_id;
 use super::response::api_error_response;
 
@@ -26,6 +27,9 @@ pub(super) struct SourceUpdateRequest {
     #[serde(default)]
     file_id: Option<FileId>,
     thread_anchors: Vec<ThreadAnchorUpdate>,
+    /// One line for the ribbon when the push is held as a proposal.
+    #[serde(default)]
+    summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +147,46 @@ pub(super) async fn post_api_source(
         );
     }
 
+    // Hold switch: the push waits in the ribbon like any proposal. The
+    // agent's threadAnchors describe the full rewrite, so cannot be used
+    // after partial acceptance. Accept re-anchors mechanically instead.
+    if app_state.hold_agent_edits() && app_state.file_kind(&file_id) == Some(FileKind::Markdown) {
+        if !updates.is_empty()
+            && app_state
+                .file(&file_id)
+                .is_some_and(|file| file.content == request.markdown)
+        {
+            return api_error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "held_anchor_update",
+                "anchor-only updates cannot be held as rewrite proposals; disable Hold edits and resend to apply threadAnchors",
+            );
+        }
+        let base_version = match super::proposals::current_version(&app_state) {
+            Ok(version) => version,
+            Err(response) => return *response,
+        };
+        return match create_proposal(
+            &app_state,
+            file_id,
+            &request.markdown,
+            request.summary.unwrap_or_default(),
+            base_version,
+            "source",
+        ) {
+            Ok(proposal) => (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "held": true,
+                    "proposal": proposal,
+                    "threadAnchorPolicy": "mechanical_on_accept",
+                })),
+            )
+                .into_response(),
+            Err(response) => *response,
+        };
+    }
+
     let markdown = request.markdown;
     let (threads, source_version, updated_file) = {
         let mut state = match app_state.state.write() {
@@ -228,7 +272,7 @@ pub(super) async fn post_api_source(
             }
         };
 
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_source_version(&file_id);
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();

@@ -10,5 +10,6 @@ function between(start, end) {
 export const quoteFunction = between('  function appendQuotedSelection(', '  const selectionActions =');
 export const selectionSource = between('  function appendQuotedSelection(', '  function renderFollowups(');
 export const clipboardSource = between('  function copyTextToClipboard(', '  // ---------- Heartbeat');
-export const clickSource = between("  document.addEventListener('click', (e) => {\n    if (e.target.closest('#finish-review'))", '  // Escape closes');
+export const clickSource = between('  const documentControlSelector =', '\n\n  // Capture-phase') + '\n' +
+  between("  document.addEventListener('click', (e) => {\n    if (e.target.closest('#finish-review'))", '  // Escape closes');
 export const completedSource = between('  function blockCompletedInteraction(', '  function updateFinishReviewButtonLabel(');

@@ -23,6 +23,8 @@ pub struct Config {
     pub no_save: bool,
     pub log_level: Option<String>,
     pub max_diff_bytes: Option<usize>,
+    /// Executable and arguments; `{filepath}` is substituted without a shell.
+    pub transcription_command: Option<Vec<String>>,
 }
 
 impl Config {
@@ -84,6 +86,7 @@ impl Default for Config {
             no_save: false,
             log_level: None,
             max_diff_bytes: None,
+            transcription_command: None,
         }
     }
 }
@@ -142,6 +145,7 @@ struct ConfigLayer {
     no_save: Option<bool>,
     log_level: Option<String>,
     max_diff_bytes: Option<usize>,
+    transcription_command: Option<Vec<String>>,
 }
 
 impl ConfigLayer {
@@ -176,6 +180,9 @@ impl ConfigLayer {
     }
 
     fn apply_to(self, config: &mut Config) {
+        if let Some(command) = self.transcription_command {
+            config.transcription_command = Some(command);
+        }
         if let Some(port) = self.port {
             config.port = Some(port);
         }
@@ -314,6 +321,7 @@ mod tests {
                 no_save: false,
                 log_level: None,
                 max_diff_bytes: None,
+                transcription_command: None,
             }
         );
     }

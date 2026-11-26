@@ -891,7 +891,9 @@ mod tests {
         assert!(page.contains("loadState().prSession?.phase === 'loading'"));
         assert!(page.contains("window.location.reload();"));
         assert!(page.contains("markReviewComplete({"));
-        assert!(page.contains("source.onopen = () => { reconcilePrSessionFromServer(); };"));
+        assert!(page.contains(
+            "source.onopen = () => { reconcilePrSessionFromServer(); refreshAgentStatuses(); loadProposals(); };"
+        ));
         assert!(
             page.contains("if (localSession.phase === 'loading' && remote.phase !== 'loading')")
         );

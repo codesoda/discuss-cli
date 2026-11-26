@@ -13,7 +13,7 @@ const between = (start, end) => {
 };
 
 test('edit clicks prevent link navigation, while read-only panes keep normal clicks', () => {
-  const source = between('  // Capture-phase so edit-mode clicks', '  async function openBlockEditor');
+  const source = between('  const documentControlSelector', '  async function openBlockEditor');
   for (const editable of [true, false]) {
     let handler;
     let prevented = false;
@@ -27,13 +27,54 @@ test('edit clicks prevent link navigation, while read-only panes keep normal cli
       openBlockEditor: () => { opened = true; },
     });
     handler({
-      target: { closest: selector => selector === '.block-editor' ? null : anchor },
+      target: { closest: selector => ['#pane-left', '#doc-content [data-anchor-idx]'].includes(selector) ? anchor : null },
       preventDefault: () => { prevented = true; },
       stopImmediatePropagation: () => { stopped = true; },
     });
     assert.equal(prevented, editable);
     assert.equal(stopped, editable);
     assert.equal(opened, editable);
+  }
+});
+
+test('edit mode leaves document controls clickable and samples prose typography', () => {
+  const source = between('  const documentControlSelector', '  async function openBlockEditor');
+  let handler;
+  vm.runInNewContext(source, {
+    editMode: true, reviewComplete: false, activeFileIsEditable: () => true,
+    document: { addEventListener: (_, fn) => { handler = fn; } },
+    openBlockEditor: () => assert.fail('control opened editor'),
+  });
+  for (const control of ['.thread-marker', '.thread-marker-stack', '.section-toggle']) {
+    handler({
+      target: { closest: selector => selector === '#pane-left' || selector.split(',').some(part => part.trim() === control) ? {} : null },
+      preventDefault: () => assert.fail('control default blocked'),
+      stopImmediatePropagation: () => assert.fail('control propagation blocked'),
+    });
+  }
+  const typography = between('    const sample =', '\n    targetEl.style.display');
+  for (const hasPre of [true, false]) {
+    const prose = { fontFamily: 'serif' };
+    const pre = { fontFamily: 'monospace' };
+    const inlineCode = { fontFamily: 'inline-monospace' };
+    const textarea = { style: {} };
+    const targetEl = { querySelector: selector => selector === 'pre' ? (hasPre ? pre : null) : inlineCode };
+    vm.runInNewContext(typography, {
+      targetEl, textarea, getComputedStyle: element => element === targetEl ? prose : element,
+    });
+    assert.equal(textarea.style.fontFamily, hasPre ? 'monospace' : 'serif');
+  }
+});
+
+test('bubble dispatcher ignores marker-stack gaps and section controls', () => {
+  const declarations = between('  const documentControlSelector', '  // Capture-phase');
+  const guards = between('  // ---------- Click dispatch ----------', '\n    const sel = window.getSelection();');
+  let handler;
+  vm.runInNewContext(declarations + guards + '\n throw new Error("comment dispatch reached");\n});', {
+    document: { addEventListener: (_, fn) => { handler = fn; } },
+  });
+  for (const control of ['.thread-marker-stack', '.section-toggle']) {
+    handler({ target: { closest: selector => selector.split(',').some(part => part.trim() === control) ? {} : null } });
   }
 });
 
@@ -176,10 +217,10 @@ test('out-of-order source events update each file without lowering the session v
   const html = new Map();
   const context = vm.createContext({
     document: { getElementById: () => ({}) },
-    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html,
+    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html, proposalsByFile: new Map(),
     loadState: () => state,
     cloneState: value => structuredClone(value),
-    setCurrentState: value => { state = value; }, renderMetaStatus() {},
+    setCurrentState: value => { state = value; }, renderMetaStatus() {}, renderProposalUi() {},
   });
   vm.runInContext(source, context);
   for (const [fileId, version, anchor] of [['b', 2, 4], ['a', 1, 3], ['b', 2, 99], ['b', 1, 99]]) {

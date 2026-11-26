@@ -1,0 +1,671 @@
+//! Held-back rewrites: the agent proposes a whole new document, the reviewer
+//! accepts all, some, or none of its changed blocks. Nothing on screen or on
+//! disk changes until they do.
+//!
+//! - `GET /api/proposals` — pending proposals plus the hold switch.
+//! - `POST /api/proposals` — the agent posts `{markdown, summary, baseVersion}`.
+//! - `POST /api/proposals/{id}/accept` — apply all hunks, or `hunkIds`.
+//! - `POST /api/proposals/{id}/discard` — drop it; `redo: true` asks the
+//!   agent to try again against the current document.
+//! - `PUT /api/proposals/hold` — when on, agent `POST /api/source` pushes
+//!   arrive as proposals too.
+//! - `POST /api/rewrite` — the reviewer's Rewrite button; tells the agent.
+
+use std::collections::{BTreeSet, HashMap};
+
+use axum::Json;
+use axum::body::Bytes;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, State as AxumState};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+
+use crate::events::{Event, EventKind};
+use crate::proposal_diff::BlockDiff;
+use crate::render;
+use crate::sse::BroadcastEvent;
+use crate::state::{FileId, FileKind};
+
+use super::app_state::AppState;
+use super::resolve_file_id;
+use super::response::api_error_response;
+use super::source::source_updated_response;
+
+/// One pending proposal per file; a newer one replaces it.
+#[derive(Debug, Default)]
+pub(crate) struct ProposalStore {
+    by_file: HashMap<FileId, Proposal>,
+    next_number: u64,
+}
+
+#[derive(Debug, Clone)]
+struct Proposal {
+    id: String,
+    file_id: FileId,
+    summary: String,
+    base_version: u64,
+    created_at: DateTime<Utc>,
+    /// `"proposal"` for `POST /api/proposals`, `"source"` for a held push.
+    origin: &'static str,
+    diff: BlockDiff,
+}
+
+impl Proposal {
+    fn to_json(&self, current_version: u64) -> Value {
+        let hunks: Vec<Value> = self
+            .diff
+            .hunks
+            .iter()
+            .map(|hunk| {
+                json!({
+                    "id": hunk.id,
+                    "oldAnchorIndices": hunk.old_anchor_indices,
+                    "oldAnchorStart": hunk.old_anchors.map(|(start, _)| start),
+                    "oldAnchorEnd": hunk.old_anchors.map(|(_, end)| end),
+                    "insertAfter": hunk.insert_after,
+                    "oldMarkdown": hunk.old_markdown,
+                    "newMarkdown": hunk.new_markdown,
+                    "newHtml": render::render(&hunk.new_markdown),
+                })
+            })
+            .collect();
+        json!({
+            "proposalId": self.id,
+            "fileId": self.file_id,
+            "summary": self.summary,
+            "baseVersion": self.base_version,
+            "stale": self.base_version < current_version,
+            "createdAt": self.created_at,
+            "origin": self.origin,
+            "hunks": hunks,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct CreateProposalRequest {
+    markdown: String,
+    #[serde(default)]
+    summary: String,
+    base_version: u64,
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct AcceptProposalRequest {
+    /// Hunks to apply; omitted means all of them.
+    #[serde(default)]
+    hunk_ids: Option<Vec<usize>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct DiscardProposalRequest {
+    #[serde(default)]
+    redo: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct HoldRequest {
+    hold: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RewriteRequest {
+    #[serde(default)]
+    instruction: String,
+    #[serde(default)]
+    file_id: Option<FileId>,
+}
+
+fn bad_request(rejection: JsonRejection) -> Response {
+    api_error_response(
+        StatusCode::BAD_REQUEST,
+        "bad_request",
+        rejection.body_text(),
+    )
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn unrelated_file_edits_do_not_stale_creation_or_acceptance() {
+    let app = AppState::for_process().with_markdown_source("Original.\n");
+    let file_id = resolve_file_id(&app, None).unwrap();
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    let response = post_api_proposals(
+        AxumState(app.clone()),
+        Ok(Json(CreateProposalRequest {
+            markdown: "Rewritten.\n".into(),
+            summary: String::new(),
+            base_version: 0,
+            file_id: Some(file_id.clone()),
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    assert_eq!(file_revision(&app, &file_id), 0);
+    let response = post_api_proposal_accept(
+        AxumState(app.clone()),
+        Path("p-1".into()),
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(app.file(&file_id).unwrap().content, "Rewritten.\n");
+    assert_eq!(file_revision(&app, &file_id), 3);
+}
+
+#[cfg(test)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_and_discard_have_exactly_one_winner() {
+    for _ in 0..20 {
+        let app = AppState::for_process().with_markdown_source("Original.\n");
+        let file_id = resolve_file_id(&app, None).unwrap();
+        create_proposal(&app, file_id, "New.\n", String::new(), 0, "proposal").unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let jobs: Vec<_> = [true, false]
+            .into_iter()
+            .map(|accept| {
+                let app = app.clone();
+                let barrier = barrier.clone();
+                tokio::task::spawn_blocking(move || {
+                    barrier.wait();
+                    tokio::runtime::Handle::current().block_on(async {
+                        if accept {
+                            post_api_proposal_accept(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        } else {
+                            post_api_proposal_discard(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        }
+                    })
+                })
+            })
+            .collect();
+        let mut statuses = Vec::new();
+        for job in jobs {
+            statuses.push(job.await.unwrap());
+        }
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 1);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::NOT_FOUND)
+                .count(),
+            1
+        );
+    }
+}
+
+fn optional_json<T: DeserializeOwned + Default>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> std::result::Result<T, Box<Response>> {
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim();
+    if !content_type.eq_ignore_ascii_case("application/json") {
+        return Err(Box::new(api_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "validation_error",
+            "a nonempty proposal action body requires Content-Type: application/json",
+        )));
+    }
+    serde_json::from_slice(body).map_err(|error| {
+        Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            error.to_string(),
+        ))
+    })
+}
+
+fn lock_error(what: &str) -> Response {
+    api_error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        format!("{what} lock poisoned"),
+    )
+}
+
+fn file_revision(app_state: &AppState, file_id: &FileId) -> u64 {
+    app_state
+        .state
+        .read()
+        .map(|state| state.file_source_revision(file_id))
+        .unwrap_or(u64::MAX)
+}
+
+pub(super) fn current_version(app_state: &AppState) -> std::result::Result<u64, Box<Response>> {
+    app_state
+        .state
+        .read()
+        .map(|state| state.source_version())
+        .map_err(|_| Box::new(lock_error("state")))
+}
+
+/// Publish on SSE, and on stdout when the agent needs to hear about it.
+fn announce(app_state: &AppState, kind: EventKind, payload: Value, to_agent: bool) {
+    app_state.bus.publish(BroadcastEvent {
+        kind: kind.to_string(),
+        payload: payload.clone(),
+    });
+    if to_agent
+        && let Err(error) = app_state.emitter.emit(&Event {
+            kind,
+            at: Utc::now(),
+            payload,
+        })
+    {
+        tracing::warn!(error = %error, "failed to emit {kind} event");
+    }
+}
+
+pub(super) async fn get_api_proposals(AxumState(app_state): AxumState<AppState>) -> Response {
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
+    let Ok(store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let mut proposals: Vec<&Proposal> = store.by_file.values().collect();
+    proposals.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(json!({
+        "holdAgentEdits": app_state.hold_agent_edits(),
+        "sourceVersion": version,
+        "proposals": proposals.iter().map(|p| p.to_json(file_revision(&app_state, &p.file_id))).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+pub(super) async fn post_api_proposals(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<CreateProposalRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return bad_request(rejection),
+    };
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
+    if request.base_version > version || request.base_version < file_revision(&app_state, &file_id)
+    {
+        return api_error_response(
+            StatusCode::CONFLICT,
+            "stale_source_version",
+            format!(
+                "baseVersion {} is stale; the document is now at version {version}. Re-read the source and propose against it",
+                request.base_version
+            ),
+        );
+    }
+    match create_proposal(
+        &app_state,
+        file_id,
+        &request.markdown,
+        request.summary,
+        request.base_version,
+        "proposal",
+    ) {
+        Ok(proposal) => (StatusCode::CREATED, Json(proposal)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// Store a proposal for `file_id` (replacing any pending one) and tell the
+/// browser. Shared with held `POST /api/source` pushes.
+pub(super) fn create_proposal(
+    app_state: &AppState,
+    file_id: FileId,
+    markdown: &str,
+    summary: String,
+    base_version: u64,
+    origin: &'static str,
+) -> std::result::Result<Value, Box<Response>> {
+    let Some(file) = app_state.file(&file_id) else {
+        return Err(Box::new(api_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown_file",
+            format!("unknown fileId: {}", file_id.0),
+        )));
+    };
+    if file.kind != FileKind::Markdown {
+        return Err(Box::new(api_error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "uneditable_file",
+            "only markdown files take rewrite proposals",
+        )));
+    }
+    let diff = BlockDiff::new(&file.content, markdown);
+    if diff.hunks.is_empty() {
+        return Err(Box::new(api_error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no_changes",
+            "the proposed markdown has no block changes",
+        )));
+    }
+
+    let (proposal, replaced) = {
+        let Ok(mut store) = app_state.proposals.lock() else {
+            return Err(Box::new(lock_error("proposal")));
+        };
+        store.next_number += 1;
+        let proposal = Proposal {
+            id: format!("p-{}", store.next_number),
+            file_id: file_id.clone(),
+            summary,
+            base_version,
+            created_at: Utc::now(),
+            origin,
+            diff,
+        };
+        let replaced = store.by_file.insert(file_id, proposal.clone());
+        (proposal, replaced)
+    };
+    if let Some(old) = replaced {
+        announce(
+            app_state,
+            EventKind::ProposalDiscarded,
+            json!({"proposalId": old.id, "fileId": old.file_id, "reason": "replaced", "redoRequested": false}),
+            false,
+        );
+    }
+    let payload = proposal.to_json(base_version);
+    // The agent made it, so the browser is the only one who needs to hear.
+    announce(
+        app_state,
+        EventKind::ProposalCreated,
+        payload.clone(),
+        false,
+    );
+    app_state.record_mutation();
+    Ok(payload)
+}
+
+fn take_proposal(
+    store: &ProposalStore,
+    proposal_id: &str,
+) -> std::result::Result<Proposal, Box<Response>> {
+    store
+        .by_file
+        .values()
+        .find(|p| p.id == proposal_id)
+        .cloned()
+        .ok_or_else(|| {
+            Box::new(api_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                format!("no pending proposal {proposal_id}"),
+            ))
+        })
+}
+
+fn remove_proposal(store: &mut ProposalStore, proposal: &Proposal) {
+    store.by_file.remove(&proposal.file_id);
+}
+
+pub(super) async fn post_api_proposal_accept(
+    AxumState(app_state): AxumState<AppState>,
+    Path(proposal_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match optional_json::<AcceptProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
+        Ok(proposal) => proposal,
+        Err(response) => return *response,
+    };
+    let all_ids: BTreeSet<usize> = proposal.diff.hunks.iter().map(|h| h.id).collect();
+    let accepted: BTreeSet<usize> = match request.hunk_ids {
+        None => all_ids.clone(),
+        Some(ids) => {
+            if let Some(unknown) = ids.iter().find(|id| !all_ids.contains(id)) {
+                return api_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "validation_error",
+                    format!("proposal {proposal_id} has no hunk {unknown}"),
+                );
+            }
+            ids.into_iter().collect()
+        }
+    };
+    if accepted.is_empty() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "hunkIds must select at least one hunk; use discard to reject a proposal",
+        );
+    }
+    let file_id = proposal.file_id.clone();
+
+    let (updated_file, new_markdown, threads, source_version) = {
+        let Ok(mut state) = app_state.state.write() else {
+            return lock_error("state");
+        };
+        let current = state.file_source_revision(&file_id);
+        if current > proposal.base_version {
+            return api_error_response(
+                StatusCode::CONFLICT,
+                "stale_proposal",
+                format!(
+                    "proposal {proposal_id} was made against version {} but the document is now at {current}; discard it and ask for a redo",
+                    proposal.base_version
+                ),
+            );
+        }
+        let composed = proposal.diff.compose(|id| accepted.contains(&id));
+        let Ok(mut source) = app_state.source.write() else {
+            return lock_error("source");
+        };
+        let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "unknown_file",
+                format!("unknown fileId: {}", file_id.0),
+            );
+        };
+
+        for existing in state.get_threads() {
+            if existing.orphaned || existing.file_id != file_id {
+                continue;
+            }
+            let carried = composed.carry(existing.anchor_start, existing.anchor_end);
+            let Some(thread) = state.thread_mut(&existing.id) else {
+                continue;
+            };
+            match carried {
+                Some((start, end)) => {
+                    thread.anchor_start = start;
+                    thread.anchor_end = end;
+                    // lineRange selects rows within a block, not source lines.
+                    // Preserve the reviewer's selection when carrying its anchor.
+                }
+                None => thread.orphaned = true,
+            }
+        }
+
+        file.content = composed.markdown.clone();
+        let updated_file = file.clone();
+        let source_version = state.bump_file_source_version(&file_id);
+        (
+            updated_file,
+            composed.markdown,
+            state.get_threads(),
+            source_version,
+        )
+    };
+    remove_proposal(&mut store, &proposal);
+    app_state.record_mutation();
+    // The reviewer approved it in discuss, so discuss writes it to disk.
+    app_state.schedule_source_write(&updated_file);
+    let response = source_updated_response(
+        &app_state,
+        &updated_file,
+        new_markdown,
+        &threads,
+        source_version,
+    );
+    if !response.status().is_success() {
+        return response;
+    }
+
+    let rejected: Vec<Value> = proposal
+        .diff
+        .hunks
+        .iter()
+        .filter(|h| !accepted.contains(&h.id))
+        .map(|h| json!({"id": h.id, "oldMarkdown": h.old_markdown, "newMarkdown": h.new_markdown}))
+        .collect();
+    let payload = json!({
+        "proposalId": proposal.id,
+        "fileId": file_id,
+        "acceptedHunkIds": accepted,
+        "rejectedHunks": rejected,
+        "sourceVersion": source_version,
+    });
+    announce(
+        &app_state,
+        EventKind::ProposalAccepted,
+        payload.clone(),
+        true,
+    );
+    Json(payload).into_response()
+}
+
+pub(super) async fn post_api_proposal_discard(
+    AxumState(app_state): AxumState<AppState>,
+    Path(proposal_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match optional_json::<DiscardProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
+        Ok(proposal) => proposal,
+        Err(response) => return *response,
+    };
+    remove_proposal(&mut store, &proposal);
+    app_state.record_mutation();
+    let payload = json!({
+        "proposalId": proposal.id,
+        "fileId": proposal.file_id,
+        "reason": "user",
+        "redoRequested": request.redo,
+        "summary": proposal.summary,
+    });
+    announce(
+        &app_state,
+        EventKind::ProposalDiscarded,
+        payload.clone(),
+        true,
+    );
+    Json(payload).into_response()
+}
+
+pub(super) async fn put_api_proposals_hold(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<HoldRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return bad_request(rejection),
+    };
+    app_state.set_hold_agent_edits(request.hold);
+    let payload = json!({"holdAgentEdits": request.hold});
+    app_state.bus.publish(BroadcastEvent {
+        kind: "proposal.hold_changed".to_string(),
+        payload: payload.clone(),
+    });
+    Json(payload).into_response()
+}
+
+pub(super) async fn post_api_rewrite(
+    AxumState(app_state): AxumState<AppState>,
+    payload: std::result::Result<Json<RewriteRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => return bad_request(rejection),
+    };
+    let file_id = match resolve_file_id(&app_state, request.file_id) {
+        Ok(file_id) => file_id,
+        Err(response) => return *response,
+    };
+    if app_state.file_kind(&file_id) != Some(FileKind::Markdown) {
+        return api_error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "uneditable_file",
+            "only markdown files can be rewritten",
+        );
+    }
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
+    let payload = json!({
+        "fileId": file_id,
+        "instruction": request.instruction.trim(),
+        "sourceVersion": version,
+    });
+    app_state.record_mutation();
+    announce(
+        &app_state,
+        EventKind::RewriteRequested,
+        payload.clone(),
+        true,
+    );
+    (StatusCode::ACCEPTED, Json(payload)).into_response()
+}
