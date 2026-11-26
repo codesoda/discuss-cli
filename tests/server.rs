@@ -162,7 +162,8 @@ async fn get_api_state_returns_empty_snapshot_json() {
                 "newThread": {},
                 "followup": {}
             },
-            "sourceVersion": 0
+            "sourceVersion": 0,
+            "voiceNotesEnabled": false
         })
     );
 
@@ -5986,6 +5987,8 @@ fn thread_with_kind(id: &str, anchor_start: usize, kind: ThreadKind) -> Thread {
         line_range: None,
         orphaned: false,
         element_anchor: None,
+        audio_id: None,
+        audio_path: None,
     }
 }
 

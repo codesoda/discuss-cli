@@ -316,6 +316,8 @@ pub fn seed_demo_threads(app_state: &AppState) -> Vec<ThreadId> {
             line_range: None,
             orphaned: false,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         });
         state.add_take(Take {
             id: app_state.next_take_id(),

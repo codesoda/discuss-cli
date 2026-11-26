@@ -241,6 +241,8 @@ mod tests {
             kind: ThreadKind::User,
             line_range: None,
             element_anchor: None,
+            audio_id: None,
+            audio_path: None,
         }
     }
 
