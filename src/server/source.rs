@@ -273,7 +273,7 @@ pub(super) async fn post_api_source(
             }
         };
 
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_source_version(&file_id);
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();

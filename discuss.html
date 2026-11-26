@@ -3261,6 +3261,8 @@
     if (Number.isFinite(incomingVersion)) {
       if (incomingVersion <= (appliedSourceVersions.get(updatedFileId) || 0)) return;
       appliedSourceVersions.set(updatedFileId, incomingVersion);
+      const proposal = proposalsByFile.get(updatedFileId);
+      if (proposal && incomingVersion > proposal.baseVersion) proposal.stale = true;
     }
     // Keep the pre-rendered copy fresh so switching to this file later shows
     // the updated content.
@@ -7408,7 +7410,7 @@
     return proposalsByFile.get(String(activeFileId)) || null;
   }
   function proposalIsStale(p) {
-    return p.baseVersion !== (loadState().sourceVersion || 0);
+    return !!p.stale;
   }
   function resetProposalReview() {
     proposalReview = false;

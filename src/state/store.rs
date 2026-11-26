@@ -22,6 +22,8 @@ pub struct State {
     drafts: Drafts,
     deleted_at: HashMap<ThreadId, DateTime<Utc>>,
     source_version: u64,
+    global_source_revision: u64,
+    file_source_revisions: HashMap<super::FileId, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,7 +78,23 @@ impl State {
 
     pub fn bump_source_version(&mut self) -> u64 {
         self.source_version += 1;
+        self.global_source_revision = self.source_version;
         self.source_version
+    }
+
+    pub(crate) fn bump_file_source_version(&mut self, file_id: &super::FileId) -> u64 {
+        self.source_version += 1;
+        self.file_source_revisions
+            .insert(file_id.clone(), self.source_version);
+        self.source_version
+    }
+
+    pub(crate) fn file_source_revision(&self, file_id: &super::FileId) -> u64 {
+        self.file_source_revisions
+            .get(file_id)
+            .copied()
+            .unwrap_or(0)
+            .max(self.global_source_revision)
     }
 
     pub(crate) fn replies_for_thread(&self, thread_id: &ThreadId) -> Vec<Reply> {

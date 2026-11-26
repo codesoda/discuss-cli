@@ -78,7 +78,7 @@ impl Proposal {
             "fileId": self.file_id,
             "summary": self.summary,
             "baseVersion": self.base_version,
-            "stale": self.base_version != current_version,
+            "stale": self.base_version < current_version,
             "createdAt": self.created_at,
             "origin": self.origin,
             "hunks": hunks,
@@ -135,6 +135,43 @@ fn bad_request(rejection: JsonRejection) -> Response {
     )
 }
 
+#[cfg(test)]
+#[tokio::test]
+async fn unrelated_file_edits_do_not_stale_creation_or_acceptance() {
+    let app = AppState::for_process().with_markdown_source("Original.\n");
+    let file_id = resolve_file_id(&app, None).unwrap();
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    let response = post_api_proposals(
+        AxumState(app.clone()),
+        Ok(Json(CreateProposalRequest {
+            markdown: "Rewritten.\n".into(),
+            summary: String::new(),
+            base_version: 0,
+            file_id: Some(file_id.clone()),
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    assert_eq!(file_revision(&app, &file_id), 0);
+    let response = post_api_proposal_accept(
+        AxumState(app.clone()),
+        Path("p-1".into()),
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(app.file(&file_id).unwrap().content, "Rewritten.\n");
+    assert_eq!(file_revision(&app, &file_id), 3);
+}
+
 fn optional_json<T: DeserializeOwned + Default>(
     headers: &HeaderMap,
     body: &[u8],
@@ -172,6 +209,14 @@ fn lock_error(what: &str) -> Response {
     )
 }
 
+fn file_revision(app_state: &AppState, file_id: &FileId) -> u64 {
+    app_state
+        .state
+        .read()
+        .map(|state| state.file_source_revision(file_id))
+        .unwrap_or(u64::MAX)
+}
+
 fn current_version(app_state: &AppState) -> u64 {
     app_state
         .state
@@ -207,7 +252,7 @@ pub(super) async fn get_api_proposals(AxumState(app_state): AxumState<AppState>)
     Json(json!({
         "holdAgentEdits": app_state.hold_agent_edits(),
         "sourceVersion": version,
-        "proposals": proposals.iter().map(|p| p.to_json(version)).collect::<Vec<_>>(),
+        "proposals": proposals.iter().map(|p| p.to_json(file_revision(&app_state, &p.file_id))).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -225,7 +270,8 @@ pub(super) async fn post_api_proposals(
         Err(response) => return *response,
     };
     let version = current_version(&app_state);
-    if request.base_version != version {
+    if request.base_version > version || request.base_version < file_revision(&app_state, &file_id)
+    {
         return api_error_response(
             StatusCode::CONFLICT,
             "stale_source_version",
@@ -240,7 +286,7 @@ pub(super) async fn post_api_proposals(
         file_id,
         &request.markdown,
         request.summary,
-        version,
+        request.base_version,
         "proposal",
     ) {
         Ok(proposal) => (StatusCode::CREATED, Json(proposal)).into_response(),
@@ -391,8 +437,8 @@ pub(super) async fn post_api_proposal_accept(
         let Ok(mut state) = app_state.state.write() else {
             return lock_error("state");
         };
-        let current = state.source_version();
-        if current != proposal.base_version {
+        let current = state.file_source_revision(&file_id);
+        if current > proposal.base_version {
             return api_error_response(
                 StatusCode::CONFLICT,
                 "stale_proposal",
@@ -437,7 +483,7 @@ pub(super) async fn post_api_proposal_accept(
             }
             Err(_) => return lock_error("source"),
         };
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_source_version(&file_id);
         (
             updated_file,
             composed.markdown,

@@ -217,7 +217,7 @@ test('out-of-order source events update each file without lowering the session v
   const html = new Map();
   const context = vm.createContext({
     document: { getElementById: () => ({}) },
-    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html,
+    activeFileId: 'other', DEFAULT_FILE_ID: 'a', renderedFileHtml: html, proposalsByFile: new Map(),
     loadState: () => state,
     cloneState: value => structuredClone(value),
     setCurrentState: value => { state = value; }, renderMetaStatus() {}, renderProposalUi() {},

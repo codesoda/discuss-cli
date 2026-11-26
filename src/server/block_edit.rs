@@ -274,7 +274,7 @@ pub(super) async fn patch_api_block(
             }
         };
 
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_source_version(&file_id);
         (
             updated_file,
             new_markdown,
