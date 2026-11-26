@@ -651,10 +651,14 @@ pub(super) async fn post_api_rewrite(
             "only markdown files can be rewritten",
         );
     }
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
     let payload = json!({
         "fileId": file_id,
         "instruction": request.instruction.trim(),
-        "sourceVersion": current_version(&app_state),
+        "sourceVersion": version,
     });
     app_state.record_mutation();
     announce(
