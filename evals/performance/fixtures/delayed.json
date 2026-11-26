@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "warmup": 1,
+  "iterations": 20,
+  "profiles": {
+    "fiveSecond": { "handling": "concurrent", "events": [ { "thread": 0, "offsetMs": 0, "delayMs": 5000 } ] },
+    "overlapConcurrent": { "handling": "concurrent", "events": [ { "thread": 0, "offsetMs": 0, "delayMs": 5000 }, { "thread": 1, "offsetMs": 500, "delayMs": 5000 } ] },
+    "overlapSerial": { "handling": "serial", "events": [ { "thread": 0, "offsetMs": 0, "delayMs": 5000 }, { "thread": 1, "offsetMs": 500, "delayMs": 5000 } ] }
+  },
+  "question": "Could you clarify the fixed review baseline decision?",
+  "response": "The fixed review baseline decision is to retain the documented behavior."
+}

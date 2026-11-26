@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "baseline": "node run.mjs",
+    "delayed": "node delayed.mjs",
+    "compare": "node compare.mjs",
+    "test": "node --test test.mjs"
+  },
+  "dependencies": { "playwright": "1.65.1" }
+}
