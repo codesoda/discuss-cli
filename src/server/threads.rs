@@ -762,11 +762,13 @@ pub(super) async fn post_api_thread_activity(
         "status": request.status,
         "expiresAt": expires_at,
     });
-    drop(state);
+    // Publish under the read guard so a concurrent resolve cannot publish first.
+    // The lease is valid at this point; a later resolution can still end it.
     app_state.bus.publish(BroadcastEvent {
         kind: "thread.activity".to_string(),
         payload: payload.clone(),
     });
+    drop(state);
     Json(payload).into_response()
 }
 

@@ -152,6 +152,32 @@ fn public_docs_list_every_reported_endpoint() {
 }
 
 #[test]
+fn public_docs_explain_idle_suppression_and_optional_caller_attribution() {
+    let readme = fs::read_to_string("README.md").unwrap();
+    let llms = fs::read_to_string("llms.txt").unwrap();
+    let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
+    for (path, doc) in [
+        ("README.md", readme.as_str()),
+        ("llms.txt", llms.as_str()),
+        ("skills/discuss/SKILL.md", skill.as_str()),
+    ] {
+        assert!(
+            doc.contains("suppressed while") && doc.contains("once per quiet stretch"),
+            "{path} must describe idle prompt suppression and cadence"
+        );
+    }
+    assert!(
+        readme.contains("resolvedBy?")
+            && readme.contains("caller-declared, not authenticated")
+            && readme.contains("omitted `resolvedBy` means unspecified")
+    );
+    assert!(
+        skill.contains("Attribution is caller-declared, not authenticated")
+            && skill.contains("legacy requests means unspecified")
+    );
+}
+
+#[test]
 fn activity_uses_reported_template_not_a_constructed_url() {
     let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
     assert!(skill.contains(".endpoints.threadActivityTemplate"));

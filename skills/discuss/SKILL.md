@@ -226,29 +226,30 @@ Notes:
 
 ### Option A2 — background job + event waiter (monitor without `persistent`)
 
-Use this when the monitor-type tool has a deadline and no `persistent` option. Two background jobs replace it. You wake only when a real event arrives.
+Use this when the monitor-type tool has a deadline and no `persistent` option. Two background jobs replace it. The waiter wakes on actionable events and on lifecycle, PR, and source events; ignore lifecycle events without narration.
 
-**1. Start discuss as a background job** (Claude Code: `Bash` with `run_in_background: true`). The command still starts with `discuss`. Write events to a file in your scratchpad:
+**1. Start discuss as a background job** (Claude Code: `Bash` with `run_in_background: true`). The command still starts with `discuss`. Write events to a file in your scratchpad (keep this directory for the waiter and this session only):
 
 ```bash
+SESSION_DIR=$(mktemp -d /tmp/discuss-session.XXXXXX)
 discuss "$ARGUMENTS" > "$SESSION_DIR/events.jsonl" 2> "$SESSION_DIR/stderr.log"
 ```
 
 Then read `session.started` from the first line of `events.jsonl` (retry for a few seconds). Retain its `endpoints` as in Step 2. If no line appears, read `stderr.log`, report the error, and stop.
 
-**2. Wait for the next event with a second background job.** This skill's directory contains `wait-event.sh`. It checks the file every 2 seconds and exits on any complete non-`prompt.suggest_done` line, including lifecycle, PR import/summary, and source events. Handle actionable events; ignore lifecycle events without narration.
+**2. Wait for the next event with a second background job.** This skill's directory contains `wait-event.sh`. It checks the file every 2 seconds and exits on any complete non-`prompt.suggest_done` line, including lifecycle, PR import/summary, and source events. Handle actionable events; ignore nonterminal lifecycle events without narration. Keep `session.done` as a necessary terminal wake so you can stop the session.
 
 ```bash
 bash <skill-dir>/wait-event.sh "$SESSION_DIR/events.jsonl" 1 "$STATE_URL"
 ```
 
-- The first line of stdout is `LINES=<n>`. Handle the event lines after it as in Step 3, then start the waiter again with `<n>` as the second argument.
+- The first line of stdout is `LINES=<n>` unless the state endpoint stops answering and the waiter prints only `{"event": "session.done"}`. Handle the event lines after `LINES=<n>` as in Step 3, then start the waiter again with `<n>` as the second argument.
 - `{"event": "session.done"}`, or a `session.done` event line, means the session ended. Summarize and stop.
 - To stop early, stop both background jobs.
 
 ### Option B — Polling fallback (only when no monitor-type tool is available)
 
-Use this only when no monitor-type background tool is enabled in the current context. If one is available under any name, use Option A.
+Use this only when no monitor-type background tool is enabled in the current context. If one is available under any name, use Option A when it supports `persistent` or has no deadline; use Option A2 when it has only a bounded deadline.
 
 **1. Start discuss in the background:**
 
@@ -337,7 +338,7 @@ Notifications arrive on the monitor's own schedule — you don't poll. Each noti
 
 Actionable events: `thread.created`, `reply.added`. Lifecycle events (`session.started`, `session.done`, `thread.resolved`, `thread.deleted`, `thread.unresolved`, `prompt.suggest_done`) need no chat narration.
 
-`prompt.suggest_done` means no review page has been open for a while (the reviewer closed the tab). It fires once per quiet stretch. Keep waiting without a chat update. Do not end the session for it.
+`prompt.suggest_done` means the idle timeout elapsed with no review page open; it is suppressed while any page event stream is open and fires once per quiet stretch. Keep waiting without a chat update. Do not end the session for it.
 
 ### `thread.created` (new thread opened by the user)
 
@@ -372,7 +373,7 @@ Replies come only from the human (the API uses `/replies` for humans, `/takes` f
 3. If a response is warranted and the thread is resolved, reopen it via the substituted `endpoints.unresolveTemplate` **before** posting `{"status":"thinking"}` to `endpoints.threadActivityTemplate`. Otherwise post thinking on the open thread before working; renew before 120 seconds if work continues.
 4. If responding, POST `{"status":"replying"}` before another take to the same thread; otherwise POST `{"status":"idle"}` only if the thread remains open. On 409 `thread_resolved` from any activity request, re-fetch context and decide whether to reopen; skip idle while still resolved.
 
-After answering, resolve only if the question is settled **and any required work is complete**, using `{"decision":"...","resolvedBy":"agent"}` on the substituted `endpoints.resolveTemplate`. Never resolve promised but unfinished work. The reviewer can reopen an agent-resolved thread. Do not resolve on mere acknowledgment or when further clarification is needed.
+After answering, resolve only if the question is settled **and any required work is complete**, using `{"decision":"...","resolvedBy":"agent"}` on the substituted `endpoints.resolveTemplate`. Never resolve promised but unfinished work. The reviewer can reopen an agent-resolved thread. Attribution is caller-declared, not authenticated: the server accepts either `resolvedBy` value from any caller; omitted `resolvedBy` on legacy requests means unspecified, not user-resolved. Do not resolve on mere acknowledgment or when further clarification is needed.
 
 ### `thread.resolved` / `thread.deleted`
 

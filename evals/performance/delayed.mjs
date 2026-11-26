@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stats } from './stats.mjs';
 import { timingSamples } from './delayed-timing.mjs';
+import { activity } from './activity-probe.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(dir, '../..');
@@ -32,12 +33,6 @@ async function post(url, body) {
   if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`);
   return response.json();
 }
-async function activity(base, id, status) {
-  const response = await bounded(fetch(`${base}/api/threads/${id}/activity`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status }) }), 'activity');
-  if (response.status === 404 || response.status === 405) return false;
-  if (!response.ok) throw new Error(`activity: ${response.status}`);
-  return true;
-}
 async function profile(context, name, config) {
   const waiters = new Set();
   let buffer = '', stderr = '';
@@ -62,10 +57,12 @@ async function profile(context, name, config) {
   child.on('exit', code => fail(new Error(`discuss exited ${code}: ${stderr}`)));
   const pages = [];
   try {
-    const base = (await bounded(started, 'session.started')).event.payload.apiBaseUrl;
+    const payload = (await bounded(started, 'session.started')).event.payload;
+    const base = payload.apiBaseUrl || payload.url;
+    const advertised = Boolean(payload.endpoints?.threadActivityTemplate);
     const threads = [];
     for (let i = 0; i < config.events.length; i++) threads.push(await post(`${base}/api/threads`, { anchorStart: 2 + i * 7, anchorEnd: 2 + i * 7, snippet: `Section ${String(i).padStart(4, '0')}`, text: `Seeded review point ${i}` }));
-    const supported = await activity(base, threads[0].id, 'idle');
+    const supported = await bounded(activity(base, threads[0].id, 'idle', advertised), 'activity');
     for (const thread of threads) {
       const page = await context.newPage(); pages.push(page); page.setDefaultTimeout(20000);
       await page.goto(base, { waitUntil: 'domcontentloaded' });
@@ -108,7 +105,7 @@ async function profile(context, name, config) {
           let indicatorNs = 0n;
           if (supported) {
             const indicatorStart = hr();
-            await activity(base, id, 'thinking');
+            await bounded(activity(base, id, 'thinking', advertised), 'activity');
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).getByText('Agent thinking').waitFor({ timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
             indicatorNs += hr() - indicatorStart;
@@ -118,7 +115,7 @@ async function profile(context, name, config) {
           const waitEnd = hr();
           if (supported) {
             const indicatorStart = hr();
-            await activity(base, id, 'replying');
+            await bounded(activity(base, id, 'replying', advertised), 'activity');
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).getByText('Agent replying').waitFor({ timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
             indicatorNs += hr() - indicatorStart;
@@ -128,7 +125,7 @@ async function profile(context, name, config) {
           const visible = await bounded(page.evaluate(() => window.__delayedTake), 'visible take');
           const visibleAt = hr();
           if (supported) {
-            await activity(base, id, 'idle');
+            await bounded(activity(base, id, 'idle', advertised), 'activity');
             try { await page.locator(`.thread[data-thread-id="${id}"] .thread-activity`).waitFor({ state: 'detached', timeout: 3000 }); }
             catch { correctness.indicatorFailures++; }
           }

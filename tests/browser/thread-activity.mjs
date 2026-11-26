@@ -57,9 +57,14 @@ function harness() {
     Date: class extends Date { static now() { return now; } static parse(value) { return Date.parse(value); } },
     document: {
       activeElement: null,
-      querySelectorAll(selector) { assert.equal(selector, '.thread'); return mounted; },
+      getElementById: () => sandbox.header ?? null,
+      querySelector: () => null,
+      querySelectorAll(selector) {
+        if (selector === '.agent-pending[data-since]') return [];
+        assert.equal(selector, '.thread'); return mounted;
+      },
       createElement() {
-        return { setAttribute(key, value) { this[key] = value; }, remove() {
+        return { append() {}, setAttribute(key, value) { this[key] = value; }, remove() {
           for (const thread of mounted) {
             const index = thread.children.indexOf(this);
             if (index >= 0) thread.children.splice(index, 1);
@@ -80,7 +85,7 @@ function harness() {
     commentsForThread: () => [],
     awaitingAgentSince: () => sandbox.pendingSince ?? null,
     agentPendingHtml: () => '<div class="agent-pending">Claude is on it</div>',
-    renderAgentActivity() {},
+    renderAgentActivity() {}, agentStatusForThread: () => null, reviewComplete: false,
     normalizeEventComment: payload => payload.reply,
     upsertRawComment: (items, reply) => [...(items || []), reply],
     upsertDisplayComment: (items, reply) => [...(items || []), reply],
@@ -115,6 +120,37 @@ test('active lease replaces generic pending indicator; expiry restores it withou
   h.setNow(3000);
   timer.fn();
   assert.match(h.mounted[0].querySelector('.user-comment-list').pending, /Claude is on it/);
+  assert.equal(h.mounted[0].children.length, 0);
+});
+
+test('header includes active off-file leases without counting them as pending twice', () => {
+  const h = harness();
+  h.sandbox.header = { replaceChildren(...children) { this.chips = children; }, hidden: true };
+  h.sandbox.pendingSince = 500;
+  vm.runInContext('const AGENT_REPLY_WAIT_MS = 300000; const AGENT_STATUS_TTL_MS = 600000; let agentStatuses = []; let agentActivityTimer = null;\n'
+    + between('  function renderAgentActivity() {', '  function applyElementDetachment(state, fileId, detached, route = null) {'), h.sandbox);
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  h.sandbox.activity.applyThreadActivityEvent(active('p1', 'replying'));
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent thinking…', 'Agent replying…']);
+  assert.equal(h.sandbox.header.hidden, false);
+  h.sandbox.activity.applyThreadActivityEvent({ threadId: 't1', status: 'idle', expiresAt: null });
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent replying…', 'Replying to 1 comment']);
+});
+
+test('direct activity handlers ignore late events and rerenders after completion', () => {
+  const h = harness();
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  h.sandbox.reviewComplete = true;
+  h.sandbox.activity.clearAllThreadActivity();
+  h.sandbox.activity.applyThreadActivityEvent(active('t1', 'replying'));
+  assert.equal(h.timers.size, 0);
+  h.render('a');
+  assert.equal(h.mounted[0].children.length, 0);
+  // Even an already-present entry cannot render on a completed page.
+  h.sandbox.reviewComplete = false;
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  h.sandbox.reviewComplete = true;
+  h.render('a');
   assert.equal(h.mounted[0].children.length, 0);
 });
 

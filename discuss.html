@@ -3228,6 +3228,11 @@
     agentStatuses = agentStatuses.filter(status => now - Date.parse(status.startedAt) < AGENT_STATUS_TTL_MS);
     new Set(expired.map(status => status.threadId).filter(Boolean)).forEach(refreshThreadFromState);
     const chips = agentStatuses.map(status => status.label);
+    for (const [id, activity] of threadActivity) {
+      if (activity.expiresAt > now && !state.resolutions[id] && !agentStatusForThread(id)) {
+        chips.push(`Agent ${activity.status}…`);
+      }
+    }
     const waiting = (state.userThreads || []).filter(thread => {
       const id = String(thread.id);
       const since = awaitingAgentSince(state, id);
@@ -5478,7 +5483,7 @@
   function renderThreadActivity(threadEl, threadId) {
     threadEl.querySelector('.thread-activity')?.remove();
     const activity = threadActivity.get(String(threadId));
-    if (!activity || activity.expiresAt <= Date.now() || loadState().resolutions[threadId]
+    if (reviewComplete || !activity || activity.expiresAt <= Date.now() || loadState().resolutions[threadId]
       || !threadEl.querySelector('.user-comment-list')) return;
     const indicator = document.createElement('div');
     indicator.className = 'thread-activity';
@@ -5489,6 +5494,7 @@
     threadEl.querySelector('.user-comment-list').appendChild(indicator);
   }
   function applyThreadActivityEvent(payload) {
+    if (reviewComplete) return;
     const id = payload.threadId == null ? '' : String(payload.threadId);
     if (!id) return;
     if (payload.status === 'idle') { clearThreadActivity(id); return; }

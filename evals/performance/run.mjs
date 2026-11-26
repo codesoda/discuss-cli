@@ -5,6 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { stats } from './stats.mjs';
+import { stopChild } from './child-lifecycle.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(dir, '../..');
@@ -25,22 +26,12 @@ const timeout = (promise, label, duration = 15000) => new Promise((resolve, reje
 });
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'discuss-perf-'));
 let browser, child;
-let stdoutBuffer = '', stderr = '';
-const waiters = new Set();
-function waitEvent(kind, match = () => true) {
-  return new Promise((resolve, reject) => waiters.add({ kind, match, resolve, reject }));
-}
-function emit(event) {
-  for (const waiter of [...waiters]) if (waiter.kind === event.kind && waiter.match(event)) {
-    waiters.delete(waiter); waiter.resolve({ event, at: now() });
-  }
-}
 async function post(url, body) {
   const response = await timeout(fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), `POST ${url}`);
   if (!response.ok) throw new Error(`POST ${url}: ${response.status} ${await response.text()}`);
   return response.json();
 }
-async function scenario(page, base, name, config) {
+async function scenario(page, base, name, config, waitEvent) {
   const file = path.join(dir, 'fixtures', config.document);
   const seeded = [];
   for (let i = 0; i < config.seedThreads; i++) {
@@ -107,6 +98,14 @@ try {
   page.setDefaultTimeout(15000);
   const scenarios = {};
   for (const [name, config] of Object.entries(script.scenarios)) {
+    let stdoutBuffer = '', stderr = '';
+    const waiters = new Set();
+    const waitEvent = (kind, match = () => true) => new Promise((resolve, reject) => waiters.add({ kind, match, resolve, reject }));
+    const emit = event => {
+      for (const waiter of [...waiters]) if (waiter.kind === event.kind && waiter.match(event)) {
+        waiters.delete(waiter); waiter.resolve({ event, at: now() });
+      }
+    };
     const home = path.join(temp, name);
     fs.mkdirSync(home);
     const document = path.join(dir, 'fixtures', config.document);
@@ -125,12 +124,12 @@ try {
     child.on('exit', code => { for (const waiter of waiters) waiter.reject(new Error(`discuss exited ${code}: ${stderr}`)); waiters.clear(); });
     try {
       const { event } = await timeout(started, 'session.started');
-      scenarios[name] = await scenario(page, event.payload.apiBaseUrl || event.payload.url, name, config);
+      scenarios[name] = await scenario(page, event.payload.apiBaseUrl || event.payload.url, name, config, waitEvent);
     } finally {
-      child.kill('SIGTERM');
-      await Promise.race([new Promise(resolve => child.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 2000))]);
-      if (child.exitCode === null) child.kill('SIGKILL');
-      child = null; stdoutBuffer = ''; stderr = '';
+      await stopChild(child);
+      for (const waiter of waiters) waiter.reject(new Error(`scenario ${name} ended`));
+      waiters.clear();
+      child = null;
     }
   }
   const output = {
@@ -147,7 +146,7 @@ try {
   console.log(destination);
   for (const [name, result] of Object.entries(scenarios)) console.log(name, result.summary);
 } finally {
-  if (child && child.exitCode === null) child.kill('SIGKILL');
+  if (child) await stopChild(child, 0);
   if (browser) await browser.close();
   fs.rmSync(temp, { recursive: true, force: true });
 }
