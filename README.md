@@ -53,10 +53,10 @@ The script downloads and verifies the latest Windows x86_64 release. It installs
 ```sh
 git clone https://github.com/codesoda/discuss-cli.git
 cd discuss-cli
-./install.sh
+./install.sh --from-source
 ```
 
-Same outcome as the curl path. This path builds the binary from source with `cargo build --release`. It links the skill directly out of the clone, so `git pull` updates it.
+Same outcome as the curl path. `--from-source` is optional inside a clone (plain `./install.sh` auto-detects it) but fails fast if run elsewhere. This path builds the binary from source with `cargo build --release`. It links the skill directly out of the clone, so `git pull` updates it.
 
 ### Staying current
 
