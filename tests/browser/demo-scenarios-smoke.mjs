@@ -158,6 +158,30 @@ async function run() {
   const nav = await topEval(`[...document.querySelectorAll('#demo-scenarios a')].map(a => ({id:a.dataset.demoScenario,label:a.textContent,current:a.getAttribute('aria-current')}))`);
   if (nav.map(item => item.id).join(',') !== 'tour,pr,local-app' || nav[0].current !== 'page') throw new Error(`Bad scenario navigation: ${JSON.stringify(nav)}`);
 
+  phase = 'restored thread pane layout';
+  const layout = await topEval(`(() => {
+    const root = document.documentElement;
+    const saved = root.style.getPropertyValue('--side-w');
+    const classes = document.body.className;
+    const results = [];
+    root.style.setProperty('--side-w', '9999px');
+    for (const collapsed of [false, true]) {
+      document.body.classList.add('multi-file');
+      document.body.classList.toggle('files-collapsed', collapsed);
+      const grid = document.getElementById('workspace-grid');
+      const widths = getComputedStyle(grid).gridTemplateColumns.split(' ').map(parseFloat);
+      results.push({ widths, available: grid.getBoundingClientRect().width });
+    }
+    document.body.className = classes;
+    if (saved) root.style.setProperty('--side-w', saved); else root.style.removeProperty('--side-w');
+    return results;
+  })()`);
+  for (const { widths, available } of layout) {
+    if (widths[1] < 319 || widths.reduce((a, b) => a + b, 0) > available + 1) {
+      throw new Error(`Restored pane width overflowed: ${JSON.stringify({ widths, available })}`);
+    }
+  }
+
   phase = 'local app review';
   await topEval(`document.querySelector('[data-demo-scenario="local-app"]').click()`);
   await waitFor(() => topEval(`location.origin === ${JSON.stringify(new URL(payload.localAppReviewUrl).origin)} && !!document.querySelector('.prototype-frame')`), 'local app review UI');

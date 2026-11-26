@@ -76,5 +76,8 @@ test('agent status expires on the activity timer without another server event', 
 test('document width resolves sidebar variables on body rather than root', () => {
   const root = extract('  :root {', '  html[data-theme');
   assert.doesNotMatch(root, /--left-w:/);
-  assert.match(page, /body \{ --left-w: calc\(100% - var\(--files-w\) - var\(--divider-w\) - var\(--side-w\)\); \}/);
+  assert.match(page, /body \{\s*--available-pane-w: max\(0px, calc\(100% - var\(--files-w\) - var\(--divider-w\)\)\);/);
+  assert.match(page, /--thread-w: min\(var\(--side-w\), max\(0px, calc\(var\(--available-pane-w\) - 320px\)\)\);/);
+  assert.match(page, /--left-w: calc\(var\(--available-pane-w\) - var\(--thread-w\)\);/);
+  assert.match(page, /th\.cell-nowrap, #doc-content td\.cell-nowrap \{ white-space: nowrap; \}/);
 });
