@@ -6335,17 +6335,37 @@ async fn hold_switch_turns_agent_source_pushes_into_proposals() {
     )
     .with_markdown_source(BLOCK_DOC)
     .with_hold_agent_edits(true);
+    app_state
+        .state
+        .write()
+        .unwrap()
+        .add_thread(thread("u-anchor", 2));
     let (addr, shutdown_tx, server) = proposal_server(app_state).await;
 
-    let body = json!({ "markdown": "# Pushed\n", "threadAnchors": [], "summary": "Shorter" });
+    let body = json!({ "markdown": "# Pushed\n", "threadAnchors": [{"threadId": "u-anchor", "orphaned": true}], "summary": "Shorter" });
     let response = post_json_path(addr, "/api/source", &body.to_string()).await;
     assert!(response.starts_with("HTTP/1.1 202"), "response: {response}");
     let held = response_json(&response);
     assert_eq!(held["held"], true);
     assert_eq!(held["proposal"]["origin"], "source");
     assert_eq!(held["proposal"]["summary"], "Shorter");
+    assert_eq!(held["threadAnchorPolicy"], "mechanical_on_accept");
+    let anchor_only = json!({
+        "markdown": BLOCK_DOC,
+        "threadAnchors": [{"threadId": "u-anchor", "orphaned": true}],
+    });
+    let response = post_json_path(addr, "/api/source", &anchor_only.to_string()).await;
+    assert!(response.starts_with("HTTP/1.1 422"), "response: {response}");
+    assert!(response.contains("held_anchor_update"));
+    assert!(response.contains("disable Hold edits"));
+    let listing = response_json(&get_path(addr, "/api/proposals").await);
+    assert_eq!(
+        listing["proposals"][0]["proposalId"],
+        held["proposal"]["proposalId"]
+    );
     let state = response_json(&get_path(addr, "/api/state").await);
     assert_eq!(state["sourceVersion"], 0);
+    assert_ne!(state["threads"][0]["orphaned"], true);
 
     // Switch it off: pushes apply straight away again.
     let response = put_json_path(

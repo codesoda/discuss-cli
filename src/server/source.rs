@@ -148,8 +148,20 @@ pub(super) async fn post_api_source(
     }
 
     // Hold switch: the push waits in the ribbon like any proposal. The
-    // agent's threadAnchors are not needed; accept re-anchors mechanically.
+    // agent's threadAnchors describe the full rewrite, so cannot be used
+    // after partial acceptance. Accept re-anchors mechanically instead.
     if app_state.hold_agent_edits() && app_state.file_kind(&file_id) == Some(FileKind::Markdown) {
+        if !updates.is_empty()
+            && app_state
+                .file(&file_id)
+                .is_some_and(|file| file.content == request.markdown)
+        {
+            return api_error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "held_anchor_update",
+                "anchor-only updates cannot be held as rewrite proposals; disable Hold edits and resend to apply threadAnchors",
+            );
+        }
         let base_version = app_state
             .state
             .read()
@@ -165,7 +177,11 @@ pub(super) async fn post_api_source(
         ) {
             Ok(proposal) => (
                 StatusCode::ACCEPTED,
-                Json(serde_json::json!({"held": true, "proposal": proposal})),
+                Json(serde_json::json!({
+                    "held": true,
+                    "proposal": proposal,
+                    "threadAnchorPolicy": "mechanical_on_accept",
+                })),
             )
                 .into_response(),
             Err(response) => *response,
