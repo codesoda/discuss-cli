@@ -2727,8 +2727,23 @@ async fn browser_edits_reject_a_stale_version_without_overwriting_source() {
         let _ = rx.await;
     }));
     wait_for_server(addr).await;
+    let original = response_json(&get_path(addr, "/api/files/f-1/source").await);
+    assert_eq!(original["markdown"], "# Alpha\n\nAlpha body.\n");
+    assert_eq!(original["version"], 0);
+    let other = json!({"fileId":"f-2","markdown":"other file changed","threadAnchors":[]});
+    assert!(
+        post_json_path(addr, "/api/source", &other.to_string())
+            .await
+            .starts_with("HTTP/1.1 200")
+    );
+    let thread = |file| {
+        json!({"fileId":file,"anchorStart":1,"anchorEnd":1,"snippet":"title","text":"Question?"})
+            .to_string()
+    };
+    let a = response_json(&post_json_path(addr, "/api/threads", &thread("f-1")).await);
+    let b = response_json(&post_json_path(addr, "/api/threads", &thread("f-2")).await);
     let edit = |text: &str| {
-        serde_json::json!({"fileId":"f-1","expectedVersion":0,"markdown":text,"threadAnchors":[]})
+        json!({"fileId":"f-1","expectedVersion":original["version"],"markdown":text,"threadAnchors":"orphanAll"})
             .to_string()
     };
     assert!(
@@ -2740,6 +2755,23 @@ async fn browser_edits_reject_a_stale_version_without_overwriting_source() {
         post_json_path(addr, "/api/source", &edit("stale draft"))
             .await
             .starts_with("HTTP/1.1 409")
+    );
+    let saved = response_json(&get_path(addr, "/api/files/f-1/source").await);
+    assert_eq!(saved["markdown"], "first edit");
+    assert_eq!(saved["version"], 2);
+    let state = response_json(&get_path(addr, "/api/state").await);
+    let threads = state["threads"].as_array().unwrap();
+    assert_eq!(
+        threads.iter().find(|t| t["id"] == a["id"]).unwrap()["orphaned"],
+        true
+    );
+    assert!(
+        threads
+            .iter()
+            .find(|t| t["id"] == b["id"])
+            .unwrap()
+            .get("orphaned")
+            .is_none()
     );
     assert!(doc_content(response_body(&get_root(addr).await)).contains("first edit"));
     tx.send(()).unwrap();
@@ -3575,10 +3607,8 @@ async fn get_root_seeds_rendered_files_and_file_metadata_for_multi_file_sessions
         .1;
     let files: serde_json::Value =
         serde::Deserialize::deserialize(&mut serde_json::Deserializer::from_str(seed)).unwrap();
-    assert!(files[0]["markdown"].as_str().unwrap().contains("# Alpha"));
-    assert!(files[1]["markdown"].is_string());
-    assert!(files[2].get("markdown").is_none());
     for file in files.as_array().unwrap() {
+        assert!(file.get("markdown").is_none());
         assert!(file["html"].is_string());
     }
     // Diff files render as per-hunk diff-<lang> fenced blocks.
@@ -4197,10 +4227,17 @@ async fn pr_backend_import_draft_publish_retry_and_success_protocol() {
     })
     .to_string();
 
+    let loading = response_json(&get_path(addr, "/api/files/pr-overview/source").await);
     let unauthorized = post_json_with_bearer(addr, "/api/pr/import", &bundle, None).await;
     assert!(unauthorized.starts_with("HTTP/1.1 401"), "{unauthorized}");
     let imported = post_json_with_bearer(addr, "/api/pr/import", &bundle, Some(&secret)).await;
     assert!(imported.starts_with("HTTP/1.1 200"), "{imported}");
+    let stale = json!({"fileId":"pr-overview","markdown":"loading draft","expectedVersion":loading["version"],"threadAnchors":[]});
+    assert!(
+        post_json_path(addr, "/api/source", &stale.to_string())
+            .await
+            .starts_with("HTTP/1.1 409")
+    );
     let imported_json = response_json(&imported);
     assert_eq!(imported_json["idempotent"], false);
     assert_eq!(

@@ -438,7 +438,8 @@ pub(super) async fn post_api_pr_import(
     for thread in seeded {
         state.add_thread(thread);
     }
-    state.bump_source_version();
+    // Import replaces the already-readable loading copy of the overview.
+    state.bump_file_version(&FileId(PR_OVERVIEW_FILE_ID.to_owned()));
 
     review.phase = PrPhase::Reviewing;
     review.import_id = Some(bundle.import_id.clone());

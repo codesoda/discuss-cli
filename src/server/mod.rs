@@ -227,6 +227,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/version", get(get_api_version))
         .route("/api/files/{id}/raw", get(get_api_file_raw))
         .route("/api/files/{id}/blocks", get(get_api_file_blocks))
+        .route("/api/files/{id}/source", get(source::get_file_source))
         .route("/api/events", get(get_api_events))
         .route("/api/heartbeat", post(post_api_heartbeat))
         .route("/api/prefs", post(post_api_prefs))

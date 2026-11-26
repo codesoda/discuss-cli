@@ -99,14 +99,14 @@ where
         }
     }
 
-    let mut config = Config::resolve(ConfigOverrides {
+    let config = Config::resolve(ConfigOverrides {
+        browser: Some(browser),
         port,
         auto_open: no_open.then_some(false),
         history_dir,
         no_save: no_save.then_some(true),
         ..ConfigOverrides::default()
     })?;
-    config.browser = browser;
     init_tracing(&config)?;
     tracing::debug!("tracing initialized");
 
@@ -208,7 +208,7 @@ where
                 files_count,
                 unified,
             },
-            config.auto_open.then_some(config.browser),
+            config.launch_browser(),
         ),
     )
     .await
@@ -277,11 +277,7 @@ fn pr_session_ready_callback(
             startup.import_body,
             None,
         ));
-        let launcher = browser.unwrap_or_default();
-        let auto_open = browser.is_some();
-        if let Err(error) =
-            launch::announce_listening(&mut io::stderr(), &launcher, &url, auto_open)
-        {
+        if let Err(error) = launch::announce_browser(&url, browser) {
             tracing::warn!(%url, error = %error, "failed to write listening URL to stderr");
         }
     }
@@ -498,7 +494,7 @@ where
         server::demo::DEMO_SOURCE_LABEL.to_string(),
         files_count,
         Vec::new(),
-        config.auto_open.then_some(config.browser),
+        config.launch_browser(),
         SessionReadyDetails::Demo(serde_json::json!({
             "scenarios": scenarios.iter().map(|(id, label, description, url)| serde_json::json!({
                 "id": id,
@@ -652,7 +648,7 @@ where
 
     let port = config.port.unwrap_or(0);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let auto_open = config.auto_open.then_some(config.browser);
+    let browser = config.launch_browser();
 
     let mut app_state = AppState::for_process()
         .with_source(source)
@@ -678,7 +674,7 @@ where
             session_source_label,
             files_count,
             git_args,
-            auto_open,
+            browser,
             SessionReadyDetails::Standard,
         ),
     )
@@ -758,7 +754,7 @@ where
         upstream_url,
         1,
         Vec::new(),
-        config.auto_open.then_some(config.browser),
+        config.launch_browser(),
         SessionReadyDetails::Live(live),
     )(api_addr);
 
@@ -875,11 +871,7 @@ fn session_ready_callback(
             );
         }
 
-        let launcher = browser.unwrap_or_default();
-        let auto_open = browser.is_some();
-        let mut stderr = io::stderr();
-
-        if let Err(error) = launch::announce_listening(&mut stderr, &launcher, &url, auto_open) {
+        if let Err(error) = launch::announce_browser(&url, browser) {
             tracing::warn!(
                 %url,
                 error = %error,

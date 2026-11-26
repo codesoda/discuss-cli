@@ -2292,8 +2292,8 @@
       .filter(f => f && f.id != null)
       .map(f => [String(f.id), typeof f.html === 'string' ? f.html : ''])
   );
-  const markdownSources = new Map((window.__DISCUSS_RENDERED_FILES__ || [])
-    .filter(f => typeof f.markdown === 'string').map(f => [String(f.id), f.markdown]));
+  const appliedFileVersions = new Map();
+  const latestSourceAnchors = new Map();
   let discussFiles = [];
   let activeFileId = DEFAULT_FILE_ID;
   const htmlFrameWrappers = new Map();
@@ -2867,7 +2867,11 @@
     const updatedFileId = payload.fileId ? String(payload.fileId) : DEFAULT_FILE_ID;
     // Keep the pre-rendered copy fresh so switching to this file later shows
     // the updated content.
-    if (typeof payload.markdown === 'string' && markdownSources.has(updatedFileId)) markdownSources.set(updatedFileId, payload.markdown);
+    const version = Number(payload.sourceVersion);
+    if (Number.isFinite(version)) {
+      if (version <= (appliedFileVersions.get(updatedFileId) ?? -1)) return;
+      appliedFileVersions.set(updatedFileId, version);
+    }
     renderedFileHtml.set(updatedFileId, payload.renderedHtml);
     const isActiveFile = updatedFileId === activeFileId;
     if (isActiveFile) {
@@ -2879,23 +2883,14 @@
     }
 
     const s = cloneState(loadState());
-    const version = parseInt(payload.sourceVersion, 10);
-    s.sourceVersion = Number.isFinite(version) ? version : s.sourceVersion + 1;
+    s.sourceVersion = Number.isFinite(version) ? Math.max(s.sourceVersion, version) : s.sourceVersion + 1;
     const anchorById = new Map(
       (Array.isArray(payload.threadAnchors) ? payload.threadAnchors : [])
         .map(a => [String(a.threadId), a])
     );
-    const applyAnchor = (t, startKey, endKey) => {
-      const a = anchorById.get(String(t.id));
-      if (!a) return;
-      t.orphaned = !!a.orphaned;
-      if (!a.orphaned) {
-        t[startKey] = parseInt(a.anchorStart, 10);
-        t[endKey] = parseInt(a.anchorEnd, 10);
-      }
-    };
-    (s.userThreads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
-    (s.threads || []).forEach(t => applyAnchor(t, 'anchorStart', 'anchorEnd'));
+    latestSourceAnchors.set(updatedFileId, anchorById);
+    (s.userThreads || []).forEach(applyLatestAnchor);
+    (s.threads || []).forEach(applyLatestAnchor);
     setCurrentState(s);
 
     if (!isActiveFile) {
@@ -3089,6 +3084,7 @@
     const verdictSummary = arguments.length > 0 ? arguments[0] : null;
     setInspectMode(false);
     reviewComplete = true;
+    refreshMarkdownTools();
     document.body.classList.add('review-complete');
     stopHeartbeat();
     if (eventReconnectTimer) {
@@ -3291,6 +3287,16 @@
     return next;
   }
 
+  function applyLatestAnchor(thread) {
+    const anchor = latestSourceAnchors.get(threadFileId(thread))?.get(String(thread.id));
+    if (!anchor) return;
+    thread.orphaned = !!anchor.orphaned;
+    if (!anchor.orphaned) {
+      thread.anchorStart = Number(anchor.anchorStart);
+      thread.anchorEnd = Number(anchor.anchorEnd);
+    }
+  }
+
   function applyThreadCreatedEvent(payload) {
     const thread = normalizeThreadPayload(payload);
     if (!thread) return;
@@ -3299,6 +3305,8 @@
     const alreadyKnown = state.userThreads.some(item => String(item.id) === thread.id)
       || state.threads.some(item => String(item.id) === thread.id);
     if (!alreadyKnown) reconcilePendingThread(state, thread);
+    // Apply's HTTP response can precede this thread's creation event.
+    applyLatestAnchor(thread);
 
     upsertThread(state.threads, thread);
     const threadKind = thread.kind || 'user';
@@ -3906,18 +3914,34 @@
   const mdDialog = document.getElementById('md-workspace');
   const mdSource = document.getElementById('md-source');
   const mdMessage = document.getElementById('md-message');
-  let mdFile, mdVersion, mdOriginal;
+  const mdTools = document.getElementById('md-tools');
+  const mdActions = mdDialog.querySelectorAll('#md-source, #md-apply, #md-download, #md-pdf');
+  let mdFile, mdVersion, mdOriginal, mdHtml, mdLoad = 0;
   function refreshMarkdownTools() {
-    document.getElementById('md-tools').hidden = !markdownSources.has(activeFileId) || !!loadState().prSession;
+    mdTools.hidden = reviewComplete || fileKind() !== 'markdown' || !!loadState().prSession;
   }
-  document.getElementById('md-tools').onclick = () => {
+  mdTools.onclick = async () => {
+    if (reviewComplete || mdDialog.open) return;
+    const load = ++mdLoad;
     mdFile = activeFileId;
-    mdVersion = loadState().sourceVersion;
-    mdOriginal = markdownSources.get(mdFile);
-    mdSource.value = mdOriginal;
-    mdMessage.textContent = '';
+    mdOriginal = mdHtml = '';
+    mdSource.value = '';
+    mdMessage.textContent = 'Loading Markdown…';
     document.getElementById('md-qa').checked = false;
+    mdActions.forEach(control => { control.disabled = true; });
     mdDialog.showModal();
+    try {
+      const source = await apiJson(`/api/files/${encodeURIComponent(mdFile)}/source`, {method: 'GET'});
+      if (reviewComplete || !mdDialog.open || load !== mdLoad) return;
+      mdVersion = source.version;
+      mdOriginal = source.markdown;
+      mdHtml = source.renderedHtml;
+      mdSource.value = mdOriginal;
+      mdMessage.textContent = '';
+      mdActions.forEach(control => { control.disabled = false; });
+    } catch (error) {
+      if (load === mdLoad) mdMessage.textContent = `Couldn't load Markdown: ${error.message}. Close and retry.`;
+    }
   };
   const draftChanged = () => mdSource.value !== mdOriginal.replace(/\r\n?/g, '\n');
   function mayCloseDraft() { return !draftChanged() || window.confirm('Discard unapplied edits?'); }
@@ -3939,11 +3963,12 @@
     mdDialog.inert = true;
     try {
       const result = await apiJson('/api/source', { body: { fileId: mdFile, expectedVersion: mdVersion, markdown: mdSource.value,
-        threadAnchors: fileThreads().map(t => ({ threadId: t.id, orphaned: true })) } });
-      if (result && result.sourceVersion > loadState().sourceVersion) applySourceUpdatedEvent(result);
+        threadAnchors: 'orphanAll' } });
+      if (!result) throw new Error('Review finished. Your edits were not applied.');
+      applySourceUpdatedEvent(result);
       mdDialog.close();
     } catch (error) { mdMessage.textContent = error.message; }
-    finally { button.disabled = false; mdDialog.inert = false; }
+    finally { button.disabled = reviewComplete; mdDialog.inert = false; }
   };
   document.getElementById('md-download').onclick = () => {
     const qa = discussionAppendix();
@@ -3954,9 +3979,9 @@
     link.href = url; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   document.getElementById('md-pdf').onclick = () => {
-    if (draftChanged() || markdownSources.get(mdFile) !== mdOriginal) { mdMessage.textContent = 'Apply edits or reopen the current review copy before printing.'; return; }
+    if (draftChanged() || (appliedFileVersions.get(mdFile) ?? 0) > mdVersion) { mdMessage.textContent = 'Apply edits or reopen the current review copy before printing.'; return; }
     const page = document.getElementById('md-print');
-    page.innerHTML = renderedFileHtml.get(mdFile);
+    page.innerHTML = mdHtml;
     const qa = discussionAppendix();
     if (qa) {
       const heading = document.createElement('h2'); heading.textContent = 'Discussion';
@@ -3964,7 +3989,12 @@
       page.append(heading, text);
     }
     mdDialog.close(); document.body.classList.add('print-review-copy');
-    try { window.print(); } finally { document.body.classList.remove('print-review-copy'); page.replaceChildren(); }
+    const cleanup = () => { document.body.classList.remove('print-review-copy'); page.replaceChildren(); };
+    window.addEventListener('afterprint', cleanup, {once: true});
+    try { window.print(); } catch (error) {
+      window.removeEventListener('afterprint', cleanup); cleanup();
+      mdDialog.showModal(); mdMessage.textContent = `Couldn't print: ${error.message}`;
+    }
   };
   function initFileSidebar() {
     refreshMarkdownTools();

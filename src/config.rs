@@ -28,6 +28,10 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn launch_browser(&self) -> Option<crate::launch::Browser> {
+        self.auto_open.then_some(self.browser)
+    }
+
     pub fn from_toml_str(source: &str, path: impl AsRef<Path>) -> Result<Self> {
         toml::from_str(source).map_err(|error| config_parse_error(path.as_ref(), source, error))
     }
@@ -93,6 +97,7 @@ impl Default for Config {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ConfigOverrides {
+    pub browser: Option<crate::launch::Browser>,
     pub port: Option<u16>,
     pub auto_open: Option<bool>,
     pub idle_timeout_secs: Option<u64>,
@@ -104,6 +109,10 @@ pub struct ConfigOverrides {
 
 impl ConfigOverrides {
     fn apply_to(self, config: &mut Config) {
+        if let Some(browser) = self.browser {
+            config.browser = browser;
+        }
+
         if let Some(port) = self.port {
             config.port = Some(port);
         }
@@ -519,6 +528,7 @@ log_level = "warn"
     fn cli_overrides_win_over_env_vars() {
         let config = Config::resolve_with_sources(
             ConfigOverrides {
+                browser: Some(crate::launch::Browser::Brave),
                 port: Some(4444),
                 auto_open: Some(false),
                 idle_timeout_secs: Some(55),
@@ -543,6 +553,8 @@ log_level = "warn"
         )
         .expect("cli overrides should resolve");
 
+        assert_eq!(config.browser, crate::launch::Browser::Brave);
+        assert_eq!(config.launch_browser(), None);
         assert_eq!(config.port, Some(4444));
         assert!(!config.auto_open);
         assert_eq!(config.idle_timeout_secs, 55);

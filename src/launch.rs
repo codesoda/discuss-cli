@@ -25,6 +25,36 @@ impl BrowserLauncher for Browser {
     fn open(&self, url: &str) -> io::Result<()> {
         match self {
             Self::Default => SystemBrowserLauncher.open(url),
+            Self::Brave if cfg!(target_os = "linux") => {
+                // Some launchers stay attached to the browser. Never block server readiness.
+                let url = url.to_owned();
+                std::thread::Builder::new()
+                    .spawn(move || {
+                        use std::process::{Command, Stdio};
+                        let launch = |app: &str, args: &[&str]| {
+                            let status = Command::new(app)
+                                .args(args)
+                                .arg(&url)
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .status()?;
+                            if status.success() {
+                                Ok(())
+                            } else {
+                                Err(io::Error::other(status.to_string()))
+                            }
+                        };
+                        if let Err(error) = linux_brave(
+                            |app| launch(app, &[]),
+                            || launch("flatpak", &["run", "com.brave.Browser"]),
+                            || SystemBrowserLauncher.open(&url),
+                        ) {
+                            tracing::warn!(%error, "failed to open browser");
+                        }
+                    })
+                    .map(|_| ())
+            }
             Self::Brave => {
                 let app = if cfg!(target_os = "macos") {
                     "Brave Browser"
@@ -37,6 +67,32 @@ impl BrowserLauncher for Browser {
             }
         }
     }
+}
+
+fn linux_brave(
+    mut open_app: impl FnMut(&str) -> io::Result<()>,
+    flatpak: impl FnOnce() -> io::Result<()>,
+    default: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    for app in ["brave-browser", "brave", "com.brave.Browser"] {
+        if open_app(app).is_ok() {
+            return Ok(());
+        }
+    }
+    if flatpak().is_ok() {
+        return Ok(());
+    }
+    tracing::warn!("Brave unavailable; opening the default browser");
+    default()
+}
+
+pub(crate) fn announce_browser(url: &str, browser: Option<Browser>) -> io::Result<()> {
+    announce_listening(
+        &mut io::stderr(),
+        &browser.unwrap_or_default(),
+        url,
+        browser.is_some(),
+    )
 }
 
 pub fn loopback_url(addr: SocketAddr) -> String {
@@ -95,6 +151,24 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn linux_brave_tries_native_then_flatpak_then_default() {
+        let missing = || Err(io::ErrorKind::NotFound.into());
+        let mut tried = Vec::new();
+        linux_brave(
+            |app| {
+                tried.push(app.to_owned());
+                if app == "brave" { Ok(()) } else { missing() }
+            },
+            || panic!(),
+            || panic!(),
+        )
+        .unwrap();
+        assert_eq!(tried, ["brave-browser", "brave"]);
+        linux_brave(|_| missing(), || Ok(()), || panic!()).unwrap();
+        linux_brave(|_| missing(), missing, || Ok(())).unwrap();
     }
 
     #[test]

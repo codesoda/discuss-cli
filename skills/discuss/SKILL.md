@@ -380,10 +380,13 @@ Use the exact `session.started.payload.endpoints` value wherever a mapped key ex
 | POST | `/api/threads/{id}/takes` | `{text}` | **Agent** take. This is your primary tool. |
 | POST | `/api/threads/{id}/resolve` | `{decision?}` | Resolve a thread |
 | POST | `/api/threads/{id}/unresolve` | — | Unresolve |
-| POST | `/api/source` | `{markdown, fileId?, threadAnchors}` | Live source update with re-anchoring (see below) |
+| GET | `/api/files/{fileId}/source` | — | Load Markdown, rendered HTML and the file’s current `version` |
+| POST | `/api/source` | `{markdown, fileId?, expectedVersion?, threadAnchors}` | Live source update with re-anchoring (see below) |
 | POST | `/api/done` | `{verdict: {optionId, feedback?}}` when verdict options are configured; otherwise optional/ignored | Finish the review. With verdict options, missing body is `400 bad_request`; unknown `optionId` or missing required feedback is `400 validation_error`. |
 
 ### Live source updates (`POST /api/source`)
+
+For guarded Markdown edits, read `/api/files/{fileId}/source` and send its `version` as `expectedVersion` (not the session’s `sourceVersion`). A newer edit to that file returns `409 stale_source_version` without applying your draft. Preserve the draft, reload and reconcile it before retrying; edits to other files do not conflict. Omitting `expectedVersion` retains the unguarded behavior. Use `"threadAnchors": "orphanAll"` only if you intend to detach every active thread on that file at the moment of the write; otherwise use the explicit list below.
 
 If you regenerate the markdown mid-session (e.g. the user fixed code under review and you rebuilt the diff summary), push the new source into the running session instead of restarting it. You own the re-anchor decision: send the full new markdown plus one entry per **active** thread **on that file** — either its new anchor position or `"orphaned": true` if its content no longer exists. Coverage is strict and scoped per file; the request is rejected (and nothing changes) if any of that file's active threads is missing, or if you reference a thread from another file. In multi-file sessions pass `fileId`; single-file sessions default to the only file.
 

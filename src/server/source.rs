@@ -27,7 +27,20 @@ pub(super) struct SourceUpdateRequest {
     file_id: Option<FileId>,
     #[serde(default)]
     expected_version: Option<u64>,
-    thread_anchors: Vec<ThreadAnchorUpdate>,
+    thread_anchors: AnchorPolicy,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnchorPolicy {
+    Explicit(Vec<ThreadAnchorUpdate>),
+    All(OrphanAll),
+}
+
+#[derive(Debug, Deserialize)]
+enum OrphanAll {
+    #[serde(rename = "orphanAll")]
+    OrphanAll,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +79,42 @@ pub(super) struct ThreadAnchorResponse {
     orphaned: bool,
 }
 
+pub(super) async fn get_file_source(
+    AxumState(app_state): AxumState<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let id = FileId(id);
+    // Same lock order as a source update: text and revision must describe one edit.
+    let (file, version) = {
+        let Ok(state) = app_state.state.read() else {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned",
+            );
+        };
+        let Some(file) = app_state.file(&id) else {
+            return api_error_response(StatusCode::NOT_FOUND, "unknown_file", "Unknown file");
+        };
+        (file, state.file_version(&id))
+    };
+    if file.kind != FileKind::Markdown {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "Expected a Markdown file",
+        );
+    }
+    let html = render_file_html(&file);
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "markdown": file.content, "version": version, "renderedHtml": html
+        })),
+    )
+        .into_response()
+}
+
 pub(super) async fn post_api_source(
     AxumState(app_state): AxumState<AppState>,
     payload: std::result::Result<Json<SourceUpdateRequest>, JsonRejection>,
@@ -82,7 +131,12 @@ pub(super) async fn post_api_source(
     };
 
     let mut updates: HashMap<ThreadId, ThreadAnchorUpdate> = HashMap::new();
-    for update in request.thread_anchors {
+    let orphan_all = matches!(request.thread_anchors, AnchorPolicy::All(_));
+    let explicit = match request.thread_anchors {
+        AnchorPolicy::Explicit(entries) => entries,
+        AnchorPolicy::All(_) => Vec::new(),
+    };
+    for update in explicit {
         if !update.orphaned {
             let (Some(start), Some(end)) = (update.anchor_start, update.anchor_end) else {
                 return api_error_response(
@@ -160,7 +214,7 @@ pub(super) async fn post_api_source(
 
         if request
             .expected_version
-            .is_some_and(|v| v != state.source_version())
+            .is_some_and(|v| v != state.file_version(&file_id))
         {
             return api_error_response(
                 StatusCode::CONFLICT,
@@ -179,7 +233,8 @@ pub(super) async fn post_api_source(
             .map(|t| t.id)
             .collect();
         let active_set: HashSet<&ThreadId> = active_ids.iter().collect();
-        if let Some(missing) = active_ids.iter().find(|id| !updates.contains_key(id)) {
+        if !orphan_all && let Some(missing) = active_ids.iter().find(|id| !updates.contains_key(id))
+        {
             return api_error_response(
                 StatusCode::BAD_REQUEST,
                 "validation_error",
@@ -200,6 +255,14 @@ pub(super) async fn post_api_source(
             );
         }
 
+        if orphan_all {
+            for id in &active_ids {
+                state
+                    .thread_mut(id)
+                    .expect("active thread under write lock")
+                    .orphaned = true;
+            }
+        }
         for (thread_id, update) in &updates {
             let Some(thread) = state.thread_mut(thread_id) else {
                 continue; // unreachable: validated active above
@@ -241,7 +304,7 @@ pub(super) async fn post_api_source(
             }
         };
 
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_version(&file_id);
         (state.get_threads(), source_version, updated_file)
     };
     app_state.record_mutation();

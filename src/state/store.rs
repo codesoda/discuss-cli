@@ -22,6 +22,7 @@ pub struct State {
     drafts: Drafts,
     deleted_at: HashMap<ThreadId, DateTime<Utc>>,
     source_version: u64,
+    file_versions: HashMap<super::FileId, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -72,6 +73,16 @@ impl State {
 
     pub fn source_version(&self) -> u64 {
         self.source_version
+    }
+
+    pub(crate) fn file_version(&self, id: &super::FileId) -> u64 {
+        self.file_versions.get(id).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn bump_file_version(&mut self, id: &super::FileId) -> u64 {
+        let version = self.bump_source_version();
+        self.file_versions.insert(id.clone(), version);
+        version
     }
 
     pub fn bump_source_version(&mut self) -> u64 {

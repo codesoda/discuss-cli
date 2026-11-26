@@ -206,6 +206,7 @@ Everything created during review stays local by default. Diff file headers inclu
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port <N>` | OS-assigned | Bind this exact nonzero port; fail if occupied. Live review also uses `N + 1`; demo reserves `N` through `N + 4`. Without it, the OS assigns loopback ports. |
+| `--browser <default\|brave>` | `default` | Browser to launch. On Linux, tries native Brave and Flatpak before falling back to the system browser. |
 | `--no-open` | off | Don't auto-launch the browser |
 | `--history-dir <path>` | `~/.discuss/history` | Where transcripts get written |
 | `--no-save` | off | Don't persist transcripts |
@@ -274,7 +275,8 @@ Agents should use the exact URLs in `session.started.payload.endpoints` rather t
 | `POST` | `/api/threads/{id}/takes` | Add an **agent** take |
 | `POST` | `/api/threads/{id}/resolve` | Resolve a thread; optional `{decision}` body |
 | `POST` | `/api/threads/{id}/unresolve` | Unresolve |
-| `POST` | `/api/source` | Push new markdown into the running session: `{markdown, fileId?, threadAnchors}`. Each active thread on that file needs a new anchor or `"orphaned": true`. Coverage is strict; a partial list is rejected. Success bumps `sourceVersion` and broadcasts `source.updated`. Not supported for image or HTML files. |
+| `GET` | `/api/files/{fileId}/source` | Markdown editor snapshot: `{markdown, renderedHtml, version}` for one file. |
+| `POST` | `/api/source` | Push `{markdown, fileId?, expectedVersion?, threadAnchors}`. Pass the target file’s snapshot `version` as `expectedVersion` to reject stale edits with `409 stale_source_version`; updates to other files do not conflict. Omitting it leaves the write unguarded. List a new anchor or `"orphaned": true` for **every** active thread on the file, or use `"threadAnchors": "orphanAll"` to detach all its current threads atomically. Success bumps the session `sourceVersion` and broadcasts `source.updated`. Not supported for image or HTML files. |
 | `POST` | `/api/pr/import` | PR mode only: internal/compatibility bearer-protected schema-v1 import endpoint; normal imports are automatic |
 | `POST` | `/api/pr/summary` | PR mode only: bearer-protected callback for the requested AI review summary |
 | `POST` | `/api/pr/publication-result` | PR mode only: internal/compatibility callback for applying a GitHub publication result |
