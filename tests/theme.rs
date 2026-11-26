@@ -53,9 +53,8 @@ const NAMED_COLOURS: &[&str] = &["white", "black"];
 /// accent and marker colours are *lightened* by the dark palette so they read
 /// against a dark page, which pushes white text on them the wrong way — white on
 /// `--accent` measures 5.1:1 light but 2.8:1 dark. Those controls use
-/// `--accent-ink` instead. The `.thread-marker` entries below are a known gap
-/// rather than a justification: white on the marker fills is under 4.5:1 in
-/// *both* themes, so it is a pre-existing issue for upstream, not a theme bug.
+/// `--accent-ink` instead. Thread markers also use theme tokens rather than
+/// hardcoded foreground colours and do not need allowlist entries.
 const ALLOWED: &[&str] = &[
     "#doc-content [data-anchor-idx].has-thread | background:rgba(231, 178, 122, 0.07)",
     "#finish-review.ok | background:#2e7d32",

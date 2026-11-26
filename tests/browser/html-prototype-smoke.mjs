@@ -88,6 +88,15 @@ async function framePoint(selector, placement = 'center') {
 
 await send('Runtime.enable');
 await send('Page.enable');
+// Expose the closed inspector shadow only in this test to assert painted geometry.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+  const attach = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function(options) {
+    const root = attach.call(this, options);
+    this.__testShadow = root;
+    return root;
+  };
+` });
 await send('Emulation.setDeviceMetricsOverride', {
   width: 1000, height: 760, deviceScaleFactor: 1, mobile: false,
 });
@@ -104,7 +113,7 @@ await waitFor(
 const injectedScript = await evaluate(
   `document.querySelector('.prototype-frame').contentDocument.querySelector('script[src*="discuss-inspect"]')?.getAttribute('src')`,
 );
-if (injectedScript !== '/assets/discuss-inspect.js?v=4') {
+if (injectedScript !== '/assets/discuss-inspect.js?v=5') {
   throw new Error(`Inspector URL is not cache-busted: ${injectedScript}`);
 }
 
@@ -155,6 +164,7 @@ if (!editorSurvivedResolverEcho) {
 }
 await click(await center('.html-thread-editor .cancel'));
 await waitFor(`!document.querySelector('.html-thread-editor')`, 'heading editor close');
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after cancel');
 
 // Scroll through the actual iframe viewport, then select a lower CTA with real pointer input.
 const frameCenter = await center('.prototype-frame');
@@ -163,8 +173,7 @@ await send('Input.dispatchMouseEvent', {
   type: 'mouseWheel', ...frameCenter, deltaX: 0, deltaY: 620,
 });
 await new Promise(resolve => setTimeout(resolve, 250));
-await click(inspectButton);
-await waitFor(`document.body.classList.contains('inspecting')`, 'Inspect mode after iframe scroll');
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after iframe scroll');
 const ctaPoint = await framePoint('[data-test="buy-team"]');
 if (ctaPoint.y < 54 || ctaPoint.y > 760) throw new Error(`CTA did not scroll into view: ${JSON.stringify(ctaPoint)}`);
 await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...ctaPoint });
@@ -183,11 +192,27 @@ await evaluate(`(() => {
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
   return true;
 })()`);
+await evaluate(`(() => {
+  const original = window.fetch;
+  window.fetch = async (...args) => {
+    if (args[0] === '/api/threads' && args[1]?.method === 'POST') {
+      await new Promise(resolve => { window.releaseThreadSave = resolve; });
+    }
+    return original(...args);
+  };
+})()`);
 await click(await center('.html-thread-editor .save'));
+await waitFor(`!!window.releaseThreadSave`, 'delayed thread request');
+await click(await framePoint('[data-test="buy-team"]'));
+await waitFor(`!!document.querySelector('.html-thread-editor')`, 'second editor during pending save');
+await evaluate(`document.querySelector('.html-thread-editor textarea').value = 'Keep this next comment'`);
+await evaluate(`window.releaseThreadSave()`);
 await waitFor(
   `document.querySelector('.element-thread[data-thread-id="u-1"]')`,
   'saved element thread',
 );
+await waitFor(`document.querySelector('.html-thread-editor textarea')?.value === 'Keep this next comment'`, 'next editor survives previous save');
+await click(await center('.html-thread-editor .cancel'));
 let apiState;
 for (let attempt = 0; attempt < 50; attempt++) {
   apiState = await (await fetch(`${discussUrl}/api/state`)).json();
@@ -198,6 +223,23 @@ const saved = apiState.threads?.[0];
 if (!saved || saved.elementAnchor?.selector !== '#pricing [data-test="buy-team"]') {
   throw new Error(`Server did not persist the expected anchor: ${JSON.stringify(saved)}`);
 }
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode persists after save');
+await waitFor(`document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'false' && getComputedStyle(document.querySelector('#inspect-banner')).display === 'none'`, 'default commenting toggle and banner');
+await click(await framePoint('[data-test="buy-team"]'));
+await waitFor(`!!document.querySelector('.html-thread-editor')`, 'next comment opens without rearming');
+await click(await center('.html-thread-editor .cancel'));
+
+// The Interact toggle is the special mode: it hands clicks to the prototype
+// and restores its cursor, and a second press returns to commenting.
+await click(inspectButton);
+await waitFor(`!document.body.classList.contains('inspecting')`, 'Interact mode on toggle press');
+await waitFor(`document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'true' && getComputedStyle(document.querySelector('#inspect-banner')).display !== 'none'`, 'Interact toggle and banner');
+await waitFor(
+  `document.querySelector('.prototype-frame').contentDocument.documentElement.style.cursor !== 'crosshair'`,
+  'inspector crosshair cursor released in Interact mode',
+);
+await click(inspectButton);
+await waitFor(`document.body.classList.contains('inspecting')`, 'commenting mode after leaving Interact');
 
 // Close the card, then use the in-frame marker's real hit target to reopen it.
 await click(await center('.element-thread .thread-close'));
@@ -214,6 +256,13 @@ const focusRemainedAfterPulse = await evaluate(
   `document.querySelector('.prototype-frame').contentDocument.querySelector('[data-discuss-inspector]')?.getAttribute('data-discuss-focused-thread') === 'u-1'`,
 );
 if (!focusRemainedAfterPulse) throw new Error('Open thread highlight disappeared after its pulse animation');
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await framePoint('#pricing h2') });
+await waitFor(`(() => {
+  const doc = document.querySelector('.prototype-frame').contentDocument;
+  const painted = doc.querySelector('[data-discuss-inspector]').__testShadow.querySelector('.focused-outline');
+  const target = doc.querySelector('[data-test="buy-team"]').getBoundingClientRect();
+  return painted.style.display === 'block' && Math.abs(parseFloat(painted.style.top) - target.top) < 2;
+})()`, 'focused outline remains painted while hovering another element');
 const focusScreenshot = await send('Page.captureScreenshot', { format: 'png' });
 const focusScreenshotPath = screenshotPath.replace(/\.png$/i, '-focused.png');
 fs.writeFileSync(focusScreenshotPath, Buffer.from(focusScreenshot.data, 'base64'));
@@ -231,6 +280,11 @@ for (let attempt = 0; attempt < 50; attempt++) {
 if (apiState.threads?.[0]?.orphaned !== true) {
   throw new Error('Removed element was not reported as detached');
 }
+await click(await center('#finish-review'));
+await waitFor(`document.body.classList.contains('review-complete')`, 'review completion');
+await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'i', code: 'KeyI' });
+await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'i', code: 'KeyI' });
+await waitFor(`!document.body.classList.contains('inspecting') && document.querySelector('#inspect-toggle').disabled && document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'false'`, 'completed review cannot rearm and has no pressed mode');
 if (runtimeErrors.length) throw new Error(`Browser runtime errors: ${runtimeErrors.join('; ')}`);
 
 console.log(JSON.stringify({

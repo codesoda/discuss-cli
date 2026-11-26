@@ -154,7 +154,7 @@ where
     let shutdown_signal = app_state.shutdown.clone();
     let mut internal_shutdown = shutdown_signal.subscribe();
 
-    axum::serve(listener, router)
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             tokio::select! {
                 _ = shutdown => {}
@@ -166,7 +166,9 @@ where
         .map_err(|source| DiscussError::ServerBindError {
             addr: listening_addr,
             source,
-        })
+        });
+    app_state.flush_source_writes().await;
+    result
 }
 
 fn spawn_idle_timer(app_state: AppState) {

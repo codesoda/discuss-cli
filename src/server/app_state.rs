@@ -80,6 +80,7 @@ pub struct AppState {
     pub(super) proposals: Arc<Mutex<super::proposals::ProposalStore>>,
     pub(super) agent_status: Arc<Mutex<super::agent_status::AgentStatusStore>>,
     hold_agent_edits: Arc<AtomicBool>,
+    source_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) file_bytes: Arc<HashMap<FileId, (Vec<u8>, &'static str)>>,
     file_versions: Arc<HashMap<FileId, String>>,
     pub(super) source_path: Arc<Option<PathBuf>>,
@@ -120,6 +121,7 @@ impl AppState {
             proposals: Arc::new(Mutex::new(Default::default())),
             agent_status: Arc::new(Mutex::new(Default::default())),
             hold_agent_edits: Arc::new(AtomicBool::new(false)),
+            source_write_lock: Arc::new(tokio::sync::Mutex::new(())),
             file_bytes: Arc::new(HashMap::new()),
             file_versions: Arc::new(HashMap::new()),
             source_path: Arc::new(None),
@@ -317,7 +319,30 @@ impl AppState {
         });
     }
 
+    pub(super) async fn flush_source_writes(&self) {
+        if self.no_save() {
+            return;
+        }
+        // Called after requests drain. Removing generations also invalidates
+        // sleeping debounce tasks; already-running writers share the I/O lock.
+        let pending: Vec<_> = match self.source_sync.lock() {
+            Ok(mut sync) => sync.write_generations.drain().map(|(id, _)| id).collect(),
+            Err(_) => {
+                tracing::warn!("could not flush source edits: source sync lock poisoned");
+                return;
+            }
+        };
+        for id in pending {
+            if let Some(path) = self.file(&id).and_then(|file| persistable_file_path(&file)) {
+                self.clone().persist_source(id, path).await;
+            }
+        }
+    }
+
     async fn persist_source(self, file_id: FileId, path: PathBuf) {
+        // Debouncing only cancels sleeping writers. Serialize writers already
+        // doing I/O too, including their snapshots and last_synced updates.
+        let _write_guard = self.source_write_lock.lock().await;
         // The newest content wins: read it at write time, not schedule time.
         let Some(file) = self.file(&file_id) else {
             return;
@@ -331,10 +356,10 @@ impl AppState {
             }
         };
 
-        // External-change guard: never clobber an edit made in another app.
+        // Detect external changes before staging and again before replacement.
         // A missing file is ours to recreate; anything else unreadable is an
         // error worth surfacing.
-        match tokio::fs::read_to_string(&path).await {
+        let disk_before = match tokio::fs::read_to_string(&path).await {
             Ok(on_disk) => {
                 if last_synced.as_deref() != Some(on_disk.as_str()) {
                     self.emit_save_failed(
@@ -347,8 +372,9 @@ impl AppState {
                     );
                     return;
                 }
+                Some(on_disk)
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => {
                 self.emit_save_failed(
                     "io_error",
@@ -357,16 +383,50 @@ impl AppState {
                 );
                 return;
             }
-        }
+        };
 
         // Atomic replace: temp file in the same directory, then rename, so a
         // crash mid-write can never truncate the document.
-        let file_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "source".to_string());
-        let temp_path =
-            path.with_file_name(format!(".{file_name}.{}.discuss-tmp", std::process::id()));
+        // Create exclusively with restrictive permissions; a predictable path
+        // could collide with another writer (or follow an existing symlink).
+        let temp = match tempfile::Builder::new()
+            .prefix(".discuss-tmp-")
+            .tempfile_in(path.parent().unwrap_or_else(|| Path::new(".")))
+        {
+            Ok(temp) => temp.into_temp_path(),
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to create temporary source: {error}"),
+                    &path,
+                );
+                return;
+            }
+        };
+        let temp_path: &Path = temp.as_ref();
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) => {
+                if let Err(error) =
+                    tokio::fs::set_permissions(temp_path, metadata.permissions()).await
+                {
+                    self.emit_save_failed(
+                        "io_error",
+                        format!("failed to preserve source permissions: {error}"),
+                        &path,
+                    );
+                    return;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to read source permissions: {error}"),
+                    &path,
+                );
+                return;
+            }
+        }
         if let Err(error) = tokio::fs::write(&temp_path, current.as_bytes()).await {
             self.emit_save_failed(
                 "io_error",
@@ -376,14 +436,32 @@ impl AppState {
             let _ = tokio::fs::remove_file(&temp_path).await;
             return;
         }
-        if let Err(error) = tokio::fs::rename(&temp_path, &path).await {
-            self.emit_save_failed(
-                "io_error",
-                format!("failed to replace {}: {error}", path.display()),
-                &path,
-            );
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return;
+        let destination = path.clone();
+        let replaced = tokio::task::spawn_blocking(move || {
+            replace_source_if_unchanged(&temp, &destination, disk_before.as_deref())
+        })
+        .await;
+        match replaced {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                self.emit_save_failed(
+                    "external_change",
+                    format!(
+                        "{} changed while saving; edits remain in memory",
+                        path.display()
+                    ),
+                    &path,
+                );
+                return;
+            }
+            error => {
+                self.emit_save_failed(
+                    "io_error",
+                    format!("failed to replace {}: {error:?}", path.display()),
+                    &path,
+                );
+                return;
+            }
         }
         if let Ok(mut sync) = self.source_sync.lock() {
             sync.last_synced.insert(file_id, current);
@@ -836,9 +914,86 @@ impl ShutdownSignal {
     }
 }
 
+// Recheck after staging, without an async scheduling gap before rename.
+// This is best-effort: portable filesystems offer no content compare-and-swap
+// against uncooperative external writers in the final read/rename interval.
+fn replace_source_if_unchanged(
+    temp: &Path,
+    path: &Path,
+    expected: Option<&str>,
+) -> io::Result<bool> {
+    let actual = match std::fs::read_to_string(path) {
+        Ok(content) => Some(content),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if actual.as_deref() != expected {
+        return Ok(false);
+    }
+    std::fs::rename(temp, path)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_source_check_rejects_changes_after_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        let temp = dir.path().join("staged.md");
+        std::fs::write(&path, "original").unwrap();
+        let expected = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&temp, "user edit").unwrap();
+        std::fs::write(&path, "external edit").unwrap();
+        assert!(!replace_source_if_unchanged(&temp, &path, Some(&expected)).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external edit");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!replace_source_if_unchanged(&temp, &path, Some(&expected)).unwrap());
+        assert!(replace_source_if_unchanged(&temp, &path, None).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "user edit");
+    }
+
+    #[tokio::test]
+    async fn queued_source_writers_snapshot_after_acquiring_the_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("review.md");
+        std::fs::write(&path, "original").unwrap();
+        let app = AppState::for_process().with_source(Source {
+            files: vec![File {
+                id: default_file_id(),
+                path: path.to_string_lossy().into_owned(),
+                kind: FileKind::Markdown,
+                content: "original".into(),
+            }],
+        });
+        let mut events = app.bus.subscribe();
+        let guard = app.source_write_lock.lock().await;
+        let mut writers = Vec::new();
+        for _ in 0..8 {
+            writers.push(tokio::spawn(
+                app.clone().persist_source(default_file_id(), path.clone()),
+            ));
+        }
+        tokio::task::yield_now().await;
+        assert!(writers.iter().all(|writer| !writer.is_finished()));
+        app.source.write().unwrap().files[0].content = "latest".into();
+        drop(guard);
+        for writer in writers {
+            writer.await.unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "latest");
+        assert_eq!(
+            app.source_sync.lock().unwrap().last_synced[&default_file_id()].as_ref(),
+            "latest"
+        );
+        assert!(matches!(
+            events.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn pr_execution_mode_is_exclusive_and_demo_is_offline() {

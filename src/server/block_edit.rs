@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use crate::block_map::{self, BlockKind, BlockMap};
-use crate::state::{File, FileId, FileKind, LineRange};
+use crate::block_map::{self, BlockKind};
+use crate::state::{File, FileId, FileKind};
 
 use super::app_state::AppState;
 use super::resolve_file_id;
@@ -58,6 +58,18 @@ pub(super) async fn get_api_block(
         Ok(file_id) => file_id,
         Err(response) => return *response,
     };
+    // Hold the state guard across the source snapshot, matching writers'
+    // state -> source lock order.
+    let state = match app_state.state.read() {
+        Ok(state) => state,
+        Err(_) => {
+            return api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "state lock poisoned while reading block",
+            );
+        }
+    };
     let Some(file) = app_state.file(&file_id) else {
         return api_error_response(
             StatusCode::NOT_FOUND,
@@ -68,16 +80,8 @@ pub(super) async fn get_api_block(
     if file.kind != FileKind::Markdown {
         return uneditable_file_response(&file);
     }
-    let source_version = match app_state.state.read() {
-        Ok(state) => state.source_version(),
-        Err(_) => {
-            return api_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "state lock poisoned while reading block",
-            );
-        }
-    };
+    let source_version = state.source_version();
+    drop(state);
 
     let map = block_map::anchor_blocks(&file.content);
     let Some(block) = map.get(anchor_idx).copied() else {
@@ -206,7 +210,32 @@ pub(super) async fn patch_api_block(
                 old_span_len,
                 delta,
                 new_total,
-            );
+            )
+            .filter(|_| {
+                // Count deltas are only a candidate mapping. Footnote order
+                // and unterminated fences can restructure unrelated anchors.
+                // Every untouched block in this thread's range must still
+                // identify the same source, otherwise orphan conservatively.
+                (existing.anchor_start..=existing.anchor_end).all(|idx| {
+                    if (anchor_idx..anchor_idx + old_span_len).contains(&idx) {
+                        return true;
+                    }
+                    let mapped = if idx >= anchor_idx + old_span_len {
+                        idx.checked_add_signed(delta)
+                    } else {
+                        Some(idx)
+                    };
+                    let Some(old) = old_map.get(idx) else {
+                        return false;
+                    };
+                    let Some(new) = mapped.and_then(|idx| new_map.get(idx)) else {
+                        return false;
+                    };
+                    old.kind == new.kind
+                        && block_map::block_source(&file.content, old)
+                            == block_map::block_source(&new_markdown, new)
+                })
+            });
             let Some(thread) = state.thread_mut(&existing.id) else {
                 continue;
             };
@@ -214,7 +243,8 @@ pub(super) async fn patch_api_block(
                 Some((anchor_start, anchor_end)) => {
                     thread.anchor_start = anchor_start;
                     thread.anchor_end = anchor_end;
-                    thread.line_range = line_range_for(&new_map, anchor_start, anchor_end);
+                    // lineRange selects code-block rows, not source lines.
+                    // Moving the anchor must not change that selection.
                 }
                 None => thread.orphaned = true,
             }
@@ -244,7 +274,7 @@ pub(super) async fn patch_api_block(
             }
         };
 
-        let source_version = state.bump_source_version();
+        let source_version = state.bump_file_source_version(&file_id);
         (
             updated_file,
             new_markdown,
@@ -280,18 +310,4 @@ fn uneditable_file_response(file: &File) -> Response {
             }
         ),
     )
-}
-
-/// The source lines a carried anchor range spans in the new document, when
-/// both endpoints resolve to mapped blocks.
-pub(super) fn line_range_for(
-    map: &BlockMap,
-    anchor_start: usize,
-    anchor_end: usize,
-) -> Option<LineRange> {
-    let start_block = map.get(anchor_start)?;
-    let end_block = map.get(anchor_end)?;
-    let start = u32::try_from(start_block.line_start).ok()?;
-    let end = u32::try_from(end_block.line_end.max(start_block.line_start)).ok()?;
-    Some(LineRange { start, end })
 }

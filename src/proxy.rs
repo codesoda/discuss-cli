@@ -497,7 +497,7 @@ fn rewrite_html(source: &str, api_origin: &str, upstream_origin: &str) -> String
     let parent_origin = escape_html_attribute(api_origin);
     let upstream_origin = escape_html_attribute(upstream_origin);
     let inspector = format!(
-        "<script src=\"{parent_origin}/assets/discuss-inspect.js?v=4\" data-discuss-parent-origin=\"{parent_origin}\" data-discuss-upstream-origin=\"{upstream_origin}\"></script>"
+        "<script src=\"{parent_origin}/assets/discuss-inspect.js?v=5\" data-discuss-parent-origin=\"{parent_origin}\" data-discuss-upstream-origin=\"{upstream_origin}\"></script>"
     );
     let lower = html.to_ascii_lowercase();
     if let Some(body_end) = lower.rfind("</body>") {
@@ -797,7 +797,7 @@ mod tests {
         );
         assert!(rewritten.contains("data-discuss-parent-origin=\"http://127.0.0.1:49152\""));
         assert!(rewritten.contains("data-discuss-upstream-origin=\"https://example.test\""));
-        assert!(rewritten.contains("/assets/discuss-inspect.js?v=4"));
+        assert!(rewritten.contains("/assets/discuss-inspect.js?v=5"));
 
         let quoted = rewrite_html(
             "<head data-note=\"a > b\"><meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; report-uri='a>b'\"><script>app()</script></head>",

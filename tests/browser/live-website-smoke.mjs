@@ -164,7 +164,9 @@ async function run() {
     if (chrome.exitCode != null) throw new Error(`Chrome exited ${chrome.exitCode}: ${chromeErrors}`);
     try { return (await fetch(`http://127.0.0.1:${cdpPort}/json/version`)).ok; }
     catch (_) { return false; }
-  }, 'Chrome DevTools HTTP endpoint');
+  }, 'Chrome DevTools HTTP endpoint', 300).catch(error => {
+    throw new Error(`${error.message}\nChrome stderr:\n${chromeErrors}`, { cause: error });
+  });
   const cdp = await connectCdp(cdpPort);
   cdpSocket = cdp.socket;
   await cdp.send('Runtime.enable');
@@ -240,6 +242,9 @@ async function run() {
   if (anchor.route !== '/start?from=e2e#initial' || anchor.accessibleName !== 'Review target' || anchor.selector !== '#select-me') throw new Error(`Incomplete live anchor context: ${JSON.stringify(anchor)}`);
 
   phase = 'SPA route tracking';
+  await waitFor(() => topEval(`document.body.classList.contains('inspecting') && document.querySelector('#inspect-toggle').getAttribute('aria-pressed') === 'false'`), 'commenting persists after live save');
+  await topEval(`document.querySelector('#inspect-toggle').click()`);
+  await waitFor(() => frameEval(`document.documentElement.style.cursor !== 'crosshair'`), 'Interact releases live prototype');
   await pointerClick(await framePoint('#spa-push'));
   await waitFor(() => topEval(`document.querySelector('.live-route-value').textContent === '/route-two?step=push#target'`), 'pushState route report');
   await waitFor(() => frameEval(`document.querySelector('[data-discuss-inspector]').getAttribute('data-discuss-marker-count') === '0'`), 'route-scoped marker hidden');

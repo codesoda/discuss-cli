@@ -90,7 +90,7 @@ Pass `.html` or `.htm` files directly:
 discuss prototype.html
 ```
 
-The browser renders each prototype in a sandboxed iframe and offers **Inspect** mode. HTML `thread.created` events carry `elementAnchor` with `selector`, ordered `fallbacks`, `tag`, optional `textDigest`, and a truncated `outerHtml` snippet. Use `breadcrumb` and `snippet` for readable context; inspect `outerHtml` when the visual element is ambiguous. Agent takes still use `POST /api/threads/{id}/takes`.
+The browser renders each prototype in a sandboxed iframe; clicking an element comments on it by default, and an **Interact** toggle hands clicks to the prototype instead. HTML `thread.created` events carry `elementAnchor` with `selector`, ordered `fallbacks`, `tag`, optional `textDigest`, and a truncated `outerHtml` snippet. Use `breadcrumb` and `snippet` for readable context; inspect `outerHtml` when the visual element is ambiguous. Agent takes still use `POST /api/threads/{id}/takes`.
 
 Prototype-relative assets are served from the HTML file's directory. Root-absolute URLs are not rewritten. `POST /api/source` and live file watching are not supported for HTML files in this version.
 
@@ -426,7 +426,7 @@ Rules:
 
 - **One proposal per file.** A new one replaces the waiting one.
 - `409 stale_source_version` means the doc changed while you wrote. Re-read and propose again. `422 no_changes` means your markdown matches the doc.
-- **The hold switch** ("Hold edits" in the header) is on by default for file sessions. While it is on, your ordinary `POST /api/source` pushes on Markdown files come back `202 {held: true, proposal}` and also wait in the ribbon. Add `summary` to those pushes so the ribbon says what changed.
+- **The hold switch** ("Hold edits" in the header) is on by default for file sessions. While it is on, your ordinary `POST /api/source` pushes on Markdown files come back `202 {held: true, proposal}` and also wait in the ribbon. Add `summary` to those pushes so the ribbon says what changed. Held responses include `threadAnchorPolicy: "mechanical_on_accept"`: supplied `threadAnchors` are not applied because they describe the full rewrite, while the reviewer may accept only some hunks. Acceptance carries anchors mechanically and preserves row selections. An unchanged-markdown push with anchor updates returns `422 held_anchor_update`; disable Hold edits and resend if explicit anchor/snippet/orphan changes are intended.
 
 ### Show the user you're working (`POST /api/agent/status`)
 

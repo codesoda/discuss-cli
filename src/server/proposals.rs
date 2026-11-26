@@ -14,15 +14,16 @@
 use std::collections::{BTreeSet, HashMap};
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State as AxumState};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::block_map;
 use crate::events::{Event, EventKind};
 use crate::proposal_diff::BlockDiff;
 use crate::render;
@@ -30,7 +31,6 @@ use crate::sse::BroadcastEvent;
 use crate::state::{FileId, FileKind};
 
 use super::app_state::AppState;
-use super::block_edit::line_range_for;
 use super::resolve_file_id;
 use super::response::api_error_response;
 use super::source::source_updated_response;
@@ -63,6 +63,7 @@ impl Proposal {
             .map(|hunk| {
                 json!({
                     "id": hunk.id,
+                    "oldAnchorIndices": hunk.old_anchor_indices,
                     "oldAnchorStart": hunk.old_anchors.map(|(start, _)| start),
                     "oldAnchorEnd": hunk.old_anchors.map(|(_, end)| end),
                     "insertAfter": hunk.insert_after,
@@ -77,7 +78,7 @@ impl Proposal {
             "fileId": self.file_id,
             "summary": self.summary,
             "baseVersion": self.base_version,
-            "stale": self.base_version != current_version,
+            "stale": self.base_version < current_version,
             "createdAt": self.created_at,
             "origin": self.origin,
             "hunks": hunks,
@@ -134,6 +135,126 @@ fn bad_request(rejection: JsonRejection) -> Response {
     )
 }
 
+#[cfg(test)]
+#[tokio::test]
+async fn unrelated_file_edits_do_not_stale_creation_or_acceptance() {
+    let app = AppState::for_process().with_markdown_source("Original.\n");
+    let file_id = resolve_file_id(&app, None).unwrap();
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    let response = post_api_proposals(
+        AxumState(app.clone()),
+        Ok(Json(CreateProposalRequest {
+            markdown: "Rewritten.\n".into(),
+            summary: String::new(),
+            base_version: 0,
+            file_id: Some(file_id.clone()),
+        })),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    app.state
+        .write()
+        .unwrap()
+        .bump_file_source_version(&FileId("other".into()));
+    assert_eq!(file_revision(&app, &file_id), 0);
+    let response = post_api_proposal_accept(
+        AxumState(app.clone()),
+        Path("p-1".into()),
+        HeaderMap::new(),
+        Bytes::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(app.file(&file_id).unwrap().content, "Rewritten.\n");
+    assert_eq!(file_revision(&app, &file_id), 3);
+}
+
+#[cfg(test)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_and_discard_have_exactly_one_winner() {
+    for _ in 0..20 {
+        let app = AppState::for_process().with_markdown_source("Original.\n");
+        let file_id = resolve_file_id(&app, None).unwrap();
+        create_proposal(&app, file_id, "New.\n", String::new(), 0, "proposal").unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let jobs: Vec<_> = [true, false]
+            .into_iter()
+            .map(|accept| {
+                let app = app.clone();
+                let barrier = barrier.clone();
+                tokio::task::spawn_blocking(move || {
+                    barrier.wait();
+                    tokio::runtime::Handle::current().block_on(async {
+                        if accept {
+                            post_api_proposal_accept(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        } else {
+                            post_api_proposal_discard(
+                                AxumState(app),
+                                Path("p-1".into()),
+                                HeaderMap::new(),
+                                Bytes::new(),
+                            )
+                            .await
+                            .status()
+                        }
+                    })
+                })
+            })
+            .collect();
+        let mut statuses = Vec::new();
+        for job in jobs {
+            statuses.push(job.await.unwrap());
+        }
+        assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 1);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::NOT_FOUND)
+                .count(),
+            1
+        );
+    }
+}
+
+fn optional_json<T: DeserializeOwned + Default>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> std::result::Result<T, Box<Response>> {
+    if body.is_empty() {
+        return Ok(T::default());
+    }
+    let content_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim();
+    if !content_type.eq_ignore_ascii_case("application/json") {
+        return Err(Box::new(api_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "validation_error",
+            "a nonempty proposal action body requires Content-Type: application/json",
+        )));
+    }
+    serde_json::from_slice(body).map_err(|error| {
+        Box::new(api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            error.to_string(),
+        ))
+    })
+}
+
 fn lock_error(what: &str) -> Response {
     api_error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -142,12 +263,20 @@ fn lock_error(what: &str) -> Response {
     )
 }
 
-fn current_version(app_state: &AppState) -> u64 {
+fn file_revision(app_state: &AppState, file_id: &FileId) -> u64 {
+    app_state
+        .state
+        .read()
+        .map(|state| state.file_source_revision(file_id))
+        .unwrap_or(u64::MAX)
+}
+
+pub(super) fn current_version(app_state: &AppState) -> std::result::Result<u64, Box<Response>> {
     app_state
         .state
         .read()
         .map(|state| state.source_version())
-        .unwrap_or(0)
+        .map_err(|_| Box::new(lock_error("state")))
 }
 
 /// Publish on SSE, and on stdout when the agent needs to hear about it.
@@ -168,7 +297,10 @@ fn announce(app_state: &AppState, kind: EventKind, payload: Value, to_agent: boo
 }
 
 pub(super) async fn get_api_proposals(AxumState(app_state): AxumState<AppState>) -> Response {
-    let version = current_version(&app_state);
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
     let Ok(store) = app_state.proposals.lock() else {
         return lock_error("proposal");
     };
@@ -177,7 +309,7 @@ pub(super) async fn get_api_proposals(AxumState(app_state): AxumState<AppState>)
     Json(json!({
         "holdAgentEdits": app_state.hold_agent_edits(),
         "sourceVersion": version,
-        "proposals": proposals.iter().map(|p| p.to_json(version)).collect::<Vec<_>>(),
+        "proposals": proposals.iter().map(|p| p.to_json(file_revision(&app_state, &p.file_id))).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -194,8 +326,12 @@ pub(super) async fn post_api_proposals(
         Ok(file_id) => file_id,
         Err(response) => return *response,
     };
-    let version = current_version(&app_state);
-    if request.base_version != version {
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
+    if request.base_version > version || request.base_version < file_revision(&app_state, &file_id)
+    {
         return api_error_response(
             StatusCode::CONFLICT,
             "stale_source_version",
@@ -210,7 +346,7 @@ pub(super) async fn post_api_proposals(
         file_id,
         &request.markdown,
         request.summary,
-        version,
+        request.base_version,
         "proposal",
     ) {
         Ok(proposal) => (StatusCode::CREATED, Json(proposal)).into_response(),
@@ -289,12 +425,9 @@ pub(super) fn create_proposal(
 }
 
 fn take_proposal(
-    app_state: &AppState,
+    store: &ProposalStore,
     proposal_id: &str,
 ) -> std::result::Result<Proposal, Box<Response>> {
-    let Ok(store) = app_state.proposals.lock() else {
-        return Err(Box::new(lock_error("proposal")));
-    };
     store
         .by_file
         .values()
@@ -309,24 +442,24 @@ fn take_proposal(
         })
 }
 
-fn remove_proposal(app_state: &AppState, proposal: &Proposal) {
-    if let Ok(mut store) = app_state.proposals.lock()
-        && store
-            .by_file
-            .get(&proposal.file_id)
-            .is_some_and(|p| p.id == proposal.id)
-    {
-        store.by_file.remove(&proposal.file_id);
-    }
+fn remove_proposal(store: &mut ProposalStore, proposal: &Proposal) {
+    store.by_file.remove(&proposal.file_id);
 }
 
 pub(super) async fn post_api_proposal_accept(
     AxumState(app_state): AxumState<AppState>,
     Path(proposal_id): Path<String>,
-    payload: Option<Json<AcceptProposalRequest>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    let request = payload.map(|Json(r)| r).unwrap_or_default();
-    let proposal = match take_proposal(&app_state, &proposal_id) {
+    let request = match optional_json::<AcceptProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
     };
@@ -344,14 +477,21 @@ pub(super) async fn post_api_proposal_accept(
             ids.into_iter().collect()
         }
     };
+    if accepted.is_empty() {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            "validation_error",
+            "hunkIds must select at least one hunk; use discard to reject a proposal",
+        );
+    }
     let file_id = proposal.file_id.clone();
 
     let (updated_file, new_markdown, threads, source_version) = {
         let Ok(mut state) = app_state.state.write() else {
             return lock_error("state");
         };
-        let current = state.source_version();
-        if current != proposal.base_version {
+        let current = state.file_source_revision(&file_id);
+        if current > proposal.base_version {
             return api_error_response(
                 StatusCode::CONFLICT,
                 "stale_proposal",
@@ -362,7 +502,16 @@ pub(super) async fn post_api_proposal_accept(
             );
         }
         let composed = proposal.diff.compose(|id| accepted.contains(&id));
-        let new_map = block_map::anchor_blocks(&composed.markdown);
+        let Ok(mut source) = app_state.source.write() else {
+            return lock_error("source");
+        };
+        let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
+            return api_error_response(
+                StatusCode::NOT_FOUND,
+                "unknown_file",
+                format!("unknown fileId: {}", file_id.0),
+            );
+        };
 
         for existing in state.get_threads() {
             if existing.orphaned || existing.file_id != file_id {
@@ -376,27 +525,16 @@ pub(super) async fn post_api_proposal_accept(
                 Some((start, end)) => {
                     thread.anchor_start = start;
                     thread.anchor_end = end;
-                    thread.line_range = line_range_for(&new_map, start, end);
+                    // lineRange selects rows within a block, not source lines.
+                    // Preserve the reviewer's selection when carrying its anchor.
                 }
                 None => thread.orphaned = true,
             }
         }
 
-        let updated_file = match app_state.source.write() {
-            Ok(mut source) => {
-                let Some(file) = source.files.iter_mut().find(|file| file.id == file_id) else {
-                    return api_error_response(
-                        StatusCode::NOT_FOUND,
-                        "unknown_file",
-                        format!("unknown fileId: {}", file_id.0),
-                    );
-                };
-                file.content = composed.markdown.clone();
-                file.clone()
-            }
-            Err(_) => return lock_error("source"),
-        };
-        let source_version = state.bump_source_version();
+        file.content = composed.markdown.clone();
+        let updated_file = file.clone();
+        let source_version = state.bump_file_source_version(&file_id);
         (
             updated_file,
             composed.markdown,
@@ -404,7 +542,7 @@ pub(super) async fn post_api_proposal_accept(
             source_version,
         )
     };
-    remove_proposal(&app_state, &proposal);
+    remove_proposal(&mut store, &proposal);
     app_state.record_mutation();
     // The reviewer approved it in discuss, so discuss writes it to disk.
     app_state.schedule_source_write(&updated_file);
@@ -445,14 +583,21 @@ pub(super) async fn post_api_proposal_accept(
 pub(super) async fn post_api_proposal_discard(
     AxumState(app_state): AxumState<AppState>,
     Path(proposal_id): Path<String>,
-    payload: Option<Json<DiscardProposalRequest>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    let request = payload.map(|Json(r)| r).unwrap_or_default();
-    let proposal = match take_proposal(&app_state, &proposal_id) {
+    let request = match optional_json::<DiscardProposalRequest>(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    let Ok(mut store) = app_state.proposals.lock() else {
+        return lock_error("proposal");
+    };
+    let proposal = match take_proposal(&store, &proposal_id) {
         Ok(proposal) => proposal,
         Err(response) => return *response,
     };
-    remove_proposal(&app_state, &proposal);
+    remove_proposal(&mut store, &proposal);
     app_state.record_mutation();
     let payload = json!({
         "proposalId": proposal.id,
@@ -506,10 +651,14 @@ pub(super) async fn post_api_rewrite(
             "only markdown files can be rewritten",
         );
     }
+    let version = match current_version(&app_state) {
+        Ok(version) => version,
+        Err(response) => return *response,
+    };
     let payload = json!({
         "fileId": file_id,
         "instruction": request.instruction.trim(),
-        "sourceVersion": current_version(&app_state),
+        "sourceVersion": version,
     });
     app_state.record_mutation();
     announce(
