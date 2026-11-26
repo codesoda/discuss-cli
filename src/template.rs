@@ -247,6 +247,12 @@ mod tests {
         assert!(page.contains("window.discussWritePref('theme', mode)"));
         assert!(page.contains("window.discussReadPref('cmdEnterToSend', true)"));
         assert!(page.contains("window.discussWritePref('cmdEnterToSend', v)"));
+        // Edit mode is remembered across launches the same way; the saved
+        // value is applied on load without being written back.
+        assert!(page.contains(
+            "setEditMode(window.discussReadPref('editMode', false) === true, { persist: false })"
+        ));
+        assert!(page.contains("if (persist) window.discussWritePref('editMode', on);"));
         // No saved preferences means no seed; the page uses its defaults.
         assert!(!page.contains(PREFS_SCRIPT_OPEN));
     }

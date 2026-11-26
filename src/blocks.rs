@@ -14,6 +14,13 @@ pub struct Block {
     pub snippet: String,
     /// Heading path down to this block, e.g. "Rollout plan › Phases".
     pub breadcrumb: String,
+    /// 1-based inclusive source lines in the original markdown file.
+    /// Omitted for synthesized diff documents; unlike thread `lineRange`,
+    /// these are whole-file positions, not rows within a code block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<usize>,
 }
 
 /// Returns metadata from the same AST plan that stamps the rendered markdown.
@@ -25,6 +32,8 @@ pub fn markdown_blocks(markdown: &str) -> Vec<Block> {
             index: block.index,
             snippet: block.snippet,
             breadcrumb: block.breadcrumb,
+            line_start: Some(block.line_start),
+            line_end: Some(block.line_end),
         })
         .collect()
 }
