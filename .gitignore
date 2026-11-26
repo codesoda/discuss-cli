@@ -15,3 +15,6 @@ demo/captures/
 demo/check/
 demo/main-cut.mp4
 docs/demo-fixtures/demo-repo/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
