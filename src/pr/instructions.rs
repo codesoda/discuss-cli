@@ -52,7 +52,9 @@ Security and privacy
 - Never request, print, persist, or POST a GitHub token to Discuss.
 
 Prepare and summary
-- On `thread.created` and `reply.added`, add local takes through the reported endpoint map.
+- On `thread.created` and `reply.added`, POST `{ "status": "thinking" }` to the substituted `endpoints.threadActivityTemplate` before working; renew before its 120-second lease expires. POST `{ "status": "replying" }` just before a take and `{ "status": "idle" }` if no take follows. Activity is ephemeral and never published.
+- Add local takes through the substituted `endpoints.addTakeTemplate`: one or two sentences for settled answers, longer only for substantive questions or disagreement. Do not repeat the take in main-agent chat; normal work tool calls are fine, and keep blockers/final handoff brief.
+- Resolve an answered thread only when any required work is complete: POST `{ "decision": "...", "resolvedBy": "agent" }` to its resolve endpoint. Do not resolve promised unfinished work. A new reply on a resolved thread is a clarification: reopen it before responding. The reviewer can still reopen agent-resolved threads.
 - When `pr.summary.requested` arrives, generate only the requested editable review summary from the supplied local conversations.
 - POST `{ "requestId": "...", "summary": "..." }` as JSON stdin to the event's `summaryUrl`, using `Authorization: Bearer <SESSION_SECRET>`.
 - Do not choose inclusion or publication destinations. The reviewer owns action, summary edits, include/exclude choices, comment edits, confirmation, and cancellation. Include controls default off.
@@ -93,5 +95,10 @@ mod tests {
         assert!(instructions.contains("<SESSION_SECRET>"));
         assert!(instructions.contains("publication requires no agent action"));
         assert!(instructions.contains("pr.summary.requested"));
+        assert!(instructions.contains("endpoints.threadActivityTemplate"));
+        assert!(instructions.contains("120-second lease"));
+        assert!(instructions.contains("resolvedBy\": \"agent"));
+        assert!(instructions.contains("reopen it before responding"));
+        assert!(instructions.contains("Do not repeat the take in main-agent chat"));
     }
 }

@@ -292,6 +292,7 @@ mod tests {
             created_at: timestamp(3),
         };
         let resolution = Resolution {
+            resolved_by: None,
             decision: Some("accepted".to_string()),
             resolved_at: timestamp(4),
         };

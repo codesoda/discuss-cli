@@ -188,6 +188,7 @@ mod tests {
             created_at: timestamp(11),
         };
         let resolution = Resolution {
+            resolved_by: Some("agent".to_string()),
             decision: Some("accepted".to_string()),
             resolved_at: timestamp(12),
         };
@@ -210,6 +211,10 @@ mod tests {
         assert_eq!(first.replies, vec![reply]);
         assert!(first.takes.is_empty());
         assert_eq!(first.resolution, Some(resolution));
+        assert_eq!(
+            serde_json::to_value(&first.resolution).expect("serialize attribution")["resolvedBy"],
+            "agent"
+        );
         assert_eq!(second.takes, vec![take]);
         assert!(second.replies.is_empty());
         assert!(second.resolution.is_none());
@@ -243,6 +248,7 @@ mod tests {
         state.set_resolution(
             thread_id,
             Resolution {
+                resolved_by: None,
                 decision: None,
                 resolved_at: timestamp(11),
             },

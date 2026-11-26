@@ -1293,6 +1293,79 @@ async fn post_api_thread_takes_returns_structured_400_for_empty_text() {
 }
 
 #[tokio::test]
+async fn thread_activity_is_ephemeral_validated_and_sse_only() {
+    let addr = free_loopback_addr();
+    let state = State::new_shared();
+    state.write().unwrap().add_thread(thread("u-active", 2));
+    let stdout = Arc::new(Mutex::new(Vec::new()));
+    let app_state = AppState::new(
+        state.clone(),
+        Arc::new(EventBus::new(16)),
+        Arc::new(EventEmitter::boxed(SharedWriter(stdout.clone()))),
+    );
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(serve(addr, app_state, async move {
+        let _ = shutdown_rx.await;
+    }));
+    wait_for_server(addr).await;
+    let mut sse = open_get_path(addr, "/api/events").await;
+    assert_sse_headers(&read_until(&mut sse, "\r\n\r\n").await);
+
+    for (path, body, expected) in [
+        (
+            "/api/threads/missing/activity",
+            r#"{"status":"thinking"}"#,
+            "404",
+        ),
+        (
+            "/api/threads/u-active/activity",
+            r#"{"status":"busy"}"#,
+            "400",
+        ),
+        ("/api/threads/u-active/activity", r#"{}"#, "400"),
+    ] {
+        let response = post_json_path(addr, path, body).await;
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}")),
+            "{response}"
+        );
+    }
+    for status in ["thinking", "replying", "idle"] {
+        let response = post_json_path(
+            addr,
+            "/api/threads/u-active/activity",
+            &format!(r#"{{"status":"{status}"}}"#),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let body = response_json(&response);
+        assert_eq!(body["threadId"], "u-active");
+        assert_eq!(body["status"], status);
+        if status == "idle" {
+            assert!(body["expiresAt"].is_null());
+        } else {
+            let expiry =
+                chrono::DateTime::parse_from_rfc3339(body["expiresAt"].as_str().unwrap()).unwrap();
+            let remaining = expiry
+                .signed_duration_since(chrono::Utc::now())
+                .num_seconds();
+            assert!((118..=120).contains(&remaining), "{remaining}");
+        }
+        let event = read_until(&mut sse, "\n\n").await;
+        assert!(event.contains("event: thread.activity"));
+        assert!(event.contains(&format!("\"status\":\"{status}\"")));
+    }
+    assert!(stdout_string(&stdout).is_empty());
+    assert!(state.read().unwrap().snapshot().resolutions.is_empty());
+    shutdown_tx.send(()).unwrap();
+    timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events() {
     let addr = free_loopback_addr();
     let state = State::new_shared();
@@ -1354,16 +1427,26 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
         body["resolvedAt"]
     );
 
+    let invalid = post_json_path(
+        addr,
+        "/api/threads/u-resolve/resolve",
+        r#"{"resolvedBy":"other"}"#,
+    )
+    .await;
+    assert!(invalid.starts_with("HTTP/1.1 400"));
+    assert_eq!(stdout_string(&stdout).lines().count(), 1);
+
     let response = post_json_path(
         addr,
         "/api/threads/u-resolve/resolve",
-        r#"{"decision":"revised"}"#,
+        r#"{"decision":"revised","resolvedBy":"agent"}"#,
     )
     .await;
     assert!(response.starts_with("HTTP/1.1 200"));
     assert_json_headers(&response);
     let body = response_json(&response);
     assert_eq!(body["decision"], "revised");
+    assert_eq!(body["resolvedBy"], "agent");
 
     let snapshot = state
         .read()
@@ -1378,6 +1461,7 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
     assert!(sse_event.contains("event: thread.resolved"));
     assert!(sse_event.contains("\"threadId\":\"u-resolve\""));
     assert!(sse_event.contains("\"decision\":\"revised\""));
+    assert!(sse_event.contains("\"resolvedBy\":\"agent\""));
 
     let stdout_after_second = stdout_string(&stdout);
     assert_eq!(stdout_after_second.lines().count(), 2);
@@ -1391,6 +1475,7 @@ async fn post_api_thread_resolve_sets_and_replaces_resolution_and_emits_events()
     assert_eq!(emitted["kind"], EventKind::ThreadResolved.to_string());
     assert_eq!(emitted["payload"]["threadId"], "u-resolve");
     assert_eq!(emitted["payload"]["resolution"]["decision"], "revised");
+    assert_eq!(emitted["payload"]["resolution"]["resolvedBy"], "agent");
     assert_eq!(
         emitted["payload"]["resolution"]["resolvedAt"],
         body["resolvedAt"]
@@ -1415,6 +1500,7 @@ async fn post_api_thread_unresolve_clears_resolution_idempotently_and_emits_even
         state_guard.set_resolution(
             thread_id.clone(),
             Resolution {
+                resolved_by: None,
                 decision: Some("accepted".to_string()),
                 resolved_at: timestamp(1),
             },

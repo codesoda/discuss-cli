@@ -159,6 +159,8 @@ pub struct Take {
 pub struct Resolution {
     pub decision: Option<String>,
     pub resolved_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -503,6 +505,7 @@ mod tests {
         let resolution = Resolution {
             decision: Some("Ship it".to_string()),
             resolved_at: timestamp(),
+            resolved_by: None,
         };
 
         let reply_value = serde_json::to_value(&reply).expect("serialize reply");
@@ -546,6 +549,16 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Resolution>(resolution_value).expect("deserialize resolution"),
             resolution
+        );
+        assert_eq!(resolution.resolved_by, None);
+        assert_eq!(
+            serde_json::from_value::<Resolution>(json!({
+                "decision": null,
+                "resolvedAt": "2026-04-23T02:30:00Z"
+            }))
+            .expect("legacy resolution")
+            .resolved_by,
+            None
         );
     }
 

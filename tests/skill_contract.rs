@@ -102,6 +102,7 @@ fn bundled_integrations_consume_reported_endpoint_map() {
         "endpoints.events",
         "endpoints.createThread",
         "endpoints.addTakeTemplate",
+        "endpoints.threadActivityTemplate",
         "endpoints.blocksTemplate",
         "endpoints.done",
         "apiBaseUrl",
@@ -122,6 +123,16 @@ fn bundled_integrations_consume_reported_endpoint_map() {
             && combined.contains("never use `$proxyUrl` for Discuss REST mutations")
             && combined.contains("not an arbitrary network proxy"),
         "bundled skill must route sole HTTP/S URLs unchanged and keep API writes off the proxy origin"
+    );
+    assert!(
+        combined.contains("ACTIVITY_URL=${ACTIVITY_TEMPLATE/'{threadId}'/")
+            && combined.contains("-d '{\"status\":\"thinking\"}'")
+            && combined.contains("120-second lease")
+            && combined.contains("\"replying\"")
+            && combined.contains("\"idle\"")
+            && combined.contains("\"resolvedBy\":\"agent\"")
+            && combined.contains("reopen it via `/unresolve`"),
+        "bundled skill must guide activity, attribution and clarification reopening"
     );
     assert!(
         combined.contains("poller.sh \"$STATE_URL\""),

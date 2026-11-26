@@ -732,6 +732,23 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_wires_ephemeral_thread_activity_and_attributed_resolution() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
+
+        assert!(page.contains("'thread.activity'"));
+        assert!(page.contains("function applyThreadActivityEvent(payload)"));
+        assert!(page.contains("function clearAllThreadActivity()"));
+        assert!(page.contains("clearThreadActivity(take.threadId)"));
+        assert!(page.contains("clearThreadActivity(reply.threadId)"));
+        assert!(page.contains("clearThreadActivity(threadId)"));
+        assert!(page.contains("clearAllThreadActivity();"));
+        assert!(page.contains("prefers-reduced-motion: reduce"));
+        assert!(page.contains("role', 'status'"));
+        assert!(page.contains("r.resolvedBy === 'agent'"));
+        assert!(page.contains("body: { decision: decision || null, resolvedBy: 'user' }"));
+    }
+
+    #[test]
     fn bundled_template_sends_browser_heartbeat() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 

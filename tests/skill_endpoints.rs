@@ -129,6 +129,15 @@ fn bundled_skills_do_not_hardcode_endpoint_construction() {
 }
 
 #[test]
+fn activity_uses_reported_template_not_a_constructed_url() {
+    let skill = fs::read_to_string("skills/discuss/SKILL.md").unwrap();
+    assert!(skill.contains(".endpoints.threadActivityTemplate"));
+    assert!(skill.contains("ACTIVITY_URL=${ACTIVITY_TEMPLATE/'{threadId}'/"));
+    assert!(!skill.contains("$API_BASE/api/threads/"));
+    assert!(!skill.contains("$proxyUrl/api/threads/"));
+}
+
+#[test]
 fn guard_detects_hardcoded_port_pattern_and_allows_explicit_port() {
     // NEGATIVE CONTROL: this test proves the guard works both ways.
 

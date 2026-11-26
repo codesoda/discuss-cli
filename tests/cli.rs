@@ -982,6 +982,7 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
             "events": format!("{base_url}/api/events"),
             "createThread": format!("{base_url}/api/threads"),
             "addTakeTemplate": format!("{base_url}/api/threads/{{threadId}}/takes"),
+            "threadActivityTemplate": format!("{base_url}/api/threads/{{threadId}}/activity"),
             "blocksTemplate": format!("{base_url}/api/files/{{fileId}}/blocks"),
             "done": format!("{base_url}/api/done"),
         })
@@ -990,9 +991,9 @@ fn assert_endpoint_contract(payload: &Value, base_url: &str) {
         payload["agentInstructions"],
         serde_json::json!([
             "Use payload.endpoints; do not assume port 7777.",
-            "On thread.created, POST a take to addTakeTemplate with {threadId} replaced.",
+            "On thread.created/reply.added, POST thinking to threadActivityTemplate before working; renew before 120 seconds, POST replying before a take, and idle if no take follows.",
             "If you edited the reviewed document, you may pre-annotate it: POST createThread with kind=\"agent\" to leave leading takes; use blocksTemplate to compute anchors.",
-            "Stop when session.done is received."
+            "Post concise takes; resolve answered threads only after required work is complete with resolvedBy=agent; stop when session.done is received."
         ])
     );
 }

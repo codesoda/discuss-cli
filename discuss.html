@@ -1964,6 +1964,17 @@
   }
   .mutation-error button:hover { background: var(--danger-bg-hover); }
 
+  /* --- Per-thread agent activity --- */
+  .thread-activity { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--muted); font-size: 12px; }
+  .thread-activity-dots { display: inline-flex; gap: 3px; }
+  .thread-activity-dots span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: thread-activity-pulse 1.2s infinite ease-in-out; }
+  .thread-activity-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .thread-activity-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes thread-activity-pulse { 0%, 60%, 100% { opacity: 0.35; } 30% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .thread-activity-dots span { animation: none; }
+  }
+
   /* --- Resolution banner --- */
   .thread.resolved { opacity: 0.85; }
   .thread.resolved .thread-head { color: var(--ok-ink); }
@@ -2716,6 +2727,7 @@
   const SSE_EVENT_KINDS = [
     'thread.created',
     'thread.deleted',
+    'thread.activity',
     'thread.resolved',
     'thread.unresolved',
     'reply.added',
@@ -2829,6 +2841,9 @@
         break;
       case 'thread.deleted':
         applyThreadDeletedEvent(payload);
+        break;
+      case 'thread.activity':
+        applyThreadActivityEvent(payload);
         break;
       case 'thread.resolved':
         applyThreadResolvedEvent(payload);
@@ -3167,6 +3182,7 @@
   function markReviewComplete() {
     const verdictSummary = arguments.length > 0 ? arguments[0] : null;
     reviewComplete = true;
+    clearAllThreadActivity();
     setInspectMode(false);
     document.body.classList.add('review-complete');
     stopHeartbeat();
@@ -3394,6 +3410,7 @@
   function applyReplyAddedEvent(payload) {
     const reply = normalizeEventComment(payload, 'reply');
     if (!reply) return;
+    clearThreadActivity(reply.threadId);
 
     const state = cloneState(loadState());
     state.replies[reply.threadId] = upsertRawComment(state.replies[reply.threadId], reply);
@@ -3405,6 +3422,7 @@
   function applyTakeAddedEvent(payload) {
     const take = normalizeEventComment(payload, 'take');
     if (!take) return;
+    clearThreadActivity(take.threadId);
 
     const state = cloneState(loadState());
     state.takes[take.threadId] = upsertRawComment(state.takes[take.threadId], take);
@@ -3490,11 +3508,13 @@
     const threadId = payload.threadId == null ? '' : String(payload.threadId);
     const resolution = payload.resolution;
     if (!threadId || !resolution) return;
+    clearThreadActivity(threadId);
 
     const state = cloneState(loadState());
     state.resolutions[threadId] = {
       decision: resolution.decision || '',
       resolvedAt: resolution.resolvedAt || new Date().toISOString(),
+      resolvedBy: resolution.resolvedBy,
     };
     setCurrentState(state);
     refreshThreadFromState(threadId);
@@ -3513,6 +3533,7 @@
   function applyThreadDeletedEvent(payload) {
     const threadId = payload.threadId == null ? '' : String(payload.threadId);
     if (!threadId) return;
+    clearThreadActivity(threadId);
 
     const state = cloneState(loadState());
     state.userThreads = state.userThreads.filter(thread => String(thread.id) !== threadId);
@@ -5010,6 +5031,53 @@
   document.addEventListener('scroll', hideSelectionActions, true);
   window.addEventListener('resize', hideSelectionActions);
 
+  // Ephemeral activity is never written into the session state or transcript.
+  const threadActivity = new Map();
+  function clearThreadActivity(threadId) {
+    const id = String(threadId);
+    const entry = threadActivity.get(id);
+    if (entry) clearTimeout(entry.timer);
+    threadActivity.delete(id);
+    document.querySelectorAll('.thread').forEach(thread => {
+      if (thread.getAttribute('data-thread-id') === id) thread.querySelector('.thread-activity')?.remove();
+    });
+  }
+  function clearAllThreadActivity() {
+    for (const id of threadActivity.keys()) clearThreadActivity(id);
+  }
+  function renderThreadActivity(threadEl, threadId) {
+    threadEl.querySelector('.thread-activity')?.remove();
+    const activity = threadActivity.get(String(threadId));
+    if (!activity || activity.expiresAt <= Date.now() || loadState().resolutions[threadId]
+      || !threadEl.querySelector('.user-comment-list')) return;
+    const indicator = document.createElement('div');
+    indicator.className = 'thread-activity';
+    indicator.setAttribute('role', 'status');
+    indicator.setAttribute('aria-label', `Agent ${activity.status}`);
+    indicator.innerHTML = `<span class="thread-activity-dots" aria-hidden="true"><span></span><span></span><span></span></span><span>Agent ${activity.status}…</span>`;
+    threadEl.querySelector('.user-comment-list').appendChild(indicator);
+  }
+  function applyThreadActivityEvent(payload) {
+    const id = payload.threadId == null ? '' : String(payload.threadId);
+    if (!id) return;
+    if (payload.status === 'idle') { clearThreadActivity(id); return; }
+    if (payload.status !== 'thinking' && payload.status !== 'replying') return;
+    // Check state, not mounted DOM: another file's thread may be unmounted.
+    const state = loadState();
+    if (state.resolutions[id] || !(state.threads.some(thread => String(thread.id) === id)
+      || state.userThreads.some(thread => String(thread.id) === id)
+      || prepopulated.some(thread => String(thread.id) === id))) return;
+    const expiresAt = Date.parse(payload.expiresAt);
+    const remaining = expiresAt - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) return;
+    clearThreadActivity(id);
+    const timer = setTimeout(() => clearThreadActivity(id), remaining);
+    threadActivity.set(id, { status: payload.status, expiresAt, timer });
+    const threadEl = Array.from(document.querySelectorAll('.thread'))
+      .find(thread => thread.getAttribute('data-thread-id') === id);
+    if (threadEl) renderThreadActivity(threadEl, id);
+  }
+
   function renderFollowups(threadEl, threadId) {
     const list = threadEl.querySelector('.user-comment-list');
     if (!list) return;
@@ -5019,6 +5087,7 @@
       const metaPrefix = it.kind === 'take' ? 'Agent take · ' : '';
       return `<div class="user-comment" data-kind="${escapeHtml(it.kind || 'reply')}">${escapeHtml(it.text)}<div class="meta">${escapeHtml(metaPrefix)}${new Date(it.addedAt).toLocaleString()}</div></div>`;
     }).join('');
+    renderThreadActivity(threadEl, threadId);
   }
 
   function commentsForThread(state, threadId) {
@@ -5160,9 +5229,11 @@
       s.resolutions[threadId] = {
         resolvedAt: new Date().toISOString(),
         decision,
+        resolvedBy: 'user',
       };
       clearFollowupDraft(s, threadId);
       setCurrentState(s);
+      clearThreadActivity(threadId);
       ta.value = '';
       syncClearVisibility();
       renderResolution(threadEl, threadId);
@@ -5171,7 +5242,7 @@
       reposition();
       try {
         const resolution = await apiJson(threadApiPath(threadId, '/resolve'), {
-          body: { decision: decision || null },
+          body: { decision: decision || null, resolvedBy: 'user' },
         });
         try {
           await persistFollowupDraft(threadId, '');
@@ -5253,7 +5324,7 @@
       banner.innerHTML = `
         <div class="thread-resolved">
           <div class="resolved-head">
-            <span>✓ Resolved</span>
+            <span>✓ Resolved${r.resolvedBy === 'agent' ? ' by agent' : ''}</span>
             <button class="unresolve" title="Reopen this point">Unresolve</button>
           </div>
           ${r.decision
@@ -5330,6 +5401,7 @@
     delete nextState.resolutions[threadId];
     clearFollowupDraft(nextState, threadId);
     setCurrentState(nextState);
+    clearThreadActivity(threadId);
     closeThread(threadEl);
     renderAllThreads();
     scheduleReposition();

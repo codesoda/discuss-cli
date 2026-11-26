@@ -66,8 +66,8 @@ use prefs::post_api_prefs;
 use response::{api_error_response, not_found};
 use source::post_api_source;
 use threads::{
-    delete_api_thread, post_api_thread_replies, post_api_thread_resolve, post_api_thread_takes,
-    post_api_thread_unresolve, post_api_threads,
+    delete_api_thread, post_api_thread_activity, post_api_thread_replies, post_api_thread_resolve,
+    post_api_thread_takes, post_api_thread_unresolve, post_api_threads,
 };
 
 const JAVASCRIPT_CONTENT_TYPE: &str = "application/javascript";
@@ -252,6 +252,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/api/threads/{id}", delete(delete_api_thread))
         .route("/api/threads/{id}/replies", post(post_api_thread_replies))
         .route("/api/threads/{id}/takes", post(post_api_thread_takes))
+        .route("/api/threads/{id}/activity", post(post_api_thread_activity))
         .route("/api/threads/{id}/resolve", post(post_api_thread_resolve))
         .route(
             "/api/threads/{id}/unresolve",
