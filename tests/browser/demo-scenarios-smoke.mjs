@@ -154,9 +154,9 @@ async function run() {
 
   phase = 'tour discoverability';
   await cdp.send('Page.navigate', { url: payload.apiBaseUrl });
-  await waitFor(() => topEval(`document.readyState === 'complete' && document.querySelectorAll('#demo-scenarios a').length === 3`), 'tour scenario navigation');
-  const nav = await topEval(`[...document.querySelectorAll('#demo-scenarios a')].map(a => ({id:a.dataset.demoScenario,label:a.textContent,current:a.getAttribute('aria-current')}))`);
-  if (nav.map(item => item.id).join(',') !== 'tour,pr,local-app' || nav[0].current !== 'page') throw new Error(`Bad scenario navigation: ${JSON.stringify(nav)}`);
+  await waitFor(() => topEval(`document.readyState === 'complete' && document.querySelectorAll('#demo-scenarios option').length === 3`), 'tour scenario navigation');
+  const nav = await topEval(`(() => { const select = document.querySelector('#demo-scenarios'); return {tag:select.tagName,label:select.getAttribute('aria-label'),options:[...select.options].map(option => ({id:option.dataset.demoScenario,label:option.textContent,selected:option.selected,value:option.value}))}; })()`);
+  if (nav.tag !== 'SELECT' || nav.label !== 'Demo scenario' || nav.options.map(item => item.id).join(',') !== 'tour,pr,local-app' || nav.options.map(item => item.label).join(',') !== 'Feature tour,Example PR,Local app' || !nav.options[0].selected || nav.options.some(item => !item.value.startsWith('http://127.0.0.1:'))) throw new Error(`Bad scenario dropdown: ${JSON.stringify(nav)}`);
 
   phase = 'restored thread pane layout';
   const layout = await topEval(`(() => {
@@ -183,8 +183,8 @@ async function run() {
   }
 
   phase = 'local app review';
-  await topEval(`document.querySelector('[data-demo-scenario="local-app"]').click()`);
-  await waitFor(() => topEval(`location.origin === ${JSON.stringify(new URL(payload.localAppReviewUrl).origin)} && !!document.querySelector('.prototype-frame')`), 'local app review UI');
+  await topEval(`(() => { const select = document.querySelector('#demo-scenarios'); select.value = ${JSON.stringify(payload.localAppReviewUrl)}; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+  await waitFor(() => topEval(`location.origin === ${JSON.stringify(new URL(payload.localAppReviewUrl).origin)} && !!document.querySelector('.prototype-frame') && document.querySelector('#demo-scenarios').selectedOptions[0].dataset.demoScenario === 'local-app'`), 'local app review UI');
   const frameId = await waitFor(async () => {
     const tree = await cdp.send('Page.getFrameTree');
     return flattenFrames(tree.frameTree).find(frame => frame.url.startsWith(payload.localAppProxyUrl))?.id;
@@ -235,10 +235,10 @@ async function run() {
   const localShot = await capture(cdp, 'demo-local-app.png');
 
   phase = 'PR review';
-  await topEval(`document.querySelector('[data-demo-scenario="pr"]').click()`);
-  await waitFor(() => topEval(`location.origin === ${JSON.stringify(new URL(payload.examplePrUrl).origin)} && document.querySelectorAll('.file-item').length === 5`), 'PR file tree');
+  await topEval(`(() => { const select = document.querySelector('#demo-scenarios'); select.value = ${JSON.stringify(payload.examplePrUrl)}; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+  await waitFor(() => topEval(`location.origin === ${JSON.stringify(new URL(payload.examplePrUrl).origin)} && document.querySelectorAll('.file-item').length === 5 && document.querySelector('#demo-scenarios').selectedOptions[0].dataset.demoScenario === 'pr'`), 'PR file tree');
   const prUi = await topEval(`({
-    demo: document.querySelector('#pr-header')?.textContent.includes('SYNTHETIC DEMO DATA'),
+    demo: document.querySelector('#demo-notice')?.textContent.includes('Synthetic example'),
     folders: [...document.querySelectorAll('.file-folder-name')].map(node => node.textContent),
     imported: !!document.querySelector('[data-thread-id="gh-review-thread-900003"]'),
     diffFiles: [...document.querySelectorAll('.file-item')].filter(item => item.querySelector('.file-kind')?.textContent === 'diff').length,

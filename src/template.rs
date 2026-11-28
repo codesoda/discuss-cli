@@ -427,7 +427,8 @@ mod tests {
             None,
         );
 
-        assert!(page.contains(r#"id="inspect-toggle""#));
+        assert!(page.contains(r#"id="mode-menu-toggle""#));
+        assert!(page.contains("['Comment', 'Interact']"));
         assert!(page.contains("discuss:set-inspect"));
         assert!(page.contains("discuss:element-selected"));
         assert!(page.contains("discuss:resolve-anchors"));
@@ -646,6 +647,48 @@ mod tests {
     }
 
     #[test]
+    fn bundled_template_groups_header_brand_and_review_status_controls() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
+        let header = page
+            .split_once("<header>")
+            .unwrap()
+            .1
+            .split_once("</header>")
+            .unwrap()
+            .0;
+
+        let (brand, after_github) = header.split_once("id=\"github-link\"").unwrap();
+        assert!(brand.trim_start().starts_with("<h1>Discuss</h1>"));
+        assert!(brand.trim_end().ends_with("<a class=\"header-icon-link\""));
+        assert!(after_github.contains("aria-label=\"View source on GitHub\""));
+        assert!(after_github.contains("id=\"header-version\""));
+        assert!(header.contains(
+            "<div class=\"meta\" id=\"meta-status\">Loading…</div>\n  <span class=\"agent-status\" id=\"agent-status\" role=\"status\" aria-live=\"polite\" hidden></span>\n  <span class=\"thread-summary\" id=\"thread-summary-wrap\">"
+        ));
+        assert!(header.contains("</span>\n  <span class=\"done-control\" id=\"done-control\">"));
+        let meta = header.find("id=\"meta-status\"").unwrap();
+        let agent = header.find("id=\"agent-status\"").unwrap();
+        let summary = header.find("id=\"thread-summary-wrap\"").unwrap();
+        let done = header.find("id=\"done-control\"").unwrap();
+        assert!(meta < agent && agent < summary && summary < done);
+        assert_eq!(header.matches("id=\"github-link\"").count(), 1);
+    }
+
+    #[test]
+    fn bundled_template_has_local_controls_and_demo_strip() {
+        let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
+        assert!(page.contains("id=\"demo-strip\""));
+        assert!(page.contains("id=\"settings-modal\""));
+        assert!(page.contains("Review changes before applying"));
+        assert!(page.contains("id=\"document-menu\""));
+        assert!(page.contains("Allow sections to collapse"));
+        assert!(page.contains("Expand all threads"));
+        assert!(page.contains("Request rewrite…"));
+        assert!(page.contains("className = 'inline-block-edit'"));
+        assert!(!page.contains("Ask Claude"));
+    }
+
+    #[test]
     fn bundled_template_links_thread_summary_to_thread_cards() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
@@ -665,6 +708,10 @@ mod tests {
         assert!(page.contains("imageAnchor: { ...imageAnchor }"));
         assert!(page.contains("function renderImagePins(state)"));
         assert!(page.contains("className = 'image-pin-marker'"));
+        assert!(page.contains("className = 'image-region'"));
+        assert!(page.contains("xEndPct"));
+        assert!(page.contains("image.addEventListener('pointercancel', clearSelection)"));
+        assert!(page.contains("cancelImageSelection = clearSelection"));
         assert!(page.contains("`📍 Pin ${t.anchorStart}`"));
     }
 
@@ -822,10 +869,13 @@ mod tests {
     fn bundled_template_exposes_demo_scenarios_and_labels_local_pr_simulation() {
         let page = render_page("<p>Doc</p>", r#"{"threads":[]}"#, "[]", None);
 
-        assert!(page.contains(r#"id="demo-scenarios" aria-label="Demo scenarios""#));
+        assert!(page.contains(
+            r#"<select class="demo-scenarios" id="demo-scenarios" aria-label="Demo scenario""#
+        ));
         assert!(page.contains("state.demoScenarios = Array.isArray(raw.demoScenarios)"));
         assert!(page.contains("function renderDemoScenarios()"));
-        assert!(page.contains("link.setAttribute('aria-current', 'page')"));
+        assert!(page.contains("option.selected = scenario.active"));
+        assert!(page.contains("window.location.href = select.value"));
         assert!(page.contains("OK — Simulate locally"));
         assert!(page.contains("No GitHub command or publication request can run"));
         assert!(page.contains("Nothing was sent to GitHub"));
