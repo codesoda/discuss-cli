@@ -176,12 +176,28 @@ pub(super) async fn post_api_threads(
                         "imageAnchor is required for image files",
                     );
                 };
-                if image_anchor.x_pct > 10_000 || image_anchor.y_pct > 10_000 {
+                if image_anchor.x_pct > 10_000
+                    || image_anchor.y_pct > 10_000
+                    || image_anchor.x_end_pct.is_some_and(|end| end > 10_000)
+                    || image_anchor.y_end_pct.is_some_and(|end| end > 10_000)
+                {
                     return api_error_response(
                         StatusCode::BAD_REQUEST,
                         "validation_error",
                         "imageAnchor coordinates must be between 0 and 10000 basis points",
                     );
+                }
+                match (image_anchor.x_end_pct, image_anchor.y_end_pct) {
+                    (None, None) => {}
+                    (Some(x_end), Some(y_end))
+                        if x_end > image_anchor.x_pct && y_end > image_anchor.y_pct => {}
+                    _ => {
+                        return api_error_response(
+                            StatusCode::BAD_REQUEST,
+                            "validation_error",
+                            "imageAnchor region requires both end coordinates strictly greater than its start coordinates",
+                        );
+                    }
                 }
                 if request.line_range.is_some() {
                     return api_error_response(

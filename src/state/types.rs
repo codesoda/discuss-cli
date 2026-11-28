@@ -86,12 +86,18 @@ pub struct LineRange {
     pub end: u32,
 }
 
-/// Image pin coordinates in basis points (0..=10000), where 10000 is 100%.
+/// Image coordinates in basis points (0..=10000), where 10000 is 100%.
+/// Without end coordinates this is a point; with both ends it is a rectangle
+/// from the top-left (x_pct, y_pct) to the bottom-right (x_end_pct, y_end_pct).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageAnchor {
     pub x_pct: u16,
     pub y_pct: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_end_pct: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_end_pct: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -371,6 +377,8 @@ mod tests {
             image_anchor: Some(ImageAnchor {
                 x_pct: 4217,
                 y_pct: 1700,
+                x_end_pct: None,
+                y_end_pct: None,
             }),
             snippet: String::new(),
             breadcrumb: "pin 3 at 42.17%,17%".to_string(),
@@ -389,6 +397,21 @@ mod tests {
 
         let round_tripped: Thread =
             serde_json::from_value(value).expect("deserialize image thread");
+        assert_eq!(round_tripped, thread);
+
+        thread.image_anchor = Some(ImageAnchor {
+            x_pct: 1200,
+            y_pct: 2400,
+            x_end_pct: Some(8300),
+            y_end_pct: Some(9200),
+        });
+        let value = serde_json::to_value(&thread).expect("serialize region thread");
+        assert_eq!(
+            value["imageAnchor"],
+            json!({ "xPct": 1200, "yPct": 2400, "xEndPct": 8300, "yEndPct": 9200 })
+        );
+        let round_tripped: Thread =
+            serde_json::from_value(value).expect("deserialize region thread");
         assert_eq!(round_tripped, thread);
 
         thread.image_anchor = None;

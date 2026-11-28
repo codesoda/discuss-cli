@@ -118,7 +118,7 @@ async function openScenario(page, server, key) {
   const url = key === 'tour' ? server.url : key === 'pr' ? server.payload.examplePrUrl : server.payload.localAppReviewUrl;
   if (key === 'pr') await waitForPr(server);
   await page.goto(url);
-  await page.waitForSelector('#demo-scenarios a', { timeout: 15000 });
+  await page.waitForSelector('#demo-scenarios', { timeout: 15000 });
   await sleep(1000);
 }
 

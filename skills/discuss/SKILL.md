@@ -45,7 +45,7 @@ discuss mockup.png
 discuss plan.md mockup.png
 ```
 
-PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer drops numbered pins; image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%) and use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, resolve the image from the event's `fileId` using the `files` array returned by `endpoints.state`, inspect the pinned region at those percentage coordinates, and post takes through the substituted `endpoints.addTakeTemplate` URL. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
+PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. The reviewer clicks for a point or drags a rectangular region. Image threads carry `imageAnchor: {xPct, yPct}` for a point or `{xPct, yPct, xEndPct, yEndPct}` for a region, in basis points (`4200` = 42.00%). Region coordinates run from top-left to bottom-right; inspect the entire selected region, not just its corner. Both forms use the pin number in `anchorStart`/`anchorEnd`. On `thread.created`, resolve the image from the event's `fileId` using the `files` array returned by `endpoints.state`, inspect the pinned region at those percentage coordinates, and post takes through the substituted `endpoints.addTakeTemplate` URL. `POST /api/source` is not supported for image files. Unsubmitted pin text is local-only and is lost on reload in this first version.
 
 ### Diff review mode
 
@@ -469,7 +469,7 @@ Rules:
 
 ### Show the user you're working (`POST /api/agent/status`)
 
-Threads show "Claude is on it…" while waiting; the required per-thread activity lease replaces that generic indicator while you work. Before a longer job (a search, a data query, a rewrite), also set a status so the header shows a spinner pill:
+Threads show "Waiting for agent…" before activity is reported; the required per-thread activity lease replaces that generic indicator while you work. Before a longer job (a search, a data query, a rewrite), also set a status so the header shows a spinner pill:
 
 ```bash
 curl -s -X POST "$API_BASE/api/agent/status" -H 'Content-Type: application/json' \

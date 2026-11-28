@@ -57,7 +57,7 @@ function harness() {
     Date: class extends Date { static now() { return now; } static parse(value) { return Date.parse(value); } },
     document: {
       activeElement: null,
-      getElementById: () => sandbox.header ?? null,
+      getElementById: id => id === 'agent-status' ? sandbox.header ?? null : sandbox.meta ?? null,
       querySelector: () => null,
       querySelectorAll(selector) {
         if (selector === '.agent-pending[data-since]') return [];
@@ -84,7 +84,7 @@ function harness() {
     threadFileId: thread => thread.fileId,
     commentsForThread: () => [],
     awaitingAgentSince: () => sandbox.pendingSince ?? null,
-    agentPendingHtml: () => '<div class="agent-pending">Claude is on it</div>',
+    agentPendingHtml: () => '<div class="agent-pending">Waiting for agent…</div>',
     renderAgentActivity() {}, agentStatusForThread: () => null, reviewComplete: false,
     normalizeEventComment: payload => payload.reply,
     upsertRawComment: (items, reply) => [...(items || []), reply],
@@ -110,7 +110,7 @@ test('active lease replaces generic pending indicator; expiry restores it withou
   h.sandbox.pendingSince = 500;
   h.render('a');
   const thread = h.mounted[0];
-  assert.match(thread.querySelector('.user-comment-list').pending, /Claude is on it/);
+  assert.match(thread.querySelector('.user-comment-list').pending, /Waiting for agent/);
   h.sandbox.activity.applyThreadActivityEvent(active('t1'));
   assert.equal(thread.querySelector('.user-comment-list').pending, null);
   assert.equal(thread.children.length, 1);
@@ -119,13 +119,14 @@ test('active lease replaces generic pending indicator; expiry restores it withou
   const timer = [...h.timers.values()][0];
   h.setNow(3000);
   timer.fn();
-  assert.match(h.mounted[0].querySelector('.user-comment-list').pending, /Claude is on it/);
+  assert.match(h.mounted[0].querySelector('.user-comment-list').pending, /Waiting for agent/);
   assert.equal(h.mounted[0].children.length, 0);
 });
 
 test('header includes active off-file leases without counting them as pending twice', () => {
   const h = harness();
   h.sandbox.header = { replaceChildren(...children) { this.chips = children; }, hidden: true };
+  h.sandbox.meta = { hidden: false };
   h.sandbox.pendingSince = 500;
   vm.runInContext('const AGENT_REPLY_WAIT_MS = 300000; const AGENT_STATUS_TTL_MS = 600000; let agentStatuses = []; let agentActivityTimer = null;\n'
     + between('  function renderAgentActivity() {', '  function applyElementDetachment(state, fileId, detached, route = null) {'), h.sandbox);
@@ -133,8 +134,29 @@ test('header includes active off-file leases without counting them as pending tw
   h.sandbox.activity.applyThreadActivityEvent(active('p1', 'replying'));
   assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent thinking…', 'Agent replying…']);
   assert.equal(h.sandbox.header.hidden, false);
+  assert.equal(h.sandbox.meta.hidden, true);
   h.sandbox.activity.applyThreadActivityEvent({ threadId: 't1', status: 'idle', expiresAt: null });
-  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent replying…', 'Replying to 1 comment']);
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent replying…', 'Waiting for agent…']);
+});
+
+test('header follows reported waiting, thinking, replying, and finished states', () => {
+  const h = harness();
+  h.sandbox.header = { replaceChildren(...children) { this.chips = children; }, hidden: true };
+  h.sandbox.meta = { hidden: false };
+  h.sandbox.pendingSince = 500;
+  vm.runInContext('const AGENT_REPLY_WAIT_MS = 300000; const AGENT_STATUS_TTL_MS = 600000; let agentStatuses = []; let agentActivityTimer = null;\n'
+    + between('  function renderAgentActivity() {', '  function applyElementDetachment(state, fileId, detached, route = null) {'), h.sandbox);
+  vm.runInContext('renderAgentActivity()', h.sandbox);
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Waiting for agent…']);
+  h.sandbox.activity.applyThreadActivityEvent(active('t1'));
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent thinking…']);
+  h.sandbox.activity.applyThreadActivityEvent(active('t1', 'replying'));
+  assert.deepEqual(h.sandbox.header.chips.map(chip => chip.title), ['Agent replying…']);
+  h.sandbox.pendingSince = null; // A posted take ends the unanswered-comment state.
+  h.sandbox.activity.applyThreadActivityEvent({ threadId: 't1', status: 'idle', expiresAt: null });
+  assert.deepEqual(h.sandbox.header.chips, []);
+  assert.equal(h.sandbox.header.hidden, true);
+  assert.equal(h.sandbox.meta.hidden, false);
 });
 
 test('direct activity handlers ignore late events and rerenders after completion', () => {

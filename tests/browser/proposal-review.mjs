@@ -16,7 +16,7 @@ test('switching files clears proposal choices before rendering the new file', ()
   const context = vm.createContext({
     activeFileId: 'a', renderedFileHtml: new Map([['b', 'html']]),
     document: { getElementById: () => ({}), querySelector: () => null },
-    newThreadEditor: null, setInspectMode() {}, stashBlockEditorForRerender() {},
+    newThreadEditor: null, cancelImageSelection: null, setInspectMode() {}, stashBlockEditorForRerender() {},
     resetProposalReview: () => calls.push('reset'),
     mountFile: () => calls.push('mount'), activateFileUi() {}, isHtmlFile: () => true,
     renderAllThreads() {}, syncEditReadonlyClass() {}, restoreBlockEditorAfterRerender() {},
@@ -54,6 +54,7 @@ test('proposal resync retries a snapshot overtaken by an SSE event', async () =>
 test('agent status expires on the activity timer without another server event', () => {
   const refreshed = [];
   const el = { replaceChildren() {} };
+  const meta = { hidden: false };
   let timer;
   const now = Date.now();
   const context = vm.createContext({
@@ -62,7 +63,7 @@ test('agent status expires on the activity timer without another server event', 
     agentActivityTimer: null, reviewComplete: false, threadActivity: new Map(),
     loadState: () => ({ userThreads: [], resolutions: {} }),
     refreshThreadFromState: id => refreshed.push(id),
-    document: { getElementById: () => el, querySelectorAll: () => [], querySelector: () => null },
+    document: { getElementById: id => id === 'agent-status' ? el : meta, querySelectorAll: () => [], querySelector: () => null },
     clearTimeout() {}, setTimeout: fn => { timer = fn; },
   });
   vm.runInContext(extract('  function renderAgentActivity()', '  function applyElementDetachment('), context);
@@ -70,6 +71,7 @@ test('agent status expires on the activity timer without another server event', 
   assert.equal(context.agentStatuses.length, 0);
   assert.deepEqual(refreshed, ['t1']);
   assert.equal(el.hidden, true);
+  assert.equal(meta.hidden, false);
   assert.equal(timer, undefined, 'expired status must not keep scheduling activity ticks');
 });
 

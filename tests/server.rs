@@ -3546,12 +3546,18 @@ async fn post_api_threads_assigns_image_pins_and_emits_coordinates() {
 
     wait_for_server(addr).await;
 
-    for (expected_pin, x_pct, y_pct) in [(1, 4217, 1700), (2, 8000, 2500)] {
+    let anchors = [
+        json!({ "xPct": 4217, "yPct": 1700 }),
+        json!({ "xPct": 1200, "yPct": 2400, "xEndPct": 8300, "yEndPct": 9200 }),
+        json!({ "xPct": 0, "yPct": 0, "xEndPct": 10000, "yEndPct": 10000 }),
+    ];
+    for (index, anchor) in anchors.iter().enumerate() {
+        let expected_pin = index + 1;
         let response = post_json_path(
             addr,
             "/api/threads",
             &json!({
-                "imageAnchor": { "xPct": x_pct, "yPct": y_pct },
+                "imageAnchor": anchor,
                 "snippet": "ignored for images",
                 "text": format!("pin {expected_pin}")
             })
@@ -3561,7 +3567,7 @@ async fn post_api_threads_assigns_image_pins_and_emits_coordinates() {
         assert!(response.starts_with("HTTP/1.1 200"), "response: {response}");
         let payload = response_json(&response);
         assert_eq!(payload["anchorStart"], expected_pin);
-        assert_eq!(payload["imageAnchor"]["xPct"], x_pct);
+        assert_eq!(payload["imageAnchor"], *anchor);
     }
 
     let snapshot = state.read().expect("state lock").snapshot();
@@ -3570,6 +3576,16 @@ async fn post_api_threads_assigns_image_pins_and_emits_coordinates() {
     assert_eq!(snapshot.threads[0].snippet, "");
     assert_eq!(snapshot.threads[0].breadcrumb, "pin 1 at 42.17%,17%");
     assert_eq!(snapshot.threads[1].anchor_start, 2);
+    assert_eq!(snapshot.threads[2].anchor_start, 3);
+    let snapshot_json = response_json(&get_path(addr, "/api/state").await);
+    for (thread, anchor) in snapshot_json["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(&anchors)
+    {
+        assert_eq!(thread["imageAnchor"], *anchor);
+    }
 
     let events = stdout_string(&stdout);
     let first: Value = serde_json::from_str(events.lines().next().unwrap()).expect("event json");
@@ -3578,6 +3594,13 @@ async fn post_api_threads_assigns_image_pins_and_emits_coordinates() {
         json!({ "xPct": 4217, "yPct": 1700 })
     );
     assert_eq!(first["payload"]["breadcrumb"], "pin 1 at 42.17%,17%");
+    let emitted: Vec<Value> = events
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("event json"))
+        .collect();
+    for (event, anchor) in emitted.iter().zip(&anchors) {
+        assert_eq!(event["payload"]["imageAnchor"], *anchor);
+    }
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)
@@ -3660,6 +3683,14 @@ async fn image_thread_and_source_routes_enforce_image_anchor_invariants() {
         json!({ "snippet": "", "text": "missing pin" }),
         json!({ "imageAnchor": { "xPct": 10001, "yPct": 0 }, "snippet": "", "text": "outside" }),
         json!({ "imageAnchor": { "xPct": 0, "yPct": 10001 }, "snippet": "", "text": "outside" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 0, "xEndPct": 10001, "yEndPct": 1 }, "snippet": "", "text": "outside" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 0, "xEndPct": 1, "yEndPct": 10001 }, "snippet": "", "text": "outside" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 0, "xEndPct": 1 }, "snippet": "", "text": "one end" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 0, "yEndPct": 1 }, "snippet": "", "text": "one end" }),
+        json!({ "imageAnchor": { "xPct": 5000, "yPct": 0, "xEndPct": 1000, "yEndPct": 1 }, "snippet": "", "text": "reversed" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 5000, "xEndPct": 1, "yEndPct": 1000 }, "snippet": "", "text": "reversed" }),
+        json!({ "imageAnchor": { "xPct": 5000, "yPct": 0, "xEndPct": 5000, "yEndPct": 1 }, "snippet": "", "text": "zero width" }),
+        json!({ "imageAnchor": { "xPct": 0, "yPct": 5000, "xEndPct": 1, "yEndPct": 5000 }, "snippet": "", "text": "zero height" }),
     ] {
         let response = post_json_path(addr, "/api/threads", &body.to_string()).await;
         assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
@@ -3667,6 +3698,22 @@ async fn image_thread_and_source_routes_enforce_image_anchor_invariants() {
             response_json(&response)["error"]["code"],
             "validation_error"
         );
+    }
+
+    for anchor in [
+        json!({ "xPct": -1, "yPct": 0 }),
+        json!({ "xPct": 0, "yPct": "wrong" }),
+        json!({ "xPct": 0, "yPct": 0, "xEndPct": -1, "yEndPct": 1 }),
+        json!({ "xPct": 0, "yPct": 0, "xEndPct": 1, "yEndPct": "wrong" }),
+    ] {
+        let response = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({ "imageAnchor": anchor, "snippet": "", "text": "malformed" }).to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+        assert_eq!(response_json(&response)["error"]["code"], "bad_request");
     }
 
     let source = post_json_path(
@@ -3697,17 +3744,22 @@ async fn text_threads_reject_image_anchors() {
 
     wait_for_server(addr).await;
 
-    let response = post_json_path(
-        addr,
-        "/api/threads",
-        r#"{"anchorStart":1,"anchorEnd":1,"imageAnchor":{"xPct":1,"yPct":2},"snippet":"Text","text":"no"}"#,
-    )
-    .await;
-    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
-    assert_eq!(
-        response_json(&response)["error"]["code"],
-        "validation_error"
-    );
+    for anchor in [
+        json!({ "xPct": 1, "yPct": 2 }),
+        json!({ "xPct": 1, "yPct": 2, "xEndPct": 3, "yEndPct": 4 }),
+    ] {
+        let response = post_json_path(
+            addr,
+            "/api/threads",
+            &json!({ "anchorStart": 1, "anchorEnd": 1, "imageAnchor": anchor, "snippet": "Text", "text": "no" }).to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+        assert_eq!(
+            response_json(&response)["error"]["code"],
+            "validation_error"
+        );
+    }
 
     shutdown_tx.send(()).expect("send shutdown signal");
     timeout(Duration::from_secs(1), server)

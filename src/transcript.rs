@@ -331,6 +331,8 @@ mod tests {
         later.image_anchor = Some(ImageAnchor {
             x_pct: 8000,
             y_pct: 2500,
+            x_end_pct: None,
+            y_end_pct: None,
         });
         later.breadcrumb = "pin 2 at 80%,25%".to_string();
 
@@ -339,6 +341,8 @@ mod tests {
         earlier.image_anchor = Some(ImageAnchor {
             x_pct: 1250,
             y_pct: 5000,
+            x_end_pct: Some(7000),
+            y_end_pct: Some(9000),
         });
         earlier.breadcrumb = "pin 1 at 12.5%,50%".to_string();
 
@@ -353,13 +357,21 @@ mod tests {
             Some(ImageAnchor {
                 x_pct: 1250,
                 y_pct: 5000,
+                x_end_pct: Some(7000),
+                y_end_pct: Some(9000),
             })
         );
         let value = serde_json::to_value(&transcript).expect("serialize transcript");
         assert_eq!(
             value["threads"][0]["imageAnchor"],
-            json!({ "xPct": 1250, "yPct": 5000 })
+            json!({ "xPct": 1250, "yPct": 5000, "xEndPct": 7000, "yEndPct": 9000 })
         );
+        assert_eq!(
+            value["threads"][1]["imageAnchor"],
+            json!({ "xPct": 8000, "yPct": 2500 })
+        );
+        let restored: Transcript = serde_json::from_value(value).expect("deserialize transcript");
+        assert_eq!(restored, transcript);
     }
 
     #[test]

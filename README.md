@@ -27,7 +27,7 @@ Engineers share most non-code work as markdown: PRDs, design docs, RFCs, post-mo
 - **Agent pre-annotations** — an agent that edited the doc can open `kind: "agent"` threads before you start reading. Each one marks a change and explains it.
 - **Live source updates** — the agent can push new markdown into a running session via `POST /api/source`. Threads re-anchor without a restart.
 - **Bidirectional** — the browser writes through a local REST API. The agent reads stdout events and writes back through the same API.
-- **Navigation and themes** — a thread summary popover lists all threads and jumps to any of them. Open thread panels have ‹ / › prev/next buttons. The UI supports light, dark, and system themes.
+- **Navigation and themes** — a thread summary popover lists all threads and jumps to any of them. The header shows agent status in place of draft/open counts, then restores the counts when activity ends. Unanswered comments show “Waiting for agent”; “Agent thinking” and “Agent replying” appear only when the agent reports those states. Open thread panels have ‹ / › prev/next buttons. The UI supports light, dark, and system themes.
 - **No review cloud.** One Rust binary, loopback-only local servers, one browser tab.
 
 ## Install
@@ -84,9 +84,17 @@ discuss ./plan.md
 
 The browser opens at the address printed on stderr as `review UI/API: http://127.0.0.1:<port>`. You get the full review UI — inline threads, replies, resolution — without any agent participation. Useful for solo review.
 
-First time here? `discuss demo` starts three self-contained scenarios from one command. Use the switcher in the header to move between **Feature tour** (the existing six-file gallery), **Example PR** (a realistic synthetic private-first review with nested diffs, imported discussion, Viewed progression, editable Finish Review, and exact GFM confirmation), and **Local app** (a bundled running SPA inspected through the production live proxy). The Demo agent replies with deterministic canned takes.
+First time here? `discuss demo` starts three self-contained scenarios from one command. Use the dropdown in the separate Demo mode bar above the header to move between **Feature tour** (the existing six-file gallery), **Example PR** (a realistic synthetic private-first review with nested diffs, imported discussion, Viewed progression, editable Finish Review, and exact GFM confirmation), and **Local app** (a bundled running SPA inspected through the production live proxy). The Demo agent replies with deterministic canned takes.
 
 Everything runs in-process on distinct loopback origins. Demo mode never invokes `gh`, a publisher, or an LLM; it never writes history; and it needs no GitHub login, app process, JavaScript runtime, or public network. Synthetic identities, links, destinations, and the local publication simulation are labelled as demo data. With `--port N`, the launcher reserves `N` through `N + 4`; without it, the OS assigns all five listeners.
+
+### Review controls
+
+The gear beside Discuss opens Settings for appearance (System, Light, or Dark) and **Review changes before applying**. The latter holds agent document changes for your approval; it does not change how you edit text yourself.
+
+The content pane's mode menu shows **Comment / Edit** for Markdown and **Comment / Interact** for prototypes and live apps. Open it by hover, click, or keyboard. **Request rewrite…** appears below the Markdown modes and sends a document-scoped request to the connected agent; proposed rewrites still need your approval. Images and diffs do not show irrelevant mode choices.
+
+For one Markdown correction, use the pencil beside a block (available on hover or keyboard focus). For several corrections, select Edit mode. Document options control whether headings can collapse their sections. **Expand all threads / Collapse all threads** lives at the top of the resolved-count dropdown, above its thread list.
 
 ### Piping markdown via stdin
 
@@ -116,7 +124,9 @@ discuss mockup.png
 discuss plan.md mockup.png
 ```
 
-PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. Click the image to drop a numbered pin and open a thread. Image threads carry `imageAnchor: {xPct, yPct}` in basis points (`4200` = 42.00%). They use the pin number in `anchorStart`/`anchorEnd`. Images mix freely with markdown and diff files in one session.
+PNG, JPEG, GIF, WebP, and SVG files render through an `<img>` element. Click the image to drop a numbered pin and open a thread, or select a rectangular region to discuss an area. Image threads carry `imageAnchor: {xPct, yPct}` for a point, or `imageAnchor: {xPct, yPct, xEndPct, yEndPct}` for a region. Coordinates are basis points (`4200` = 42.00%); region start is the top-left and end is the bottom-right. Both end coordinates are required for a region, must be greater than the start coordinates, and all coordinates must be between 0 and 10000. Old point anchors keep their meaning. Both forms use the pin number in `anchorStart`/`anchorEnd`. Images mix freely with markdown and diff files in one session.
+
+Drag in any direction to select a region; its numbered marker appears at the top-right. To select with the keyboard, focus the image and press **R**, move with arrow keys, press **Enter** to set the first corner, then move to the opposite corner and press **Enter** again. **Escape** cancels selection. The selected area remains visible while you write the comment.
 
 Two limits apply in this first version. `POST /api/source` is not supported for image files. Unsent pin text is local-only and is lost on reload.
 
